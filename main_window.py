@@ -1,11 +1,9 @@
 """
 main_window.py
 
-Top-level window:
-  - Connection bar (local port, QCC IP, QCC port, Connect/Disconnect, Ping Test)
-  - QCC header controls (Send button)
-  - Last response summary (QCC header fields, checksum status)
-  - 96-row QTRM table (QTableView + QTRMTableModel)
+Top-level window: Connection bar (local port, QCC IP, QCC port,
+Connect/Disconnect, Ping Test) plus the per-command tabs (Dwell, Link
+Test, Status, RX/TX Cal, Isolation, Soft Reset, Memory Operation).
 
 The first 90 bytes of every frame (fixed header + QCC header) are zero for
 now - MSG_ID, MODE, and per-QTRM MSG_ID/Frequency ID are not implemented on
@@ -16,19 +14,17 @@ import time
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
-    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
-    QLineEdit, QPushButton, QTableView, QLabel,
-    QGroupBox, QMessageBox, QHeaderView, QTabWidget, QScrollArea, QInputDialog,
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
+    QLineEdit, QPushButton, QLabel,
+    QGroupBox, QMessageBox, QTabWidget, QScrollArea, QInputDialog,
 )
 
 from packet import (
-    build_tx_frame, parse_rx_frame, default_qtrm_slots, TOTAL_PACKET_SIZE,
     build_link_test_frame, build_individual_link_frame, parse_link_test_response,
     build_cal_frame, build_soft_reset_frame, build_isolation_frame,
     build_status_frame, parse_status_frame, STATUS_TYPE_DIAGNOSTIC,
     build_dwell_frame, build_memory_write_frame,
 )
-from qtrm_model import QTRMTableModel
 from udp_worker import UdpWorker
 from ping_worker import PingWorker
 from header_panel import HeaderPanel
@@ -59,11 +55,9 @@ class MainWindow(QMainWindow):
         self.resize(1400, 700)
 
         self.worker: UdpWorker | None = None
-        self.qtrm_slots = default_qtrm_slots()
-        # None | "command" | "dwell" | "memory_write" | "memory_write_all" |
-        # "link_test" | "individual_link_test" | "rx_cal" | "tx_cal" |
-        # "isolation_all" | "isolation_individual" | "status_all" |
-        # "status_individual"
+        # None | "dwell" | "memory_write" | "memory_write_all" | "link_test" |
+        # "individual_link_test" | "rx_cal" | "tx_cal" | "isolation_all" |
+        # "isolation_individual" | "status_all" | "status_individual"
         self._awaiting_kind = None
         self._individual_link_qtrm = None
         self._rx_cal_target = None
@@ -93,7 +87,6 @@ class MainWindow(QMainWindow):
         root.addWidget(self._build_connection_group())
 
         self.tabs = QTabWidget()
-        self.tabs.addTab(self._build_command_tab(), "Command / QTRM Grid")
 
         self.dwell_tab = DwellTab()
         self.dwell_tab.send_requested.connect(self._on_dwell_send)
@@ -165,36 +158,6 @@ class MainWindow(QMainWindow):
 
         self._last_unlocked_tab_index = index
 
-    def _build_command_tab(self):
-        content = QWidget()
-        layout = QVBoxLayout(content)
-        layout.addWidget(self._build_command_group())
-        layout.addWidget(self._build_response_group())
-        layout.addWidget(self._build_table())
-
-        # Wrapped in a QScrollArea so this tab's minimumSizeHint stays small
-        # (bounded by the scroll area itself, not the response panel/table's
-        # natural size) - lets the whole window shrink to fit any screen,
-        # with scrollbars appearing instead of the window refusing to
-        # shrink. Same pattern used by every other tab in this app.
-        scroll = QScrollArea()
-        scroll.setWidgetResizable(True)
-        scroll.setFrameShape(QScrollArea.NoFrame)
-        scroll.setWidget(content)
-
-        # Dedicated right-side space for the raw 90-byte header of the last
-        # received frame - same as every other tab, even though this tab
-        # already has a decoded "Last Response (QCC header)" panel above
-        # the table; this one is deliberately just the raw bytes.
-        self.command_header_panel = HeaderPanel()
-
-        tab = QWidget()
-        tab_layout = QHBoxLayout(tab)
-        tab_layout.setContentsMargins(0, 0, 0, 0)
-        tab_layout.addWidget(scroll, 1)
-        tab_layout.addWidget(self.command_header_panel)
-        return tab
-
     def _build_connection_group(self):
         box = QGroupBox("Connection")
 
@@ -237,54 +200,6 @@ class MainWindow(QMainWindow):
         row.addWidget(self.tx_test_btn)
         row.addWidget(self.responder_btn)
         return box
-
-    def _build_command_group(self):
-        box = QGroupBox("QCC Header (command)")
-        row = QHBoxLayout(box)
-
-        self.send_btn = QPushButton("Build && Send Frame")
-        self.send_btn.clicked.connect(self._on_send_clicked)
-
-        self.response_time_label = QLabel("")
-
-        row.addWidget(self.send_btn)
-        row.addWidget(self.response_time_label)
-        row.addStretch(1)
-        return box
-
-    def _build_response_group(self):
-        box = QGroupBox("Last Response (QCC header)")
-
-        self.resp_labels = {}
-        fields = [
-            "MSG_ID", "MODE", "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
-            "OUTPUT_PRT_COUNT", "OUTPUT_SOB_COUNT", "INPUT_SOB_WIDTH_US",
-            "OUTPUT_SOB_WIDTH_US", "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US",
-            "INPUT_PPS_WIDTH_US", "CHECKSUM",
-        ]
-        # Wrapped into a grid (not one long row) - 13 fields side by side
-        # forced the whole window to need 2000+ px of width to fit on screen.
-        wrap_cols = 5
-        grid = QGridLayout(box)
-        for i, f in enumerate(fields):
-            lbl = QLabel("-")
-            self.resp_labels[f] = lbl
-            col_box = QVBoxLayout()
-            col_box.addWidget(QLabel(f))
-            col_box.addWidget(lbl)
-            cell = QWidget()
-            cell.setLayout(col_box)
-            grid.addWidget(cell, i // wrap_cols, i % wrap_cols)
-        return box
-
-    def _build_table(self):
-        self.model = QTRMTableModel(self.qtrm_slots)
-        self.model.invalid_data.connect(lambda msg: QMessageBox.warning(self, "Invalid Data", msg))
-        self.table = QTableView()
-        self.table.setModel(self.model)
-        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
-        self.table.setAlternatingRowColors(True)
-        return self.table
 
     # -- connection handling ---------------------------------------------
 
@@ -391,12 +306,6 @@ class MainWindow(QMainWindow):
             self._pending_timer = None
         return elapsed_us
 
-    def _on_command_timeout(self):
-        if self._awaiting_kind != "command":
-            return
-        self._awaiting_kind = None
-        self.response_time_label.setText("No response")
-
     def _on_dwell_timeout(self):
         if self._awaiting_kind != "dwell":
             return
@@ -482,20 +391,6 @@ class MainWindow(QMainWindow):
         return True
 
     # -- send / receive ---------------------------------------------------
-
-    def _on_send_clicked(self):
-        if self.worker is None:
-            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
-            return
-        if not self._check_not_busy():
-            return
-
-        frame = build_tx_frame(self.model.get_slots())
-        assert len(frame) == TOTAL_PACKET_SIZE
-        self.response_time_label.setText("Sending...")
-        self._awaiting_kind = "command"
-        self._begin_wait(self._on_command_timeout)
-        self.worker.send_frame(frame)
 
     def _on_dwell_send(self):
         if self.worker is None:
@@ -707,8 +602,8 @@ class MainWindow(QMainWindow):
         self.worker.send_frame(frame)
 
     # Which tab's HeaderPanel gets fed the raw 90-byte header for each
-    # _awaiting_kind - anything not listed here falls through to the
-    # Command/QTRM Grid tab's own header_panel (the default/"command" case).
+    # _awaiting_kind. A kind with no entry (e.g. None, for a stray/unsolicited
+    # frame with nothing in flight) has no tab to update, so is skipped.
     _HEADER_PANEL_TAB_BY_KIND = {
         "dwell": "dwell_tab", "memory_write": "memory_tab", "memory_write_all": "memory_tab",
         "link_test": "link_test_tab", "individual_link_test": "link_test_tab",
@@ -721,8 +616,6 @@ class MainWindow(QMainWindow):
         tab_attr = self._HEADER_PANEL_TAB_BY_KIND.get(kind)
         if tab_attr is not None:
             getattr(self, tab_attr).header_panel.show_frame(raw)
-        else:
-            self.command_header_panel.show_frame(raw)
 
     def _on_frame_received(self, raw: bytes):
         elapsed_us = self._end_wait()
@@ -856,31 +749,9 @@ class MainWindow(QMainWindow):
             self.status_tab.show_individual_result(qtrm_index, results[qtrm_index])
             return
 
-        if elapsed_us is not None:
-            self.response_time_label.setText(f"{elapsed_us:.0f} µs")
-
-        try:
-            fixed_header, qcc_header, qtrm_slots = parse_rx_frame(raw)
-        except AssertionError as e:
-            QMessageBox.warning(self, "Parse error", str(e))
-            return
-
-        self.resp_labels["MSG_ID"].setText(str(qcc_header.msg_id))
-        self.resp_labels["MODE"].setText(str(qcc_header.mode))
-        self.resp_labels["INPUT_SOB_COUNT"].setText(str(qcc_header.input_sob_count))
-        self.resp_labels["INPUT_PRT_COUNT"].setText(str(qcc_header.input_prt_count))
-        self.resp_labels["INPUT_PPS_COUNT"].setText(str(qcc_header.input_pps_count))
-        self.resp_labels["OUTPUT_PRT_COUNT"].setText(str(qcc_header.output_prt_count))
-        self.resp_labels["OUTPUT_SOB_COUNT"].setText(str(qcc_header.output_sob_count))
-        self.resp_labels["INPUT_SOB_WIDTH_US"].setText(str(qcc_header.input_sob_width_us))
-        self.resp_labels["OUTPUT_SOB_WIDTH_US"].setText(str(qcc_header.output_sob_width_us))
-        self.resp_labels["INPUT_PRT_WIDTH_US"].setText(str(qcc_header.input_prt_width_us))
-        self.resp_labels["OUTPUT_PRT_WIDTH_US"].setText(str(qcc_header.output_prt_width_us))
-        self.resp_labels["INPUT_PPS_WIDTH_US"].setText(str(qcc_header.input_pps_width_us))
-        self.resp_labels["CHECKSUM"].setText("OK" if qcc_header.checksum_ok else "FAIL")
-
-        # Refresh the 96-row grid with whatever QCC reported back for each QTRM
-        self.model.replace_slots(qtrm_slots)
+        # kind is None here - a stray/unsolicited frame with nothing in
+        # flight (e.g. arrived after its own timeout already fired). Nothing
+        # to update.
 
     def closeEvent(self, event):
         if self.worker is not None:

@@ -1,18 +1,22 @@
 """
 status_responder_app.py
 
-Standalone test responder - simulates the QTRM side answering Status
-Command queries (Section 10 of the QTRM Message Format IDD), so the main
-GUI's Status tab can be tested end-to-end without real hardware. Doesn't do
-much: listens on a UDP port, and for every QTRM slot in an incoming frame
-that carries a real Status Command (Header 0xAA, Packet Size ID 0x00,
-Command Type 0x21 - Status), replies with a plausible, correctly-
-checksummed mock response for whatever Status Type (and, for DIAGNOSTIC,
-Sub Status Type) was requested. Slots that weren't addressed (all-zero, or
-not a Status Command) get no reply, matching how a real QTRM would behave.
-LINK is included too even though the main GUI's Link Test tab has its own
-dedicated flow, since it's the same Status Command Format at the wire
-level and costs nothing extra to support here.
+Standalone test responder - simulates the QTRM side answering Status Type
+requests (Section 10 of the QTRM Message Format IDD), so the main GUI can
+be tested end-to-end without real hardware. Doesn't do much: listens on a
+UDP port, and for every QTRM slot in an incoming frame, replies based on
+byte4's Status Type (and, for DIAGNOSTIC, Sub Status Type) alone -
+independent of the slot's Command Type. This matches real QTRM behavior:
+any command (Dwell, Cal, Isolation, Memory Write, ...) can request a
+status reply via that same byte, not just the dedicated Status Command
+(0x21) - a real QTRM doesn't care which command carried the request, only
+what Status Type it asked for.
+
+The two exceptions that never reply, regardless of what Status Type bits
+happen to be set: Command Type 0x00 (Reserved - also what an untouched/
+zero-filled individual-target slot looks like) and 0x20 (Soft Reset,
+which is fire-and-forget by design). Every other command type replies
+normally based on its Status Type.
 
 Unlike udp_worker.py's UdpWorker (which always sends to one fixed
 configured destination), this replies directly to whichever address the
@@ -33,11 +37,17 @@ from PySide6.QtWidgets import (
 
 from packet import (
     QTRMSlot, QCCHeaderRx, QTRM_SLOT_SIZE, NUM_QTRM, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
-    TOTAL_PACKET_SIZE, CMD_STATUS,
+    TOTAL_PACKET_SIZE, CMD_RESERVED, CMD_SOFT_RESET,
     STATUS_TYPE_ACK, STATUS_TYPE_LINK, STATUS_TYPE_HEALTH,
     STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
     DIAGNOSTIC_TYPE_DETAILED_HEALTH, LINK_SENTINEL,
 )
+
+# Command types that never reply, regardless of Status Type bits: Reserved
+# (0x00, also what an untouched/zero-filled individual-target slot looks
+# like) and Soft Reset (fire-and-forget by design). Every other command
+# type replies based on its Status Type alone - see module docstring.
+_NO_REPLY_COMMAND_TYPES = (CMD_RESERVED, CMD_SOFT_RESET)
 from spin_field import SpinField
 from theme import STYLESHEET
 
@@ -204,8 +214,11 @@ def build_mock_response_frame(query_frame: bytes):
     replied = []
     for i in range(NUM_QTRM):
         slot = query_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE]
-        status_type = slot[3] & 0x0F if slot[0] == QTRMSlot.HEADER_BYTE else None
-        builder = _REPLY_BUILDERS.get(status_type) if slot[2] == CMD_STATUS else None
+        valid_header = slot[0] == QTRMSlot.HEADER_BYTE
+        command_type = slot[2] if valid_header else None
+        status_type = slot[3] & 0x0F if valid_header else None
+        no_reply = command_type is None or command_type in _NO_REPLY_COMMAND_TYPES
+        builder = _REPLY_BUILDERS.get(status_type) if not no_reply else None
         if builder is not None:
             out.extend(builder(i, slot))
             replied.append((i, _STATUS_TYPE_NAMES.get(status_type, str(status_type))))
@@ -336,7 +349,7 @@ class StatusResponderWindow(QMainWindow):
 
         host, port = addr
         if not replied:
-            self.log_view.appendPlainText(f"From {host}:{port} - no Status Command found in any of the 96 slots")
+            self.log_view.appendPlainText(f"From {host}:{port} - no reply-eligible slot found in any of the 96 slots")
             return
 
         summary = ", ".join(f"QTRM-{i}={name}" for i, name in replied)

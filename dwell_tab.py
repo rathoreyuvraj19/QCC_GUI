@@ -19,18 +19,22 @@ Every QTRM's Dwell command requests a Link-type status response (per
 Yuvraj: every command except Status and Soft Reset does) - the 96-cell LED
 matrix (reused from link_test_tab.py) shows which QTRMs acknowledged.
 
-Tx/Rx Phase and Tx/Rx Atten are capped 0-63 (6-bit). Control is only ever
-0, 1, 2, or 3 - any other value is rejected (table edits) or flagged with
-a warning listing every offending cell (CSV import), rather than silently
-clamped.
+Tx/Rx Phase and Tx/Rx Atten are capped 0-63 (6-bit). Control is a 2-bit
+Tx/Rx on-off field (bit1 = Tx enable, bit0 = Rx enable) - edited via a
+dropdown (Tx Off/Rx Off, Tx Off/Rx On, Tx On/Rx Off, Tx On/Rx On) rather
+than a raw number, defaulting to 3 (both on). CSV import still guards
+against out-of-range values (0-3) since a hand-edited file bypasses the
+dropdown entirely - any other value is flagged with a warning listing
+every offending cell rather than silently clamped.
 """
 
 import csv
 
 from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex, Signal
 from PySide6.QtWidgets import (
-    QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
-    QMessageBox, QPushButton, QScrollArea, QTableView, QVBoxLayout, QWidget,
+    QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
+    QLabel, QMessageBox, QPushButton, QScrollArea, QStyledItemDelegate,
+    QTableView, QVBoxLayout, QWidget,
 )
 
 from header_panel import HeaderPanel
@@ -57,6 +61,16 @@ _SEND_BTN_STYLE = (
 
 CONTROL_MIN = 0
 CONTROL_MAX = 3   # Control is only ever 0, 1, 2, or 3 - anything else is invalid
+CONTROL_DEFAULT = 3   # both Tx and Rx on
+
+# Control is a 2-bit field: bit1 = Tx enable, bit0 = Rx enable.
+CONTROL_OPTIONS = [
+    (0, "Tx Off, Rx Off"),
+    (1, "Tx Off, Rx On"),
+    (2, "Tx On, Rx Off"),
+    (3, "Tx On, Rx On (default)"),
+]
+_CONTROL_LABELS = dict(CONTROL_OPTIONS)
 
 # (label, attribute, min, max)
 _CHANNEL_FIELDS = [
@@ -78,9 +92,15 @@ def _build_columns():
 
 COLUMNS = _build_columns()
 
+# Column indices whose "attr" is "control" - these get the dropdown delegate.
+CONTROL_COLUMNS = [
+    i for i, (_, key, _) in enumerate(COLUMNS)
+    if isinstance(key, tuple) and key[1] == "control"
+]
+
 
 def _default_channels():
-    return [[QTRMChannel() for _ in range(4)] for _ in range(NUM_QTRM)]
+    return [[QTRMChannel(control=CONTROL_DEFAULT) for _ in range(4)] for _ in range(NUM_QTRM)]
 
 
 class DwellTableModel(QAbstractTableModel):
@@ -154,6 +174,27 @@ class DwellTableModel(QAbstractTableModel):
 
     def get_channels(self):
         return self.channels
+
+
+class ControlComboDelegate(QStyledItemDelegate):
+    """Dropdown editor for the Control columns - Tx/Rx on/off, not a raw int."""
+
+    def createEditor(self, parent, option, index):
+        combo = QComboBox(parent)
+        for value, label in CONTROL_OPTIONS:
+            combo.addItem(label, value)
+        return combo
+
+    def setEditorData(self, editor, index):
+        value = index.data(Qt.EditRole)
+        pos = editor.findData(value)
+        editor.setCurrentIndex(pos if pos >= 0 else 0)
+
+    def setModelData(self, editor, model, index):
+        model.setData(index, editor.currentData(), Qt.EditRole)
+
+    def displayText(self, value, locale):
+        return _CONTROL_LABELS.get(value, str(value))
 
 
 def _clamp(value, lo, hi):
@@ -285,6 +326,9 @@ class DwellTab(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.table.setMinimumHeight(320)
+        self._control_delegate = ControlComboDelegate(self.table)
+        for col in CONTROL_COLUMNS:
+            self.table.setItemDelegateForColumn(col, self._control_delegate)
         layout.addWidget(self.table)
 
         self.led_matrix = LedMatrix()

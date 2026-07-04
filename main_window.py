@@ -162,9 +162,12 @@ class MainWindow(QMainWindow):
         box = QGroupBox("Connection")
 
         self.local_port_edit = SpinField(1, 65535, 5001, field_width=64)
+        self.local_port_edit.spin.valueChanged.connect(self._on_connection_field_changed)
 
         self.qcc_ip_edit = QLineEdit("192.168.1.10")
+        self.qcc_ip_edit.textChanged.connect(self._on_connection_field_changed)
         self.qcc_port_edit = SpinField(1, 65535, 5000, field_width=64)
+        self.qcc_port_edit.spin.valueChanged.connect(self._on_connection_field_changed)
 
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.clicked.connect(self._on_connect_clicked)
@@ -223,13 +226,31 @@ class MainWindow(QMainWindow):
         self.ping_btn.setStyleSheet(f"background-color: {color};")
         self.ping_result_label.setText(latency_text)
 
-    def _on_connect_clicked(self):
+    def _disconnect(self, status_text: str = "Disconnected"):
         if self.worker is not None:
+            # Disconnect the status signal first - worker.stop() blocks
+            # until the thread actually exits, and its queued "Stopped"
+            # status (delivered once the event loop next processes it)
+            # would otherwise arrive after this method returns and silently
+            # overwrite status_text below.
+            self.worker.status.disconnect(self._on_connect_status)
             self.worker.stop()
             self.worker = None
-            self.connect_btn.setText("Connect")
-            self.connect_btn.setStyleSheet("")
-            self.conn_status_label.setText("Disconnected")
+        self.connect_btn.setText("Connect")
+        self.connect_btn.setStyleSheet("")
+        self.conn_status_label.setText(status_text)
+
+    def _on_connection_field_changed(self, *_args):
+        # Local Port/QCC IP/QCC Port all describe an existing connection -
+        # changing any of them while connected means that connection no
+        # longer reflects what's configured, so drop it rather than keep
+        # sending/listening against stale settings.
+        if self.worker is not None:
+            self._disconnect("Disconnected (connection settings changed)")
+
+    def _on_connect_clicked(self):
+        if self.worker is not None:
+            self._disconnect()
             return
 
         local_port = self.local_port_edit.value()

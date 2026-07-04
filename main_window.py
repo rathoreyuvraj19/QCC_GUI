@@ -99,11 +99,6 @@ class MainWindow(QMainWindow):
         self.dwell_tab.send_requested.connect(self._on_dwell_send)
         self.tabs.addTab(self.dwell_tab, "Dwell")
 
-        self.memory_tab = MemoryTab()
-        self.memory_tab.write_requested.connect(self._on_memory_write)
-        self.memory_tab.write_all_requested.connect(self._on_memory_write_all)
-        self._memory_tab_index = self.tabs.addTab(self.memory_tab, "Memory Operation")
-
         self.link_test_tab = LinkTestTab()
         self.link_test_tab.send_requested.connect(self._on_link_test_clicked)
         self.link_test_tab.individual_send_requested.connect(self._on_individual_link_test_clicked)
@@ -131,6 +126,11 @@ class MainWindow(QMainWindow):
         self.soft_reset_tab.reset_all_requested.connect(self._on_reset_all_clicked)
         self.soft_reset_tab.reset_one_requested.connect(self._on_reset_one_clicked)
         self.tabs.addTab(self.soft_reset_tab, "Soft Reset")
+
+        self.memory_tab = MemoryTab()
+        self.memory_tab.write_requested.connect(self._on_memory_write)
+        self.memory_tab.write_all_requested.connect(self._on_memory_write_all)
+        self._memory_tab_index = self.tabs.addTab(self.memory_tab, "Memory Operation")
 
         # Status tab's matrix resets to idle whenever the current tab
         # changes (to it or away from it) - a previous query's results

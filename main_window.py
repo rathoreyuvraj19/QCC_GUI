@@ -26,6 +26,7 @@ from packet import (
     build_link_test_frame, build_individual_link_frame, parse_link_test_response,
     build_cal_frame, build_soft_reset_frame, build_isolation_frame,
     build_status_frame, parse_status_frame, STATUS_TYPE_DIAGNOSTIC,
+    build_dwell_frame,
 )
 from qtrm_model import QTRMTableModel
 from udp_worker import UdpWorker
@@ -36,6 +37,7 @@ from status_tab import StatusTab
 from cal_tab import CalTab
 from isolation_tab import IsolationTab
 from soft_reset_tab import SoftResetTab
+from dwell_tab import DwellTab
 from spin_field import SpinField
 from rx_test_app import RxTestWindow
 from tx_test_window import TxTestWindow
@@ -53,9 +55,9 @@ class MainWindow(QMainWindow):
 
         self.worker: UdpWorker | None = None
         self.qtrm_slots = default_qtrm_slots()
-        # None | "command" | "link_test" | "individual_link_test" | "rx_cal" |
-        # "tx_cal" | "isolation_all" | "isolation_individual" | "status_all" |
-        # "status_individual"
+        # None | "command" | "dwell" | "link_test" | "individual_link_test" |
+        # "rx_cal" | "tx_cal" | "isolation_all" | "isolation_individual" |
+        # "status_all" | "status_individual"
         self._awaiting_kind = None
         self._individual_link_qtrm = None
         self._rx_cal_target = None
@@ -84,6 +86,10 @@ class MainWindow(QMainWindow):
 
         self.tabs = QTabWidget()
         self.tabs.addTab(self._build_command_tab(), "Command / QTRM Grid")
+
+        self.dwell_tab = DwellTab()
+        self.dwell_tab.send_requested.connect(self._on_dwell_send)
+        self.tabs.addTab(self.dwell_tab, "Dwell")
 
         self.link_test_tab = LinkTestTab()
         self.link_test_tab.send_requested.connect(self._on_link_test_clicked)
@@ -357,6 +363,12 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = None
         self.response_time_label.setText("No response")
 
+    def _on_dwell_timeout(self):
+        if self._awaiting_kind != "dwell":
+            return
+        self._awaiting_kind = None
+        self.dwell_tab.show_no_response()
+
     def _on_link_test_timeout(self):
         if self._awaiting_kind != "link_test":
             return
@@ -436,6 +448,20 @@ class MainWindow(QMainWindow):
         self.response_time_label.setText("Sending...")
         self._awaiting_kind = "command"
         self._begin_wait(self._on_command_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_dwell_send(self):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_dwell_frame(self.dwell_tab.get_channels())
+
+        self._awaiting_kind = "dwell"
+        self.dwell_tab.mark_pending()
+        self._begin_wait(self._on_dwell_timeout)
         self.worker.send_frame(frame)
 
     def _on_link_test_clicked(self, is_auto_resend: bool = False):
@@ -608,6 +634,7 @@ class MainWindow(QMainWindow):
     # _awaiting_kind - anything not listed here falls through to the
     # Command/QTRM Grid tab's own header_panel (the default/"command" case).
     _HEADER_PANEL_TAB_BY_KIND = {
+        "dwell": "dwell_tab",
         "link_test": "link_test_tab", "individual_link_test": "link_test_tab",
         "rx_cal": "rx_cal_tab", "tx_cal": "tx_cal_tab",
         "isolation_all": "isolation_tab", "isolation_individual": "isolation_tab",
@@ -635,6 +662,17 @@ class MainWindow(QMainWindow):
             self.link_test_tab.show_results(results)
             if elapsed_us is not None:
                 self.link_test_tab.show_response_time(elapsed_us)
+            return
+
+        if kind == "dwell":
+            try:
+                results = parse_link_test_response(raw)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.dwell_tab.show_results(results)
+            if elapsed_us is not None:
+                self.dwell_tab.show_response_time(elapsed_us)
             return
 
         if kind == "individual_link_test":

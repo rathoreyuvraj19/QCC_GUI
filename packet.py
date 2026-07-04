@@ -468,6 +468,39 @@ def build_isolation_frame(tx_isolation: bool, target_qtrm_index: int = None) -> 
     assert len(out) == TOTAL_PACKET_SIZE
     return bytes(out)
 
+
+def build_dwell_slot(channels) -> bytes:
+    """
+    30-byte Dwell wire slot (Section 4, Table 43): this QTRM's 4 channels'
+    Control/Tx Phase/Tx Atten/Rx Phase/Rx Atten. Requests a Link-type status
+    response - per Yuvraj, every command except Status and Soft Reset does -
+    by packing STATUS_TYPE_LINK into the low nibble of byte3 the same way
+    build_cal_slot/build_isolation_slot do for the 10-byte status-family
+    messages (QTRMSlot's ack_type/ack_on_off nibble split is bit-identical
+    to that byte position, just relabeled in the IDD for this message type).
+    """
+    return QTRMSlot(
+        qtrm_id=0, command_type=CMD_DWELL,
+        ack_type=0, ack_on_off=STATUS_TYPE_LINK,
+        channels=channels,
+    ).to_bytes()
+
+
+def build_dwell_frame(qtrm_channels) -> bytes:
+    """
+    Full 2970-byte Dwell frame. qtrm_channels is a list of NUM_QTRM items,
+    each a list of 4 QTRMChannel objects (that QTRM's channels 1-4). Unlike
+    Cal/Isolation/Soft Reset, Dwell has no single-QTRM-target convention -
+    every QTRM gets its own Dwell command, all in the same send. First 90
+    bytes are zero for now.
+    """
+    assert len(qtrm_channels) == NUM_QTRM
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for channels in qtrm_channels:
+        out.extend(build_dwell_slot(channels))
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
 # ---------------------------------------------------------------------------
 # QCC RX header (Host -> QCC) - 58 bytes
 # ---------------------------------------------------------------------------

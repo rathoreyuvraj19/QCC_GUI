@@ -72,7 +72,6 @@ class MainWindow(QMainWindow):
         self._status_type_in_flight = None
         self._status_sub_type_in_flight = None
         self._memory_write_target = None
-        self._memory_tab_unlocked = False
         self._last_unlocked_tab_index = 0
         self._ping_worker: PingWorker | None = None
         self._send_time = None
@@ -149,15 +148,16 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index):
         self.status_tab.reset_to_idle()
 
-        if index == self._memory_tab_index and not self._memory_tab_unlocked:
+        # Prompts every time this tab is entered (not just once per session)
+        # - per Yuvraj's explicit ask, since it can write to real hardware's
+        # flash memory.
+        if index == self._memory_tab_index:
             password, ok = QInputDialog.getText(
                 self, "Memory Operation - Locked",
                 "This tab can write to real hardware's flash memory.\nEnter password:",
                 QLineEdit.Password,
             )
-            if ok and password == MEMORY_TAB_PASSWORD:
-                self._memory_tab_unlocked = True
-            else:
+            if not (ok and password == MEMORY_TAB_PASSWORD):
                 self.tabs.setCurrentIndex(self._last_unlocked_tab_index)
                 return
 

@@ -337,12 +337,13 @@ class StatusResponderWindow(QMainWindow):
 
     def _on_listen_clicked(self):
         if self.worker is not None:
-            self.worker.stop()
-            self.worker = None
-            self.listen_btn.setText("Start Responding")
-            self.status_label.setText("Stopped")
-            return
+            self.stop_listening()
+        else:
+            self.start_listening()
 
+    def start_listening(self):
+        if self.worker is not None:
+            return
         port = self.port_spin.value()
         self.worker = ResponderWorker(local_port=port)
         self.worker.frame_processed.connect(self._on_frame_processed)
@@ -350,6 +351,14 @@ class StatusResponderWindow(QMainWindow):
         self.worker.status.connect(self.status_label.setText)
         self.worker.start()
         self.listen_btn.setText("Stop Responding")
+
+    def stop_listening(self):
+        if self.worker is None:
+            return
+        self.worker.stop()
+        self.worker = None
+        self.listen_btn.setText("Start Responding")
+        self.status_label.setText("Stopped")
 
     def _on_error(self, msg: str):
         self.log_view.appendPlainText(f"[error] {msg}")
@@ -367,8 +376,7 @@ class StatusResponderWindow(QMainWindow):
         self.log_view.appendPlainText(f"From {host}:{port} - replied to {len(replied)} QTRM(s): {summary}")
 
     def closeEvent(self, event):
-        if self.worker is not None:
-            self.worker.stop()
+        self.stop_listening()
         super().closeEvent(event)
         self.closed.emit()
 

@@ -323,13 +323,16 @@ class MainWindow(QMainWindow):
         self._tx_test_window.activateWindow()
 
     def _on_open_responder_clicked(self):
-        # Same one-shared-instance pattern - StatusResponderWindow has its
-        # own "Start Responding" button, still off by default when this
-        # window is (re)shown, so opening it doesn't silently start binding
-        # a UDP port until the user actually asks it to.
+        # Same one-shared-instance pattern as the RX/TX test windows.
         if self._responder_window is None:
             self._responder_window = StatusResponderWindow()
             self._responder_window.closed.connect(self._on_responder_window_closed)
+
+        # Listening by default as soon as the window is opened, rather
+        # than making the user click "Start Responding" every time -
+        # start_listening() is a no-op if it's already running (e.g.
+        # re-showing an already-open window).
+        self._responder_window.start_listening()
 
         # The responder only ever runs on this machine, reachable at
         # 127.0.0.1 - auto-fill that as QCC IP so it's obviously the right

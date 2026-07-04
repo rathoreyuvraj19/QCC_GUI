@@ -33,11 +33,11 @@ all-on/all-off/mixed.
 import csv
 
 from PySide6.QtCore import QAbstractTableModel, QEvent, Qt, QModelIndex, Signal
-from PySide6.QtGui import QColor, QPainter
+from PySide6.QtGui import QColor, QFont, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
     QMessageBox, QPushButton, QScrollArea, QStyledItemDelegate,
-    QTableView, QVBoxLayout, QWidget,
+    QTableView, QToolTip, QVBoxLayout, QWidget,
 )
 
 from header_panel import HeaderPanel
@@ -143,6 +143,15 @@ class DwellTableModel(QAbstractTableModel):
                 return bool(channel.control & bit)
             _, attr, _, _ = key
             return getattr(channel, attr)
+        if key is None:
+            # QTRM ID column - bold/accent so the index doesn't blend into
+            # the surrounding numeric data columns.
+            if role == Qt.ForegroundRole:
+                return QColor("#7C3AED")
+            if role == Qt.FontRole:
+                font = QFont()
+                font.setBold(True)
+                return font
         return None
 
     def setData(self, index, value, role=Qt.EditRole):
@@ -159,13 +168,18 @@ class DwellTableModel(QAbstractTableModel):
             self.dataChanged.emit(index, index, [role])
             return True
 
-        _, attr, lo, hi = key
+        ch_idx, attr, lo, hi = key
         try:
             ivalue = int(value)
         except (TypeError, ValueError):
             return False
-        ivalue = max(lo, min(hi, ivalue))
-        setattr(channel, attr, ivalue)
+        clamped = max(lo, min(hi, ivalue))
+        if clamped != ivalue:
+            label = attr.replace("_", " ").title()
+            self.invalid_data.emit(
+                f"Ch{ch_idx + 1} {label}: {ivalue} exceeds {lo}-{hi}, clamped to {clamped}."
+            )
+        setattr(channel, attr, clamped)
         self.dataChanged.emit(index, index, [role])
         return True
 
@@ -454,7 +468,15 @@ class DwellTab(QWidget):
         # "all on" to "mixed" after one row's button is clicked).
         self.model.dataChanged.connect(lambda *a: self.table.horizontalHeader().viewport().update())
         self.table.setAlternatingRowColors(True)
-        self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
+        # CurrentChanged (not just DoubleClicked) so a single click on any
+        # editable cell opens its editor immediately - no double-click
+        # needed for the numeric fields (Tx/Rx toggle columns already
+        # respond to a single click via ToggleDelegate.editorEvent,
+        # independent of this setting).
+        self.table.setEditTriggers(
+            QAbstractItemView.CurrentChanged | QAbstractItemView.DoubleClicked
+            | QAbstractItemView.EditKeyPressed
+        )
         self.table.setMinimumHeight(320)
         self._tx_delegate = ToggleDelegate("Tx", self.table)
         self._rx_delegate = ToggleDelegate("Rx", self.table)
@@ -462,6 +484,18 @@ class DwellTab(QWidget):
             self.table.setItemDelegateForColumn(col, self._tx_delegate)
         for col in RX_TOGGLE_COLUMNS:
             self.table.setItemDelegateForColumn(col, self._rx_delegate)
+
+        # QTRM ID column and the row-number header both identify which
+        # QTRM a row is - give them a shared, distinct look (bold purple)
+        # so the index doesn't blend into the data columns, and enough
+        # width to comfortably fit "95" without truncation.
+        self.table.setColumnWidth(0, 70)
+        v_header = self.table.verticalHeader()
+        v_header.setMinimumWidth(44)
+        v_header.setStyleSheet(
+            "QHeaderView::section { background-color: #2c333a; color: #7C3AED;"
+            "font-weight: 700; border: none; border-right: 2px solid #7C3AED; padding: 4px; }"
+        )
         layout.addWidget(self.table)
 
         self.led_matrix = LedMatrix()
@@ -482,7 +516,13 @@ class DwellTab(QWidget):
         outer.addWidget(self.header_panel)
 
     def _on_invalid_data(self, message: str):
-        QMessageBox.warning(self, "Invalid Data", message)
+        # Non-modal, positioned right at the cell that was just edited,
+        # rather than a dialog the user has to dismiss - this fires on
+        # every out-of-range keystroke commit, so it shouldn't block.
+        index = self.table.currentIndex()
+        rect = self.table.visualRect(index)
+        pos = self.table.viewport().mapToGlobal(rect.bottomLeft())
+        QToolTip.showText(pos, message, self.table)
 
     def _on_import_clicked(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Dwell Data", "", "CSV Files (*.csv)")

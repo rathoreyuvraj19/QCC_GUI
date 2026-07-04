@@ -73,7 +73,7 @@ class MemoryTab(QWidget):
         target_box = QGroupBox("Target")
         target_row = QHBoxLayout(target_box)
         target_row.addWidget(QLabel("QTRM:"))
-        self.qtrm_spin = SpinField(1, 96, 1, field_width=76)
+        self.qtrm_spin = SpinField(0, 95, 0, field_width=76)
         target_row.addWidget(self.qtrm_spin)
         target_row.addStretch(1)
         layout.addWidget(target_box)
@@ -159,7 +159,7 @@ class MemoryTab(QWidget):
         return bytes([agency_fw_byte, serial & 0xFF, (serial >> 8) & 0xFF])
 
     def _current_description(self) -> str:
-        qtrm_index = self.qtrm_spin.value() - 1
+        qtrm_index = self.qtrm_spin.value()
         if self.data_type_switch.isChecked():
             return (
                 f"QTRM-{qtrm_index}: TRM Configuration - "
@@ -186,7 +186,7 @@ class MemoryTab(QWidget):
         )
         if reply != QMessageBox.Yes:
             return
-        qtrm_index = self.qtrm_spin.value() - 1
+        qtrm_index = self.qtrm_spin.value()
         self.write_requested.emit(self._current_data_type(), qtrm_index, self._current_payload())
 
     def _on_write_all_clicked(self):

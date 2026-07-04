@@ -7,8 +7,9 @@ set, all sent together in one frame (unlike Cal/Isolation/Soft Reset, Dwell
 has no single-QTRM-target convention).
 
 Two ways to fill the 96-row table: type values in directly, or import a
-CSV file - one row per QTRM, columns "QTRM ID" (optional, else row order =
-QTRM 1-96) and "Ch{1-4} Control/Tx Phase/Tx Atten/Rx Phase/Rx Atten".
+CSV file - one row per QTRM, columns "QTRM ID" (0-based, optional, else
+row order = QTRM 0-95) and "Ch{1-4} Control/Tx Phase/Tx Atten/Rx Phase/Rx
+Atten".
 Imported data is latched into the table (stays until edited or
 re-imported) until Send is pressed. "Save to CSV..." writes the same
 layout back out, so a saved file re-imports directly (round-trip), and
@@ -100,7 +101,7 @@ class DwellTableModel(QAbstractTableModel):
             return None
         if orientation == Qt.Horizontal:
             return COLUMNS[section][0]
-        return str(section + 1)
+        return str(section)
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
@@ -108,7 +109,7 @@ class DwellTableModel(QAbstractTableModel):
         _, key, _ = COLUMNS[index.column()]
         if role in (Qt.DisplayRole, Qt.EditRole):
             if key is None:
-                return index.row() + 1
+                return index.row()
             ch_idx, attr, _, _ = key
             return getattr(self.channels[index.row()][ch_idx], attr)
         return None
@@ -176,8 +177,8 @@ def load_channels_from_csv(path: str):
     Parse a CSV file into a NUM_QTRM-length list of 4 QTRMChannel each, plus
     a list of warning strings for any invalid Control value encountered
     (defaulted to 0, since Control is only ever 0-3, not a field to silently
-    clamp like Phase/Atten). First row is headers; "QTRM ID" (1-based) is
-    optional - if absent, row order is taken as QTRM 1..96. Missing Ch{n}
+    clamp like Phase/Atten). First row is headers; "QTRM ID" (0-based) is
+    optional - if absent, row order is taken as QTRM 0..95. Missing Ch{n}
     columns default to 0.
     """
     with open(path, newline="", encoding="utf-8-sig") as f:
@@ -198,7 +199,7 @@ def load_channels_from_csv(path: str):
             id_col = col_index["QTRM ID"]
             if id_col >= len(row) or not row[id_col].strip():
                 continue
-            qtrm_index = _clamp(row[id_col], 1, NUM_QTRM) - 1
+            qtrm_index = _clamp(row[id_col], 0, NUM_QTRM - 1)
         else:
             qtrm_index = row_i
         if not (0 <= qtrm_index < NUM_QTRM):
@@ -239,7 +240,7 @@ def save_channels_to_csv(path: str, channels):
         writer = csv.writer(f)
         writer.writerow(_csv_header())
         for qtrm_index, row_channels in enumerate(channels):
-            row = [qtrm_index + 1]
+            row = [qtrm_index]
             for channel in row_channels:
                 for _, attr, _, _ in _CHANNEL_FIELDS:
                     row.append(getattr(channel, attr))

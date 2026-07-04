@@ -133,7 +133,7 @@ class CalTab(QWidget):
         selection_grid.setHorizontalSpacing(18)
         selection_grid.setVerticalSpacing(14)
         selection_grid.setColumnStretch(0, 1)
-        self.qtrm_spin = SpinField(1, NUM_QTRM, 1, field_width=76)
+        self.qtrm_spin = SpinField(0, NUM_QTRM - 1, 0, field_width=76)
         self.channel_spin = SpinField(1, 4, 1, field_width=76)
         _field_row(selection_grid, 0, "Target QTRM", self.qtrm_spin)
         _field_row(selection_grid, 1, "Channel", self.channel_spin)
@@ -186,7 +186,7 @@ class CalTab(QWidget):
         outer.addWidget(self.header_panel)
 
     def _on_send_clicked(self):
-        qtrm_index = self.qtrm_spin.value() - 1
+        qtrm_index = self.qtrm_spin.value()
         self.send_requested.emit(
             qtrm_index,
             self.channel_spin.value(),

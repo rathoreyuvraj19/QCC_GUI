@@ -39,6 +39,21 @@ from packet import NUM_QTRM, QTRMChannel
 PHASE_MAX = 63    # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
 ATTEN_MAX = 63    # 6-bit attenuation (frame_type.vhd: No_of_Attenuator_bits = 6)
 
+# Vibrant, distinct from the app's default teal accent (used by Import/Save
+# right next to it) and from the green/red/grey status colors used
+# elsewhere - this is the one button on the tab that actually transmits to
+# the array, so it should read as visually different at a glance.
+_SEND_COLOR = "#ff6b35"
+_SEND_HOVER_COLOR = "#ff8659"
+_SEND_PRESSED_COLOR = "#e0552a"
+
+_SEND_BTN_STYLE = (
+    f"QPushButton {{ background-color: {_SEND_COLOR}; color: #ffffff; border: none;"
+    "border-radius: 16px; padding: 11px 24px; font-weight: 700; }"
+    f"QPushButton:hover {{ background-color: {_SEND_HOVER_COLOR}; }}"
+    f"QPushButton:pressed {{ background-color: {_SEND_PRESSED_COLOR}; }}"
+)
+
 CONTROL_MIN = 0
 CONTROL_MAX = 3   # Control is only ever 0, 1, 2, or 3 - anything else is invalid
 
@@ -250,6 +265,7 @@ class DwellTab(QWidget):
         top_row.addWidget(self.save_btn)
 
         self.send_btn = QPushButton("Send Dwell")
+        self.send_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.send_btn.clicked.connect(self.send_requested.emit)
         top_row.addWidget(self.send_btn)
 

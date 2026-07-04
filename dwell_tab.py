@@ -231,19 +231,24 @@ class ToggleDelegate(QStyledItemDelegate):
 _MIXED_COLOR = QColor(160, 165, 172)
 
 
+_HEADER_HEIGHT = 48
+
+
 class DwellHeaderView(QHeaderView):
     """
-    Toggle-all control built directly into each Tx/Rx column's header
-    section - click to set that bit for all 96 QTRMs at once. Shows green
-    "All Tx/Rx On" if every row already has it on, red "All Tx/Rx Off" if
-    every row has it off, grey "Mixed" otherwise; clicking always sets
-    every row to the opposite of "all on" (so a mixed or all-off column
-    turns fully on, an all-on column turns fully off).
+    Two-row header for each Tx/Rx column: "Ch{n} Control" on top (which
+    field this button controls), a toggle-all pill below it. Click
+    anywhere in the section to set that bit for all 96 QTRMs at once.
+    Shows green "All Tx/Rx On" if every row already has it on, red "All
+    Tx/Rx Off" if every row has it off, grey "Mixed" otherwise; clicking
+    always sets every row to the opposite of "all on" (so a mixed or
+    all-off column turns fully on, an all-on column turns fully off).
     """
 
     def __init__(self, parent=None):
         super().__init__(Qt.Horizontal, parent)
         self.setSectionsClickable(True)
+        self.setFixedHeight(_HEADER_HEIGHT)
         self.sectionClicked.connect(self._on_section_clicked)
 
     def _toggle_key(self, logical_index):
@@ -275,16 +280,24 @@ class DwellHeaderView(QHeaderView):
         painter.save()
         painter.fillRect(rect, QColor("#333a42"))
         painter.setRenderHint(QPainter.Antialiasing)
+
+        mid = rect.top() + rect.height() // 2
+        label_rect = rect.adjusted(2, 2, -2, 0)
+        label_rect.setBottom(mid)
+        painter.setPen(QColor("#eeeeee"))
+        painter.drawText(label_rect, Qt.AlignCenter, f"Ch{ch_idx + 1} Control")
+
         if state is True:
             color, text = _ON_COLOR, f"All {label_prefix} On"
         elif state is False:
             color, text = _OFF_COLOR, f"All {label_prefix} Off"
         else:
             color, text = _MIXED_COLOR, f"{label_prefix}: Mixed"
-        pill_rect = rect.adjusted(4, 4, -4, -4)
+        pill_rect = rect.adjusted(4, 0, -4, -4)
+        pill_rect.setTop(mid + 2)
         painter.setPen(Qt.NoPen)
         painter.setBrush(color)
-        painter.drawRoundedRect(pill_rect, 8, 8)
+        painter.drawRoundedRect(pill_rect, 6, 6)
         painter.setPen(_TOGGLE_TEXT_COLOR)
         painter.drawText(pill_rect, Qt.AlignCenter, text)
         painter.restore()

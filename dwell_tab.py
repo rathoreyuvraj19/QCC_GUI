@@ -8,7 +8,7 @@ has no single-QTRM-target convention).
 
 Two ways to fill the 96-row table: type values in directly, or import a
 CSV file - one row per QTRM, columns "QTRM ID" (0-based, optional, else
-row order = QTRM 0-95) and "Ch{1-4} Control/Tx Phase/Tx Atten/Rx Phase/Rx
+row order = QTRM 0-95) and "Ch{1-4} Tx/Rx/Tx Phase/Tx Atten/Rx Phase/Rx
 Atten".
 Imported data is latched into the table (stays until edited or
 re-imported) until Send is pressed. "Save to CSV..." writes the same
@@ -20,20 +20,20 @@ Yuvraj: every command except Status and Soft Reset does) - the 96-cell LED
 matrix (reused from link_test_tab.py) shows which QTRMs acknowledged.
 
 Tx/Rx Phase and Tx/Rx Atten are capped 0-63 (6-bit). Control is a 2-bit
-Tx/Rx on-off field (bit1 = Tx enable, bit0 = Rx enable) - edited via a
-dropdown (Tx Off/Rx Off, Tx Off/Rx On, Tx On/Rx Off, Tx On/Rx On) rather
-than a raw number, defaulting to 3 (both on). CSV import still guards
-against out-of-range values (0-3) since a hand-edited file bypasses the
-dropdown entirely - any other value is flagged with a warning listing
-every offending cell rather than silently clamped.
+Tx/Rx on-off field (bit1 = Tx enable, bit0 = Rx enable), split into two
+always-visible toggle-button columns per channel ("Ch{n} Tx"/"Ch{n} Rx")
+rather than a single combined number - each button shows On/Off and
+colors green/red, and clicking it flips just that one bit, leaving the
+other bit untouched. Default is both on (control = 3).
 """
 
 import csv
 
-from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex, Signal
+from PySide6.QtCore import QAbstractTableModel, QEvent, Qt, QModelIndex, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
-    QAbstractItemView, QComboBox, QFileDialog, QHBoxLayout, QHeaderView,
-    QLabel, QMessageBox, QPushButton, QScrollArea, QStyledItemDelegate,
+    QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
+    QMessageBox, QPushButton, QScrollArea, QStyledItemDelegate,
     QTableView, QVBoxLayout, QWidget,
 )
 
@@ -59,22 +59,19 @@ _SEND_BTN_STYLE = (
     f"QPushButton:pressed {{ background-color: {_SEND_PRESSED_COLOR}; }}"
 )
 
-CONTROL_MIN = 0
-CONTROL_MAX = 3   # Control is only ever 0, 1, 2, or 3 - anything else is invalid
-CONTROL_DEFAULT = 3   # both Tx and Rx on
+# Control is a 2-bit field: bit1 = Tx enable, bit0 = Rx enable. Default is
+# both on (matches every other command tab's "on" idle state).
+TX_BIT = 0b10
+RX_BIT = 0b01
+CONTROL_DEFAULT = TX_BIT | RX_BIT
 
-# Control is a 2-bit field: bit1 = Tx enable, bit0 = Rx enable.
-CONTROL_OPTIONS = [
-    (0, "Tx Off, Rx Off"),
-    (1, "Tx Off, Rx On"),
-    (2, "Tx On, Rx Off"),
-    (3, "Tx On, Rx On (default)"),
-]
-_CONTROL_LABELS = dict(CONTROL_OPTIONS)
+_ON_COLOR = QColor(146, 208, 165)
+_OFF_COLOR = QColor(240, 149, 149)
+_TOGGLE_TEXT_COLOR = QColor("#1f2328")
 
-# (label, attribute, min, max)
-_CHANNEL_FIELDS = [
-    ("Control", "control", CONTROL_MIN, CONTROL_MAX),
+# (label, attribute, min, max) - Control is handled separately (see below),
+# not part of this uniform numeric-field list.
+_NUMERIC_CHANNEL_FIELDS = [
     ("Tx Phase", "tx_phase", 0, PHASE_MAX),
     ("Tx Atten", "tx_atten", 0, ATTEN_MAX),
     ("Rx Phase", "rx_phase", 0, PHASE_MAX),
@@ -85,18 +82,25 @@ _CHANNEL_FIELDS = [
 def _build_columns():
     cols = [("QTRM ID", None, False)]
     for ch in range(1, 5):
-        for label, attr, lo, hi in _CHANNEL_FIELDS:
+        cols.append((f"Ch{ch} Tx", (ch - 1, "tx_toggle"), True))
+        cols.append((f"Ch{ch} Rx", (ch - 1, "rx_toggle"), True))
+        for label, attr, lo, hi in _NUMERIC_CHANNEL_FIELDS:
             cols.append((f"Ch{ch} {label}", (ch - 1, attr, lo, hi), True))
     return cols
 
 
 COLUMNS = _build_columns()
 
-# Column indices whose "attr" is "control" - these get the dropdown delegate.
-CONTROL_COLUMNS = [
-    i for i, (_, key, _) in enumerate(COLUMNS)
-    if isinstance(key, tuple) and key[1] == "control"
-]
+
+def _toggle_columns(kind: str):
+    return [
+        i for i, (_, key, _) in enumerate(COLUMNS)
+        if isinstance(key, tuple) and len(key) == 2 and key[1] == kind
+    ]
+
+
+TX_TOGGLE_COLUMNS = _toggle_columns("tx_toggle")
+RX_TOGGLE_COLUMNS = _toggle_columns("rx_toggle")
 
 
 def _default_channels():
@@ -130,8 +134,12 @@ class DwellTableModel(QAbstractTableModel):
         if role in (Qt.DisplayRole, Qt.EditRole):
             if key is None:
                 return index.row()
-            ch_idx, attr, _, _ = key
-            return getattr(self.channels[index.row()][ch_idx], attr)
+            channel = self.channels[index.row()][key[0]]
+            if len(key) == 2:
+                bit = TX_BIT if key[1] == "tx_toggle" else RX_BIT
+                return bool(channel.control & bit)
+            _, attr, _, _ = key
+            return getattr(channel, attr)
         return None
 
     def setData(self, index, value, role=Qt.EditRole):
@@ -140,21 +148,21 @@ class DwellTableModel(QAbstractTableModel):
         _, key, editable = COLUMNS[index.column()]
         if not editable:
             return False
+        channel = self.channels[index.row()][key[0]]
+
+        if len(key) == 2:
+            bit = TX_BIT if key[1] == "tx_toggle" else RX_BIT
+            channel.control = (channel.control | bit) if value else (channel.control & ~bit)
+            self.dataChanged.emit(index, index, [role])
+            return True
+
+        _, attr, lo, hi = key
         try:
             ivalue = int(value)
         except (TypeError, ValueError):
             return False
-        ch_idx, attr, lo, hi = key
-        if attr == "control":
-            if not (lo <= ivalue <= hi):
-                self.invalid_data.emit(
-                    f"Invalid Control value for QTRM-{index.row()}, Ch{ch_idx + 1}: "
-                    f"{ivalue} (must be {lo}-{hi})."
-                )
-                return False
-        else:
-            ivalue = max(lo, min(hi, ivalue))
-        setattr(self.channels[index.row()][ch_idx], attr, ivalue)
+        ivalue = max(lo, min(hi, ivalue))
+        setattr(channel, attr, ivalue)
         self.dataChanged.emit(index, index, [role])
         return True
 
@@ -176,25 +184,45 @@ class DwellTableModel(QAbstractTableModel):
         return self.channels
 
 
-class ControlComboDelegate(QStyledItemDelegate):
-    """Dropdown editor for the Control columns - Tx/Rx on/off, not a raw int."""
+class ToggleDelegate(QStyledItemDelegate):
+    """
+    Always-visible toggle button for one Control bit (Tx or Rx) - not a
+    real editor widget (would need re-creating on every model reset, e.g.
+    CSV import); paints its own On/Off pill and toggles directly on click
+    via editorEvent, the same mechanism Qt's own built-in checkbox
+    delegate uses.
+    """
+
+    def __init__(self, label_prefix: str, parent=None):
+        super().__init__(parent)
+        self.label_prefix = label_prefix
+
+    def paint(self, painter, option, index):
+        value = bool(index.data(Qt.DisplayRole))
+        painter.save()
+        painter.setRenderHint(QPainter.Antialiasing)
+        rect = option.rect.adjusted(4, 4, -4, -4)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(_ON_COLOR if value else _OFF_COLOR)
+        painter.drawRoundedRect(rect, 8, 8)
+        painter.setPen(_TOGGLE_TEXT_COLOR)
+        painter.drawText(rect, Qt.AlignCenter, f"{self.label_prefix} {'On' if value else 'Off'}")
+        painter.restore()
+
+    def editorEvent(self, event, model, option, index):
+        if event.type() == QEvent.MouseButtonRelease and (index.flags() & Qt.ItemIsEditable):
+            current = bool(index.data(Qt.DisplayRole))
+            model.setData(index, not current, Qt.EditRole)
+            return True
+        return False
 
     def createEditor(self, parent, option, index):
-        combo = QComboBox(parent)
-        for value, label in CONTROL_OPTIONS:
-            combo.addItem(label, value)
-        return combo
+        return None
 
-    def setEditorData(self, editor, index):
-        value = index.data(Qt.EditRole)
-        pos = editor.findData(value)
-        editor.setCurrentIndex(pos if pos >= 0 else 0)
-
-    def setModelData(self, editor, model, index):
-        model.setData(index, editor.currentData(), Qt.EditRole)
-
-    def displayText(self, value, locale):
-        return _CONTROL_LABELS.get(value, str(value))
+    def sizeHint(self, option, index):
+        size = super().sizeHint(option, index)
+        size.setHeight(max(size.height(), 28))
+        return size
 
 
 def _clamp(value, lo, hi):
@@ -208,7 +236,9 @@ def _clamp(value, lo, hi):
 def _csv_header():
     header = ["QTRM ID"]
     for ch in range(1, 5):
-        for label, _, _, _ in _CHANNEL_FIELDS:
+        header.append(f"Ch{ch} Tx")
+        header.append(f"Ch{ch} Rx")
+        for label, _, _, _ in _NUMERIC_CHANNEL_FIELDS:
             header.append(f"Ch{ch} {label}")
     return header
 
@@ -216,11 +246,11 @@ def _csv_header():
 def load_channels_from_csv(path: str):
     """
     Parse a CSV file into a NUM_QTRM-length list of 4 QTRMChannel each, plus
-    a list of warning strings for any invalid Control value encountered
-    (defaulted to 0, since Control is only ever 0-3, not a field to silently
-    clamp like Phase/Atten). First row is headers; "QTRM ID" (0-based) is
-    optional - if absent, row order is taken as QTRM 0..95. Missing Ch{n}
-    columns default to 0.
+    a list of warning strings for any invalid Tx/Rx flag encountered
+    (defaulted to on, since these are only ever 0 or 1). First row is
+    headers; "QTRM ID" (0-based) is optional - if absent, row order is
+    taken as QTRM 0..95. Missing columns default to Tx/Rx on, 0 for
+    Phase/Atten.
     """
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
@@ -248,23 +278,25 @@ def load_channels_from_csv(path: str):
 
         row_channels = []
         for ch in range(1, 5):
-            values = {}
-            for label, attr, lo, hi in _CHANNEL_FIELDS:
+            values = {"control": 0}
+            for bit_name, bit_value in (("Tx", TX_BIT), ("Rx", RX_BIT)):
+                col = col_index.get(f"Ch{ch} {bit_name}")
+                raw = row[col] if col is not None and col < len(row) and row[col].strip() != "" else 1
+                try:
+                    flag = int(raw)
+                except (TypeError, ValueError):
+                    flag = 1
+                if flag not in (0, 1):
+                    warnings.append(
+                        f"QTRM-{qtrm_index}, Ch{ch}: {bit_name} flag {flag} invalid (must be 0 or 1) - defaulted to on."
+                    )
+                    flag = 1
+                if flag:
+                    values["control"] |= bit_value
+            for label, attr, lo, hi in _NUMERIC_CHANNEL_FIELDS:
                 col = col_index.get(f"Ch{ch} {label}")
                 raw = row[col] if col is not None and col < len(row) and row[col].strip() != "" else 0
-                if attr == "control":
-                    try:
-                        ivalue = int(raw)
-                    except (TypeError, ValueError):
-                        ivalue = 0
-                    if not (lo <= ivalue <= hi):
-                        warnings.append(
-                            f"QTRM-{qtrm_index}, Ch{ch}: Control {ivalue} invalid (must be {lo}-{hi}) - defaulted to 0."
-                        )
-                        ivalue = 0
-                    values[attr] = ivalue
-                else:
-                    values[attr] = _clamp(raw, lo, hi)
+                values[attr] = _clamp(raw, lo, hi)
             row_channels.append(QTRMChannel(**values))
         channels[qtrm_index] = row_channels
 
@@ -274,8 +306,8 @@ def load_channels_from_csv(path: str):
 def save_channels_to_csv(path: str, channels):
     """
     Write the current NUM_QTRM x 4-channel data to a CSV file with the same
-    header layout load_channels_from_csv expects ("QTRM ID" +
-    "Ch{1-4} <field>") - a saved file re-imports directly, round-trip.
+    header layout load_channels_from_csv expects ("QTRM ID" + "Ch{1-4}
+    Tx/Rx/<numeric field>") - a saved file re-imports directly, round-trip.
     """
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
@@ -283,7 +315,9 @@ def save_channels_to_csv(path: str, channels):
         for qtrm_index, row_channels in enumerate(channels):
             row = [qtrm_index]
             for channel in row_channels:
-                for _, attr, _, _ in _CHANNEL_FIELDS:
+                row.append(1 if channel.control & TX_BIT else 0)
+                row.append(1 if channel.control & RX_BIT else 0)
+                for _, attr, _, _ in _NUMERIC_CHANNEL_FIELDS:
                     row.append(getattr(channel, attr))
             writer.writerow(row)
 
@@ -326,9 +360,12 @@ class DwellTab(QWidget):
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.table.setMinimumHeight(320)
-        self._control_delegate = ControlComboDelegate(self.table)
-        for col in CONTROL_COLUMNS:
-            self.table.setItemDelegateForColumn(col, self._control_delegate)
+        self._tx_delegate = ToggleDelegate("Tx", self.table)
+        self._rx_delegate = ToggleDelegate("Rx", self.table)
+        for col in TX_TOGGLE_COLUMNS:
+            self.table.setItemDelegateForColumn(col, self._tx_delegate)
+        for col in RX_TOGGLE_COLUMNS:
+            self.table.setItemDelegateForColumn(col, self._rx_delegate)
         layout.addWidget(self.table)
 
         self.led_matrix = LedMatrix()
@@ -366,7 +403,7 @@ class DwellTab(QWidget):
             preview = "\n".join(warnings[:20])
             if len(warnings) > 20:
                 preview += f"\n... and {len(warnings) - 20} more"
-            QMessageBox.warning(self, "Invalid Data", f"{len(warnings)} invalid Control value(s) found:\n\n{preview}")
+            QMessageBox.warning(self, "Invalid Data", f"{len(warnings)} invalid Tx/Rx flag(s) found:\n\n{preview}")
 
     def _on_save_clicked(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save Dwell Data", "", "CSV Files (*.csv)")

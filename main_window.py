@@ -76,6 +76,8 @@ class MainWindow(QMainWindow):
         self._last_sent_frame: bytes | None = None
         self._last_received_frame: bytes | None = None
         self._responder_window: StatusResponderWindow | None = None
+        self._qcc_ip_before_responder: str | None = None
+        self._qcc_ip_overridden_for_responder = False
 
         self._build_ui()
 
@@ -327,9 +329,28 @@ class MainWindow(QMainWindow):
         # a UDP port until the user actually asks it to.
         if self._responder_window is None:
             self._responder_window = StatusResponderWindow()
+            self._responder_window.closed.connect(self._on_responder_window_closed)
+
+        # The responder only ever runs on this machine, reachable at
+        # 127.0.0.1 - auto-fill that as QCC IP so it's obviously the right
+        # target without the user having to know/type it, and remember
+        # whatever was there before so it can be restored once the
+        # responder is closed. Only capture on the first substitution (not
+        # every re-click) so re-showing an already-open responder doesn't
+        # overwrite the remembered IP with "127.0.0.1" itself.
+        if not self._qcc_ip_overridden_for_responder:
+            self._qcc_ip_before_responder = self.qcc_ip_edit.text()
+            self.qcc_ip_edit.setText("127.0.0.1")
+            self._qcc_ip_overridden_for_responder = True
+
         self._responder_window.show()
         self._responder_window.raise_()
         self._responder_window.activateWindow()
+
+    def _on_responder_window_closed(self):
+        if self._qcc_ip_overridden_for_responder:
+            self.qcc_ip_edit.setText(self._qcc_ip_before_responder or "")
+            self._qcc_ip_overridden_for_responder = False
 
     # -- response timing / timeout ----------------------------------------
 

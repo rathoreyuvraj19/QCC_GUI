@@ -283,6 +283,8 @@ class ResponderWorker(QThread):
 
 
 class StatusResponderWindow(QMainWindow):
+    closed = Signal()
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle("QCC Status Responder - Mock QTRM")
@@ -308,10 +310,19 @@ class StatusResponderWindow(QMainWindow):
         self.status_label = QLabel("Stopped")
         self.count_label = QLabel("Frames processed: 0")
 
+        # Shown so whoever's using this tool knows what to type into the
+        # main GUI's "QCC IP" field - it always binds "0.0.0.0" (every
+        # local interface), but since this only makes sense for testing on
+        # the same machine as the main GUI, 127.0.0.1 (loopback) is the
+        # address that actually reaches it.
+        ip_label = QLabel("Listen IP: 127.0.0.1 (use this as QCC IP in the main GUI)")
+        ip_label.setStyleSheet("color: #00adb5; font-weight: 600;")
+
         row.addWidget(QLabel("Listen Port:"))
         row.addWidget(self.port_spin)
         row.addWidget(self.listen_btn)
         row.addWidget(self.status_label)
+        row.addWidget(ip_label)
         row.addStretch(1)
         row.addWidget(self.count_label)
         return box
@@ -359,6 +370,7 @@ class StatusResponderWindow(QMainWindow):
         if self.worker is not None:
             self.worker.stop()
         super().closeEvent(event)
+        self.closed.emit()
 
 
 def main():

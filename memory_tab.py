@@ -5,11 +5,14 @@ memory_tab.py
 0x22), NVM Write only, for exactly the two data types actually implemented
 in the real FPGA (flash_spi.vhd): Manufacturing data and TRM Configuration.
 
-This writes to a QTRM's non-volatile flash - permanent, one QTRM at a time
-(deliberately no "send to all 96" option, unlike Dwell). Two safety gates
-per Yuvraj's explicit ask: this tab requires a password to open (see
-main_window.py's tab-change handler), and every Write is behind its own
-confirmation dialog naming exactly what will be overwritten.
+This writes to a QTRM's non-volatile flash. Manufacturing data is
+inherently per-unit (agency ID/serial number), so it's single-QTRM-target
+only. TRM Configuration's Temp Cutoff is a uniform array-wide setting, so
+it additionally gets a "Write to All 96 QTRMs" button alongside the
+single-target one, per explicit ask. Two safety gates apply regardless of
+target: this tab requires a password to open (see main_window.py's
+tab-change handler), and every Write - individual or all - is behind its
+own confirmation dialog naming exactly what will be overwritten.
 """
 
 from PySide6.QtCore import Signal
@@ -51,6 +54,8 @@ def _send_button_style(bg_color: str = None) -> str:
 class MemoryTab(QWidget):
     # data_type (int), target_qtrm_index (0-based), payload (bytes)
     write_requested = Signal(int, int, bytes)
+    # data_type (int), payload (bytes) - all 96 QTRMs
+    write_all_requested = Signal(int, bytes)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -89,6 +94,12 @@ class MemoryTab(QWidget):
         self.send_btn.setStyleSheet(_send_button_style())
         self.send_btn.clicked.connect(self._on_send_clicked)
         send_row.addWidget(self.send_btn)
+
+        self.write_all_btn = QPushButton("Write to All 96 QTRMs")
+        self.write_all_btn.setStyleSheet(_send_button_style())
+        self.write_all_btn.clicked.connect(self._on_write_all_clicked)
+        self.write_all_btn.setVisible(False)
+        send_row.addWidget(self.write_all_btn)
 
         self.status_label = QLabel("Not yet sent")
         self.response_time_label = QLabel("")
@@ -133,6 +144,8 @@ class MemoryTab(QWidget):
     def _on_data_type_toggled(self, is_trm_config: bool):
         self.mfg_box.setVisible(not is_trm_config)
         self.trm_config_box.setVisible(is_trm_config)
+        self.write_all_btn.setVisible(is_trm_config)
+        self.send_btn.setText("Write to Selected QTRM" if is_trm_config else "Write to NVM")
 
     def _current_data_type(self) -> int:
         return MEM_DATA_TYPE_TRM_CONFIGURATION if self.data_type_switch.isChecked() else MEM_DATA_TYPE_MANUFACTURING
@@ -158,6 +171,13 @@ class MemoryTab(QWidget):
             f"FW Version {self.fw_version_spin.value()}, Serial {self.serial_number_spin.value()}"
         )
 
+    def _current_description_all(self) -> str:
+        return (
+            f"ALL 96 QTRMs: TRM Configuration - "
+            f"Temp Cutoff {'Enabled' if self.temp_cutoff_en_check.isChecked() else 'Disabled'}, "
+            f"{self.temp_cutoff_spin.value()} deg C"
+        )
+
     def _on_send_clicked(self):
         reply = QMessageBox.warning(
             self, "Confirm NVM Write",
@@ -169,14 +189,28 @@ class MemoryTab(QWidget):
         qtrm_index = self.qtrm_spin.value() - 1
         self.write_requested.emit(self._current_data_type(), qtrm_index, self._current_payload())
 
+    def _on_write_all_clicked(self):
+        reply = QMessageBox.warning(
+            self, "Confirm NVM Write - ALL 96 QTRMs",
+            f"This permanently overwrites flash memory on ALL 96 QTRMs:\n\n{self._current_description_all()}\n\nContinue?",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if reply != QMessageBox.Yes:
+            return
+        self.write_all_requested.emit(self._current_data_type(), self._current_payload())
+
+    def _set_buttons_enabled(self, enabled: bool):
+        self.send_btn.setEnabled(enabled)
+        self.write_all_btn.setEnabled(enabled)
+
     def mark_pending(self):
         self.status_label.setText("Sent - waiting for response...")
         self.response_time_label.setText("")
-        self.send_btn.setEnabled(False)
+        self._set_buttons_enabled(False)
         self.send_btn.setStyleSheet(_send_button_style(_PENDING_COLOR))
 
     def show_result(self, qtrm_index: int, acked: bool):
-        self.send_btn.setEnabled(True)
+        self._set_buttons_enabled(True)
         self.send_btn.setStyleSheet(_send_button_style(_ACKED_COLOR if acked else _NOT_ACKED_COLOR))
         self.status_label.setText(
             f"QTRM-{qtrm_index}: {'Acknowledged' if acked else 'Not acknowledged'}"
@@ -186,7 +220,26 @@ class MemoryTab(QWidget):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
 
     def show_no_response(self, qtrm_index: int):
-        self.send_btn.setEnabled(True)
+        self._set_buttons_enabled(True)
         self.send_btn.setStyleSheet(_send_button_style(_NOT_ACKED_COLOR))
         self.status_label.setText(f"QTRM-{qtrm_index}: No response")
+        self.response_time_label.setText("")
+
+    def mark_all_pending(self):
+        self.status_label.setText("Sent to all 96 - waiting for response...")
+        self.response_time_label.setText("")
+        self._set_buttons_enabled(False)
+        self.write_all_btn.setStyleSheet(_send_button_style(_PENDING_COLOR))
+
+    def show_all_results(self, acked_flags):
+        self._set_buttons_enabled(True)
+        acked_count = sum(1 for v in acked_flags if v)
+        all_acked = acked_count == len(acked_flags)
+        self.write_all_btn.setStyleSheet(_send_button_style(_ACKED_COLOR if all_acked else _NOT_ACKED_COLOR))
+        self.status_label.setText(f"{acked_count}/{len(acked_flags)} QTRMs acknowledged")
+
+    def show_all_no_response(self):
+        self._set_buttons_enabled(True)
+        self.write_all_btn.setStyleSheet(_send_button_style(_NOT_ACKED_COLOR))
+        self.status_label.setText("No response")
         self.response_time_label.setText("")

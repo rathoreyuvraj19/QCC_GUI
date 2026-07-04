@@ -539,22 +539,25 @@ def build_memory_write_slot(data_type: int, payload: bytes, mem_op: int = MEM_OP
     return _build_status_family_slot(CMD_DATA_STORAGE, STATUS_TYPE_LINK, full_payload)
 
 
-def build_memory_write_frame(data_type: int, target_qtrm_index: int, payload: bytes,
+def build_memory_write_frame(data_type: int, payload: bytes, target_qtrm_index: int = None,
                               mem_op: int = MEM_OP_FLASH_WRITE) -> bytes:
     """
-    Full 2970-byte frame: Memory Write sent to exactly ONE QTRM (0-based
-    index) - deliberately single-target only (unlike Dwell's all-96 send),
-    since this persists to non-volatile memory and a targeted, one-at-a-
-    time action is safer than writing the same data to all 96 QTRMs in one
-    shot. Every other slot is left entirely zero-filled (no header, no
-    command) - same convention as Cal/Isolation/Soft Reset individual sends.
+    Full 2970-byte frame: Memory Write. If target_qtrm_index is None, every
+    QTRM gets the same write (e.g. a uniform Temp Cutoff setting across the
+    whole array) - same "all 96" convention as Isolation/Status. Otherwise
+    only that QTRM (0-based index) gets it; every other slot is left
+    entirely zero-filled (no header, no command) - same convention as
+    Cal/Isolation/Soft Reset individual sends.
     """
-    assert 0 <= target_qtrm_index < NUM_QTRM
+    assert target_qtrm_index is None or 0 <= target_qtrm_index < NUM_QTRM
     write_slot = build_memory_write_slot(data_type, payload, mem_op)
     empty_slot = bytes(QTRM_SLOT_SIZE)
     out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
     for i in range(NUM_QTRM):
-        out.extend(write_slot if i == target_qtrm_index else empty_slot)
+        if target_qtrm_index is None or i == target_qtrm_index:
+            out.extend(write_slot)
+        else:
+            out.extend(empty_slot)
     assert len(out) == TOTAL_PACKET_SIZE
     return bytes(out)
 

@@ -33,7 +33,7 @@ all-on/all-off/mixed.
 import csv
 
 from PySide6.QtCore import QAbstractTableModel, QEvent, Qt, QModelIndex, Signal
-from PySide6.QtGui import QColor, QFont, QPainter
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
     QMessageBox, QPushButton, QScrollArea, QStyledItemDelegate,
@@ -143,15 +143,6 @@ class DwellTableModel(QAbstractTableModel):
                 return bool(channel.control & bit)
             _, attr, _, _ = key
             return getattr(channel, attr)
-        if key is None:
-            # QTRM ID column - bold/accent so the index doesn't blend into
-            # the surrounding numeric data columns.
-            if role == Qt.ForegroundRole:
-                return QColor("#7C3AED")
-            if role == Qt.FontRole:
-                font = QFont()
-                font.setBold(True)
-                return font
         return None
 
     def setData(self, index, value, role=Qt.EditRole):
@@ -485,17 +476,17 @@ class DwellTab(QWidget):
         for col in RX_TOGGLE_COLUMNS:
             self.table.setItemDelegateForColumn(col, self._rx_delegate)
 
-        # QTRM ID column and the row-number header both identify which
-        # QTRM a row is - give them a shared, distinct look (bold purple)
-        # so the index doesn't blend into the data columns, and enough
-        # width to comfortably fit "95" without truncation.
-        self.table.setColumnWidth(0, 70)
-        v_header = self.table.verticalHeader()
-        v_header.setMinimumWidth(44)
-        v_header.setStyleSheet(
-            "QHeaderView::section { background-color: #2c333a; color: #7C3AED;"
-            "font-weight: 700; border: none; border-right: 2px solid #7C3AED; padding: 4px; }"
-        )
+        # Size every column to fit its own header text by default (several
+        # "Ch{n} <field>" headers were getting truncated with "..." at
+        # whatever width Qt guessed initially).
+        self.table.resizeColumnsToContents()
+        # resizeColumnsToContents sizes the Tx/Rx toggle columns off their
+        # raw bool value ("True"/"False"), not the "Tx On"/"Tx Off" text
+        # ToggleDelegate actually paints, so re-set those explicitly to a
+        # width that comfortably fits the real label.
+        for col in TX_TOGGLE_COLUMNS + RX_TOGGLE_COLUMNS:
+            self.table.setColumnWidth(col, 90)
+        self.table.verticalHeader().setMinimumWidth(30)
         layout.addWidget(self.table)
 
         self.led_matrix = LedMatrix()

@@ -58,13 +58,14 @@ _SEND_BTN_STYLE = (
 
 
 class _Led(QLabel):
-    """A single clickable rectangular status cell for one QTRM (0-indexed label)."""
+    """A single rectangular status cell for one QTRM (0-indexed label) - clickable only if the owning LedMatrix says so."""
 
     clicked = Signal(int)
 
-    def __init__(self, qtrm_index: int, parent=None):
+    def __init__(self, qtrm_index: int, clickable: bool = True, parent=None):
         super().__init__(f"QTRM-{qtrm_index}", parent)
         self.qtrm_index = qtrm_index
+        self.clickable = clickable
         # Expanding so the cell fills its whole grid cell (grows/shrinks with
         # the window) rather than staying at its natural size and leaving
         # empty space around it. setMinimumSize (not setFixedSize) keeps a
@@ -73,12 +74,18 @@ class _Led(QLabel):
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.setMinimumSize(_LED_MIN_WIDTH, _LED_MIN_HEIGHT)
         self.setAlignment(Qt.AlignCenter)
-        self.setCursor(Qt.PointingHandCursor)
-        self.setToolTip(f"QTRM-{qtrm_index} - click to link-test just this QTRM")
+        if clickable:
+            self.setCursor(Qt.PointingHandCursor)
+            self.setToolTip(f"QTRM-{qtrm_index} - click to link-test just this QTRM")
+        else:
+            # No individual-query action wired up wherever this instance is
+            # used (e.g. Dwell's results display) - don't imply one via the
+            # pointer cursor/tooltip text.
+            self.setToolTip(f"QTRM-{qtrm_index}")
         self.set_color(_IDLE_COLOR)
 
     def mousePressEvent(self, event):
-        if event.button() == Qt.LeftButton:
+        if self.clickable and event.button() == Qt.LeftButton:
             self.clicked.emit(self.qtrm_index)
         super().mousePressEvent(event)
 
@@ -98,11 +105,19 @@ class LedMatrix(QWidget):
     Six 'CP' (Cold Plate) group boxes, each holding the 16 QTRMs on that
     connector (2 rows x 8 columns), stacked to match the real array -
     CP5 at the top down to CP0 at the bottom.
+
+    clickable=False for a purely read-only results display (e.g. Dwell's
+    matrix, which only ever shows the outcome of a single "Send Dwell" to
+    all 96 QTRMs at once - there's no per-QTRM individual query to trigger
+    from it) - cells then have no pointer cursor/click tooltip, since
+    nothing happens on click. Link Test/Status keep the default
+    clickable=True, since clicking one of their cells genuinely queries
+    just that QTRM.
     """
 
     led_clicked = Signal(int)  # qtrm_index
 
-    def __init__(self, parent=None):
+    def __init__(self, clickable: bool = True, parent=None):
         super().__init__(parent)
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         outer = QVBoxLayout(self)
@@ -122,7 +137,7 @@ class LedMatrix(QWidget):
                 grid.setRowStretch(local_row, 1)
 
             for qtrm_index, local_row, local_col in group_grid_positions(group):
-                led = _Led(qtrm_index)
+                led = _Led(qtrm_index, clickable=clickable)
                 led.clicked.connect(self.led_clicked.emit)
                 self._leds[qtrm_index] = led
                 grid.addWidget(led, local_row, local_col)

@@ -489,7 +489,7 @@ class DwellTab(QWidget):
         self.table.verticalHeader().setMinimumWidth(30)
         layout.addWidget(self.table)
 
-        self.led_matrix = LedMatrix()
+        self.led_matrix = LedMatrix(clickable=False)
         layout.addWidget(self.led_matrix, 1)
 
         # Wrapped in a QScrollArea so this tab's minimumSizeHint stays small,

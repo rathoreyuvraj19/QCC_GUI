@@ -288,9 +288,10 @@ class MainWindow(QMainWindow):
             self._tx_test_window.show_frame(raw)
 
     def _on_open_rx_test_clicked(self):
-        # One shared instance - closing it just hides it (Qt's default), so
-        # re-clicking the button re-shows/raises the same window instead of
-        # opening a second one that would fight over the same UDP port.
+        # Same one-shared-instance pattern as the TX test window - this one
+        # has no listener of its own either, it just displays whatever the
+        # main window's own worker receives (see _on_frame_received), so
+        # there's no port conflict risk.
         if self._rx_test_window is None:
             self._rx_test_window = RxTestWindow()
         self._rx_test_window.show()
@@ -654,6 +655,9 @@ class MainWindow(QMainWindow):
             getattr(self, tab_attr).header_panel.show_frame(raw)
 
     def _on_frame_received(self, raw: bytes):
+        if self._rx_test_window is not None:
+            self._rx_test_window.show_frame(raw)
+
         elapsed_us = self._end_wait()
         kind, self._awaiting_kind = self._awaiting_kind, None
         self._update_header_panel(kind, raw)

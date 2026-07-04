@@ -1,55 +1,55 @@
 """
 rx_test_app.py
 
-Standalone test receiver - NOT part of the main QCC control GUI. Stands in
-for the QCC/QTRM side: listens on a UDP port for the 2970-byte frame the
-main window sends out (Host -> QCC direction), and displays exactly what
-arrived - the 58-byte QCC header (QCCHeaderRx layout: MSG_ID, MODE,
-COMMAND_DATA, CHECKSUM) plus a raw byte-for-byte 96-row QTRM grid (see
-raw_slot_model.py - no per-command semantic decoding, just the bytes) - so
-the actual bytes the GUI puts on the wire can be checked without real
-QCC/QTRM hardware.
+Display-only window (opened from the main GUI - has no listener/socket of
+its own) showing exactly what the main window's UdpWorker most recently
+received from QCC (QCC -> Host direction), fed directly via
+MainWindow._on_frame_received calling this window's show_frame(raw) - the
+same no-socket pattern tx_test_window.py already uses for outgoing frames.
 
-Run directly:  python rx_test_app.py
+Previously this ran its own independent UdpWorker bound to a configurable
+Listen Port, standing in for the QCC side without real hardware. Dropped
+per Yuvraj's explicit ask: a second socket bound to the same port the main
+app is receiving on causes the OS to deliver each incoming UDP datagram to
+only one of the two sockets, silently stealing traffic from whichever one
+loses out - "then dont listen to ports, in both rx test window and tx
+test window, should just display me the data what the main gui has sent
+or received." Since there's now no independent listener, there's no port
+conflict possible - both windows show exactly what the main app itself
+sent/received, nothing else.
+
+Raw byte view (via raw_slot_model.RawSlotTableModel) - no per-command
+semantic decoding of the QTRM slot bytes past the four fields fixed at
+the same position in every slot (Header, Packet Size ID, Command Type,
+Status & Sub Status Type) - everything from byte 5 onward is shown
+generically, since its meaning depends on which command occupies that
+slot.
 """
 
-import sys
-
 from PySide6.QtWidgets import (
-    QApplication, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
-    QMessageBox, QPushButton, QTableView, QVBoxLayout, QWidget,
+    QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
+    QTableView, QVBoxLayout, QWidget,
 )
 
-from packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QTRM_SLOT_SIZE, NUM_QTRM, QCCHeaderRx
+from packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QTRM_SLOT_SIZE, NUM_QTRM, QCCHeaderTx
 from qtrm_filter import FilterBar, QtrmFilterProxyModel
 from raw_slot_model import RawSlotTableModel
 from segmented_control import SegmentedControl
-from spin_field import SpinField
-from theme import STYLESHEET
-from udp_worker import UdpWorker
 
-_MODE_NAMES = {
-    QCCHeaderRx.MODE_NORMAL: "Normal",
-    QCCHeaderRx.MODE_INTERNAL_LOOPBACK: "Internal Loopback",
-    QCCHeaderRx.MODE_EXTERNAL_LOOPBACK: "External Loopback",
-    QCCHeaderRx.MODE_STATUS_ONLY: "Status/Response Only",
-    QCCHeaderRx.MODE_QCC_RESET: "QCC Reset",
-    QCCHeaderRx.MODE_REMOTE_PROGRAMMING: "Remote Programming",
-}
-
-
-def _hex_full(data: bytes) -> str:
-    """Every byte, space-separated, capitalized (e.g. 'AA 00 02 ...') - no truncation."""
-    return " ".join(f"{b:02X}" for b in data) or "-"
+_RESPONSE_FIELDS = [
+    "MSG_ID", "MODE", "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
+    "OUTPUT_PRT_COUNT", "OUTPUT_SOB_COUNT", "INPUT_SOB_WIDTH_US",
+    "OUTPUT_SOB_WIDTH_US", "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US",
+    "INPUT_PPS_WIDTH_US", "CHECKSUM",
+]
 
 
 class RxTestWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("QCC RX Test - Receiver")
+        self.setWindowTitle("QCC RX Test - Received Packet Viewer")
         self.resize(1300, 750)
 
-        self.worker: UdpWorker | None = None
         self._frame_count = 0
         self.model = RawSlotTableModel()
         self.proxy_model = QtrmFilterProxyModel()
@@ -59,26 +59,18 @@ class RxTestWindow(QMainWindow):
         self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
-        root.addWidget(self._build_listen_group())
+        root.addWidget(self._build_status_group())
         root.addWidget(self._build_header_group())
         root.addWidget(self._build_filter_bar())
         root.addWidget(self._build_table(), 1)
 
     # -- UI construction ---------------------------------------------------
 
-    def _build_listen_group(self):
-        box = QGroupBox("Listener")
+    def _build_status_group(self):
+        box = QGroupBox("Status")
         row = QHBoxLayout(box)
-
-        self.port_spin = SpinField(1, 65535, 5000, field_width=64)
-        self.listen_btn = QPushButton("Start Listening")
-        self.listen_btn.clicked.connect(self._on_listen_clicked)
-        self.status_label = QLabel("Stopped")
+        self.status_label = QLabel("No frames received yet")
         self.count_label = QLabel("Frames received: 0")
-
-        row.addWidget(QLabel("Listen Port:"))
-        row.addWidget(self.port_spin)
-        row.addWidget(self.listen_btn)
         row.addWidget(self.status_label)
         row.addStretch(1)
         row.addWidget(QLabel("QTRM data:"))
@@ -90,45 +82,21 @@ class RxTestWindow(QMainWindow):
         return box
 
     def _build_header_group(self):
-        box = QGroupBox("Last Received Header (Host -> QCC)")
-        outer = QVBoxLayout(box)
-
-        row1 = QHBoxLayout()
-        self.msg_id_label = self._add_field(row1, "MSG_ID")
-        self.mode_label = self._add_field(row1, "MODE")
-        self.checksum_label = self._add_field(row1, "CHECKSUM")
-        row1.addStretch(1)
-        outer.addLayout(row1)
-
-        self.fixed_header_label = self._add_full_width_field(outer, "Fixed Header (hex)")
-        self.command_data_label = self._add_full_width_field(outer, "COMMAND_DATA (hex)")
-
+        box = QGroupBox("Last Received Header (QCC -> Host)")
+        grid = QGridLayout(box)
+        self.resp_labels = {}
+        wrap_cols = 5
+        for i, name in enumerate(_RESPONSE_FIELDS):
+            col = QVBoxLayout()
+            col.addWidget(QLabel(name))
+            value = QLabel("-")
+            value.setStyleSheet("color: #00adb5; font-weight: 600;")
+            self.resp_labels[name] = value
+            col.addWidget(value)
+            cell = QWidget()
+            cell.setLayout(col)
+            grid.addWidget(cell, i // wrap_cols, i % wrap_cols)
         return box
-
-    @staticmethod
-    def _add_field(row_layout: QHBoxLayout, title: str, stretch: int = 0) -> QLabel:
-        col = QVBoxLayout()
-        col.addWidget(QLabel(title))
-        value = QLabel("-")
-        value.setStyleSheet("color: #00adb5; font-weight: 600;")
-        col.addWidget(value)
-        wrapper = QWidget()
-        wrapper.setLayout(col)
-        row_layout.addWidget(wrapper, stretch)
-        return value
-
-    @staticmethod
-    def _add_full_width_field(outer_layout: QVBoxLayout, title: str) -> QLabel:
-        # Own row, full width, word-wrapped - so the complete byte sequence
-        # (32 bytes for the Fixed Header, 55 for COMMAND_DATA) is visible at
-        # once instead of being truncated next to the small MSG_ID/MODE/
-        # CHECKSUM fields.
-        outer_layout.addWidget(QLabel(title))
-        value = QLabel("-")
-        value.setWordWrap(True)
-        value.setStyleSheet("color: #00adb5; font-weight: 600;")
-        outer_layout.addWidget(value)
-        return value
 
     def _build_filter_bar(self):
         self.filter_bar = FilterBar(self.proxy_model, self.model)
@@ -145,68 +113,31 @@ class RxTestWindow(QMainWindow):
     def _on_display_mode_toggled(self, hex_mode: bool):
         self.model.set_hex_mode(hex_mode)
 
-    # -- listening -----------------------------------------------------------
+    # -- called by the main window on every UdpWorker.frame_received --------
 
-    def _on_listen_clicked(self):
-        if self.worker is not None:
-            self.worker.stop()
-            self.worker = None
-            self.listen_btn.setText("Start Listening")
-            self.status_label.setText("Stopped")
-            return
-
-        port = self.port_spin.value()
-        # qcc_ip/qcc_port are unused here - this app only ever receives.
-        self.worker = UdpWorker(local_port=port, qcc_ip="0.0.0.0", qcc_port=0)
-        self.worker.frame_received.connect(self._on_frame_received)
-        self.worker.error.connect(self._on_error)
-        self.worker.status.connect(self.status_label.setText)
-        self.worker.start()
-        self.listen_btn.setText("Stop Listening")
-
-    def _on_error(self, msg: str):
-        self.status_label.setText(msg)
-        QMessageBox.warning(self, "UDP Error", msg)
-
-    def _on_frame_received(self, raw: bytes):
+    def show_frame(self, raw: bytes):
         self._frame_count += 1
         self.count_label.setText(f"Frames received: {self._frame_count}")
+        self.status_label.setText("Frame received")
 
-        fixed_header = raw[0:FIXED_HEADER_SIZE]
         qcc_raw = raw[FIXED_HEADER_SIZE:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
-        qcc_header = QCCHeaderRx.from_bytes(qcc_raw)
+        qcc_header = QCCHeaderTx.from_bytes(qcc_raw)
 
-        self.msg_id_label.setText(str(qcc_header.msg_id))
-        self.mode_label.setText(_MODE_NAMES.get(qcc_header.mode, str(qcc_header.mode)))
-        self.checksum_label.setText("OK" if qcc_header.checksum_ok else "FAIL")
-        self.fixed_header_label.setText(_hex_full(fixed_header))
-        self.command_data_label.setText(_hex_full(qcc_header.command_data))
+        self.resp_labels["MSG_ID"].setText(str(qcc_header.msg_id))
+        self.resp_labels["MODE"].setText(str(qcc_header.mode))
+        self.resp_labels["INPUT_SOB_COUNT"].setText(str(qcc_header.input_sob_count))
+        self.resp_labels["INPUT_PRT_COUNT"].setText(str(qcc_header.input_prt_count))
+        self.resp_labels["INPUT_PPS_COUNT"].setText(str(qcc_header.input_pps_count))
+        self.resp_labels["OUTPUT_PRT_COUNT"].setText(str(qcc_header.output_prt_count))
+        self.resp_labels["OUTPUT_SOB_COUNT"].setText(str(qcc_header.output_sob_count))
+        self.resp_labels["INPUT_SOB_WIDTH_US"].setText(str(qcc_header.input_sob_width_us))
+        self.resp_labels["OUTPUT_SOB_WIDTH_US"].setText(str(qcc_header.output_sob_width_us))
+        self.resp_labels["INPUT_PRT_WIDTH_US"].setText(str(qcc_header.input_prt_width_us))
+        self.resp_labels["OUTPUT_PRT_WIDTH_US"].setText(str(qcc_header.output_prt_width_us))
+        self.resp_labels["INPUT_PPS_WIDTH_US"].setText(str(qcc_header.input_pps_width_us))
+        self.resp_labels["CHECKSUM"].setText("OK" if qcc_header.checksum_ok else "FAIL")
 
         base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
         slots = [raw[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE] for i in range(NUM_QTRM)]
         self.model.replace_slots(slots)
         self.filter_bar.refresh_auto_filter()
-
-    def closeEvent(self, event):
-        # Closing (the window X button, or the main app's launcher re-showing
-        # this same hidden instance later) should leave the listener state
-        # consistent with a manual "Stop Listening" click, not just kill the
-        # socket thread while the button/status still claim it's running.
-        if self.worker is not None:
-            self.worker.stop()
-            self.worker = None
-            self.listen_btn.setText("Start Listening")
-            self.status_label.setText("Stopped")
-        super().closeEvent(event)
-
-
-def main():
-    app = QApplication(sys.argv)
-    app.setStyleSheet(STYLESHEET)
-    window = RxTestWindow()
-    window.show()
-    sys.exit(app.exec())
-
-
-if __name__ == "__main__":
-    main()

@@ -228,6 +228,7 @@ class MainWindow(QMainWindow):
             self.worker.stop()
             self.worker = None
             self.connect_btn.setText("Connect")
+            self.connect_btn.setStyleSheet("")
             self.conn_status_label.setText("Disconnected")
             return
 
@@ -239,12 +240,26 @@ class MainWindow(QMainWindow):
         self.worker.frame_received.connect(self._on_frame_received)
         self.worker.frame_sent.connect(self._on_frame_sent)
         self.worker.error.connect(self._on_worker_error)
-        self.worker.status.connect(self.conn_status_label.setText)
+        self.worker.status.connect(self._on_connect_status)
         self.worker.start()
 
         self.connect_btn.setText("Disconnect")
 
+    def _on_connect_status(self, msg: str):
+        self.conn_status_label.setText(msg)
+        if msg.startswith("Listening"):
+            self.connect_btn.setStyleSheet("background-color: rgb(146, 208, 165);")
+
     def _on_worker_error(self, msg: str):
+        # Only a bind failure at connect-time means the connection itself
+        # failed to establish (color the button red + reset to "Connect",
+        # since nothing actually got connected). Other errors (a dropped
+        # malformed frame, a transient send failure) can happen on an
+        # otherwise-healthy connection and shouldn't disconnect the UI state.
+        if msg.startswith("Failed to bind"):
+            self.connect_btn.setText("Connect")
+            self.connect_btn.setStyleSheet("background-color: rgb(240, 149, 149);")
+            self.worker = None
         QMessageBox.warning(self, "UDP Error", msg)
 
     def _on_frame_sent(self, raw: bytes):

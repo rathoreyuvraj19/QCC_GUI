@@ -17,6 +17,11 @@ the plain-text format is easy to review/diff outside the app.
 Every QTRM's Dwell command requests a Link-type status response (per
 Yuvraj: every command except Status and Soft Reset does) - the 96-cell LED
 matrix (reused from link_test_tab.py) shows which QTRMs acknowledged.
+
+Tx/Rx Phase and Tx/Rx Atten are capped 0-63 (6-bit). Control is only ever
+0, 1, 2, or 3 - any other value is rejected (table edits) or flagged with
+a warning listing every offending cell (CSV import), rather than silently
+clamped.
 """
 
 import csv
@@ -34,9 +39,12 @@ from packet import NUM_QTRM, QTRMChannel
 PHASE_MAX = 63    # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
 ATTEN_MAX = 63    # 6-bit attenuation (frame_type.vhd: No_of_Attenuator_bits = 6)
 
+CONTROL_MIN = 0
+CONTROL_MAX = 3   # Control is only ever 0, 1, 2, or 3 - anything else is invalid
+
 # (label, attribute, min, max)
 _CHANNEL_FIELDS = [
-    ("Control", "control", 0, 255),
+    ("Control", "control", CONTROL_MIN, CONTROL_MAX),
     ("Tx Phase", "tx_phase", 0, PHASE_MAX),
     ("Tx Atten", "tx_atten", 0, ATTEN_MAX),
     ("Rx Phase", "rx_phase", 0, PHASE_MAX),
@@ -60,6 +68,8 @@ def _default_channels():
 
 
 class DwellTableModel(QAbstractTableModel):
+    invalid_data = Signal(str)
+
     def __init__(self, parent=None):
         super().__init__(parent)
         self.channels = _default_channels()
@@ -99,7 +109,15 @@ class DwellTableModel(QAbstractTableModel):
         except (TypeError, ValueError):
             return False
         ch_idx, attr, lo, hi = key
-        ivalue = max(lo, min(hi, ivalue))
+        if attr == "control":
+            if not (lo <= ivalue <= hi):
+                self.invalid_data.emit(
+                    f"Invalid Control value for QTRM-{index.row()}, Ch{ch_idx + 1}: "
+                    f"{ivalue} (must be {lo}-{hi})."
+                )
+                return False
+        else:
+            ivalue = max(lo, min(hi, ivalue))
         setattr(self.channels[index.row()][ch_idx], attr, ivalue)
         self.dataChanged.emit(index, index, [role])
         return True
@@ -140,9 +158,12 @@ def _csv_header():
 
 def load_channels_from_csv(path: str):
     """
-    Parse a CSV file into a NUM_QTRM-length list of 4 QTRMChannel each.
-    First row is headers; "QTRM ID" (1-based) is optional - if absent, row
-    order is taken as QTRM 1..96. Missing Ch{n} columns default to 0.
+    Parse a CSV file into a NUM_QTRM-length list of 4 QTRMChannel each, plus
+    a list of warning strings for any invalid Control value encountered
+    (defaulted to 0, since Control is only ever 0-3, not a field to silently
+    clamp like Phase/Atten). First row is headers; "QTRM ID" (1-based) is
+    optional - if absent, row order is taken as QTRM 1..96. Missing Ch{n}
+    columns default to 0.
     """
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
@@ -154,6 +175,7 @@ def load_channels_from_csv(path: str):
     has_id_col = "QTRM ID" in col_index
 
     channels = _default_channels()
+    warnings = []
     for row_i, row in enumerate(rows[1:]):
         if not row:
             continue
@@ -173,11 +195,23 @@ def load_channels_from_csv(path: str):
             for label, attr, lo, hi in _CHANNEL_FIELDS:
                 col = col_index.get(f"Ch{ch} {label}")
                 raw = row[col] if col is not None and col < len(row) and row[col].strip() != "" else 0
-                values[attr] = _clamp(raw, lo, hi)
+                if attr == "control":
+                    try:
+                        ivalue = int(raw)
+                    except (TypeError, ValueError):
+                        ivalue = 0
+                    if not (lo <= ivalue <= hi):
+                        warnings.append(
+                            f"QTRM-{qtrm_index}, Ch{ch}: Control {ivalue} invalid (must be {lo}-{hi}) - defaulted to 0."
+                        )
+                        ivalue = 0
+                    values[attr] = ivalue
+                else:
+                    values[attr] = _clamp(raw, lo, hi)
             row_channels.append(QTRMChannel(**values))
         channels[qtrm_index] = row_channels
 
-    return channels
+    return channels, warnings
 
 
 def save_channels_to_csv(path: str, channels):
@@ -227,6 +261,7 @@ class DwellTab(QWidget):
         layout.addLayout(top_row)
 
         self.model = DwellTableModel()
+        self.model.invalid_data.connect(self._on_invalid_data)
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
@@ -252,17 +287,25 @@ class DwellTab(QWidget):
         outer.addWidget(scroll, 1)
         outer.addWidget(self.header_panel)
 
+    def _on_invalid_data(self, message: str):
+        QMessageBox.warning(self, "Invalid Data", message)
+
     def _on_import_clicked(self):
         path, _ = QFileDialog.getOpenFileName(self, "Import Dwell Data", "", "CSV Files (*.csv)")
         if not path:
             return
         try:
-            channels = load_channels_from_csv(path)
+            channels, warnings = load_channels_from_csv(path)
         except Exception as e:
             QMessageBox.warning(self, "Import failed", f"Could not read '{path}':\n{e}")
             return
         self.model.load_channels(channels)
         self.summary_label.setText("Imported from CSV - not yet sent")
+        if warnings:
+            preview = "\n".join(warnings[:20])
+            if len(warnings) > 20:
+                preview += f"\n... and {len(warnings) - 20} more"
+            QMessageBox.warning(self, "Invalid Data", f"{len(warnings)} invalid Control value(s) found:\n\n{preview}")
 
     def _on_save_clicked(self):
         path, _ = QFileDialog.getSaveFileName(self, "Save Dwell Data", "", "CSV Files (*.csv)")

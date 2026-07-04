@@ -6,9 +6,14 @@ a QTableView. QTRM ID is positional (row index + 1), matching the packet
 spec - it is not a field inside the 30-byte slot itself.
 """
 
-from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex
+from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex, Signal
 
 from packet import QTRMSlot, NUM_QTRM
+
+PHASE_MAX = 63    # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
+ATTEN_MAX = 63    # 6-bit attenuation (frame_type.vhd: No_of_Attenuator_bits = 6)
+CONTROL_MIN = 0
+CONTROL_MAX = 3   # Control is only ever 0, 1, 2, or 3 - anything else is invalid
 
 # Column layout: fixed fields first, then 4 channels x 5 fields each
 # Dwell/MSG ID and Frequency ID are not editable - not implemented in the
@@ -22,12 +27,13 @@ FIXED_COLUMNS = [
     ("Frequency ID", "frequency_id", False),
 ]
 
+# (label, attribute, min, max)
 CHANNEL_FIELDS = [
-    ("Control", "control"),
-    ("Tx Phase", "tx_phase"),
-    ("Tx Atten", "tx_atten"),
-    ("Rx Phase", "rx_phase"),
-    ("Rx Atten", "rx_atten"),
+    ("Control", "control", CONTROL_MIN, CONTROL_MAX),
+    ("Tx Phase", "tx_phase", 0, PHASE_MAX),
+    ("Tx Atten", "tx_atten", 0, ATTEN_MAX),
+    ("Rx Phase", "rx_phase", 0, PHASE_MAX),
+    ("Rx Atten", "rx_atten", 0, ATTEN_MAX),
 ]
 
 STATUS_COLUMNS = [
@@ -38,8 +44,8 @@ STATUS_COLUMNS = [
 def _build_columns():
     cols = list(FIXED_COLUMNS)
     for ch in range(1, 5):
-        for label, attr in CHANNEL_FIELDS:
-            cols.append((f"Ch{ch} {label}", (ch - 1, attr), True))
+        for label, attr, lo, hi in CHANNEL_FIELDS:
+            cols.append((f"Ch{ch} {label}", (ch - 1, attr, lo, hi), True))
     cols.extend(STATUS_COLUMNS)
     return cols
 
@@ -48,6 +54,8 @@ COLUMNS = _build_columns()
 
 
 class QTRMTableModel(QAbstractTableModel):
+    invalid_data = Signal(str)
+
     def __init__(self, slots=None, parent=None):
         super().__init__(parent)
         self.slots = slots if slots is not None else [QTRMSlot(qtrm_id=i + 1) for i in range(NUM_QTRM)]
@@ -75,7 +83,7 @@ class QTRMTableModel(QAbstractTableModel):
 
         if role in (Qt.DisplayRole, Qt.EditRole):
             if isinstance(key, tuple):
-                ch_idx, attr = key
+                ch_idx, attr, _, _ = key
                 return getattr(slot.channels[ch_idx], attr)
             if key == "checksum_ok":
                 val = getattr(slot, "checksum_ok", None)
@@ -96,8 +104,16 @@ class QTRMTableModel(QAbstractTableModel):
             return False
 
         if isinstance(key, tuple):
-            ch_idx, attr = key
-            ivalue = max(0, min(255, ivalue))
+            ch_idx, attr, lo, hi = key
+            if attr == "control":
+                if not (lo <= ivalue <= hi):
+                    self.invalid_data.emit(
+                        f"Invalid Control value for QTRM-{slot.qtrm_id}, Ch{ch_idx + 1}: "
+                        f"{ivalue} (must be {lo}-{hi})."
+                    )
+                    return False
+            else:
+                ivalue = max(lo, min(hi, ivalue))
             setattr(slot.channels[ch_idx], attr, ivalue)
         elif key in ("ack_type", "ack_on_off"):
             ivalue = max(0, min(15, ivalue))  # nibble range

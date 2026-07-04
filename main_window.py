@@ -279,6 +279,7 @@ class MainWindow(QMainWindow):
 
     def _build_table(self):
         self.model = QTRMTableModel(self.qtrm_slots)
+        self.model.invalid_data.connect(lambda msg: QMessageBox.warning(self, "Invalid Data", msg))
         self.table = QTableView()
         self.table.setModel(self.model)
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)

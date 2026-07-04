@@ -73,6 +73,8 @@ class MainWindow(QMainWindow):
         self._pending_timer = None
         self._rx_test_window: RxTestWindow | None = None
         self._tx_test_window: TxTestWindow | None = None
+        self._last_sent_frame: bytes | None = None
+        self._last_received_frame: bytes | None = None
         self._responder_window: StatusResponderWindow | None = None
 
         self._build_ui()
@@ -284,6 +286,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "UDP Error", msg)
 
     def _on_frame_sent(self, raw: bytes):
+        self._last_sent_frame = raw
         if self._tx_test_window is not None:
             self._tx_test_window.show_frame(raw)
 
@@ -294,6 +297,10 @@ class MainWindow(QMainWindow):
         # there's no port conflict risk.
         if self._rx_test_window is None:
             self._rx_test_window = RxTestWindow()
+            # Window didn't exist yet for whatever was most recently
+            # received before now - back-fill it so it doesn't start blank.
+            if self._last_received_frame is not None:
+                self._rx_test_window.show_frame(self._last_received_frame)
         self._rx_test_window.show()
         self._rx_test_window.raise_()
         self._rx_test_window.activateWindow()
@@ -305,6 +312,10 @@ class MainWindow(QMainWindow):
         # conflict risk, but reusing one instance still avoids window clutter.
         if self._tx_test_window is None:
             self._tx_test_window = TxTestWindow()
+            # Window didn't exist yet for whatever was most recently sent
+            # before now - back-fill it so it doesn't start blank.
+            if self._last_sent_frame is not None:
+                self._tx_test_window.show_frame(self._last_sent_frame)
         self._tx_test_window.show()
         self._tx_test_window.raise_()
         self._tx_test_window.activateWindow()
@@ -655,6 +666,7 @@ class MainWindow(QMainWindow):
             getattr(self, tab_attr).header_panel.show_frame(raw)
 
     def _on_frame_received(self, raw: bytes):
+        self._last_received_frame = raw
         if self._rx_test_window is not None:
             self._rx_test_window.show_frame(raw)
 

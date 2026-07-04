@@ -171,6 +171,34 @@ def load_channels_from_excel(path: str):
     return channels
 
 
+def save_channels_to_excel(path: str, channels):
+    """
+    Write the current NUM_QTRM x 4-channel data to an .xlsx sheet with the
+    same header layout load_channels_from_excel expects ("QTRM ID" +
+    "Ch{1-4} <field>") - a saved file re-imports directly, round-trip.
+    """
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Dwell Data"
+
+    header = ["QTRM ID"]
+    for ch in range(1, 5):
+        for label, _, _, _ in _CHANNEL_FIELDS:
+            header.append(f"Ch{ch} {label}")
+    ws.append(header)
+
+    for qtrm_index, row_channels in enumerate(channels):
+        row = [qtrm_index + 1]
+        for channel in row_channels:
+            for _, attr, _, _ in _CHANNEL_FIELDS:
+                row.append(getattr(channel, attr))
+        ws.append(row)
+
+    wb.save(path)
+
+
 class DwellTab(QWidget):
     send_requested = Signal()
 
@@ -184,6 +212,10 @@ class DwellTab(QWidget):
         self.import_btn = QPushButton("Import from Excel...")
         self.import_btn.clicked.connect(self._on_import_clicked)
         top_row.addWidget(self.import_btn)
+
+        self.save_btn = QPushButton("Save to Excel...")
+        self.save_btn.clicked.connect(self._on_save_clicked)
+        top_row.addWidget(self.save_btn)
 
         self.send_btn = QPushButton("Send Dwell")
         self.send_btn.clicked.connect(self.send_requested.emit)
@@ -233,6 +265,19 @@ class DwellTab(QWidget):
             return
         self.model.load_channels(channels)
         self.summary_label.setText("Imported from Excel - not yet sent")
+
+    def _on_save_clicked(self):
+        path, _ = QFileDialog.getSaveFileName(self, "Save Dwell Data", "", "Excel Files (*.xlsx)")
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+        try:
+            save_channels_to_excel(path, self.model.get_channels())
+        except Exception as e:
+            QMessageBox.warning(self, "Save failed", f"Could not write '{path}':\n{e}")
+            return
+        self.summary_label.setText(f"Saved to {path}")
 
     def get_channels(self):
         return self.model.get_channels()

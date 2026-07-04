@@ -24,7 +24,10 @@ Tx/Rx on-off field (bit1 = Tx enable, bit0 = Rx enable), split into two
 always-visible toggle-button columns per channel ("Ch{n} Tx"/"Ch{n} Rx")
 rather than a single combined number - each button shows On/Off and
 colors green/red, and clicking it flips just that one bit, leaving the
-other bit untouched. Default is both on (control = 3).
+other bit untouched. Default is both on (control = 3). Each Tx/Rx
+column's header is itself a toggle-all control (DwellHeaderView) - click
+it to set that bit for all 96 QTRMs at once; it shows green/red/grey for
+all-on/all-off/mixed.
 """
 
 import csv
@@ -225,6 +228,80 @@ class ToggleDelegate(QStyledItemDelegate):
         return size
 
 
+_MIXED_COLOR = QColor(160, 165, 172)
+
+
+class DwellHeaderView(QHeaderView):
+    """
+    Toggle-all control built directly into each Tx/Rx column's header
+    section - click to set that bit for all 96 QTRMs at once. Shows green
+    "All Tx/Rx On" if every row already has it on, red "All Tx/Rx Off" if
+    every row has it off, grey "Mixed" otherwise; clicking always sets
+    every row to the opposite of "all on" (so a mixed or all-off column
+    turns fully on, an all-on column turns fully off).
+    """
+
+    def __init__(self, parent=None):
+        super().__init__(Qt.Horizontal, parent)
+        self.setSectionsClickable(True)
+        self.sectionClicked.connect(self._on_section_clicked)
+
+    def _toggle_key(self, logical_index):
+        _, key, _ = COLUMNS[logical_index]
+        if isinstance(key, tuple) and len(key) == 2:
+            return key
+        return None
+
+    def _aggregate_state(self, ch_idx, bit):
+        model = self.model()
+        values = [bool(model.channels[row][ch_idx].control & bit) for row in range(NUM_QTRM)]
+        if all(values):
+            return True
+        if not any(values):
+            return False
+        return None
+
+    def paintSection(self, painter, rect, logical_index):
+        key = self._toggle_key(logical_index)
+        if key is None:
+            super().paintSection(painter, rect, logical_index)
+            return
+
+        ch_idx, kind = key
+        bit = TX_BIT if kind == "tx_toggle" else RX_BIT
+        label_prefix = "Tx" if kind == "tx_toggle" else "Rx"
+        state = self._aggregate_state(ch_idx, bit)
+
+        painter.save()
+        painter.fillRect(rect, QColor("#333a42"))
+        painter.setRenderHint(QPainter.Antialiasing)
+        if state is True:
+            color, text = _ON_COLOR, f"All {label_prefix} On"
+        elif state is False:
+            color, text = _OFF_COLOR, f"All {label_prefix} Off"
+        else:
+            color, text = _MIXED_COLOR, f"{label_prefix}: Mixed"
+        pill_rect = rect.adjusted(4, 4, -4, -4)
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(color)
+        painter.drawRoundedRect(pill_rect, 8, 8)
+        painter.setPen(_TOGGLE_TEXT_COLOR)
+        painter.drawText(pill_rect, Qt.AlignCenter, text)
+        painter.restore()
+
+    def _on_section_clicked(self, logical_index):
+        key = self._toggle_key(logical_index)
+        if key is None:
+            return
+        ch_idx, kind = key
+        bit = TX_BIT if kind == "tx_toggle" else RX_BIT
+        model = self.model()
+        turn_on = self._aggregate_state(ch_idx, bit) is not True
+        for row in range(NUM_QTRM):
+            model.setData(model.index(row, logical_index), turn_on, Qt.EditRole)
+        self.viewport().update()
+
+
 def _clamp(value, lo, hi):
     try:
         ivalue = int(value)
@@ -356,7 +433,13 @@ class DwellTab(QWidget):
         self.model.invalid_data.connect(self._on_invalid_data)
         self.table = QTableView()
         self.table.setModel(self.model)
+        self.table.setHorizontalHeader(DwellHeaderView(self.table))
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        # The header's toggle-all pills reflect current aggregate state but
+        # only repaint on their own click or a model reset (CSV import) -
+        # a per-cell toggle also needs to refresh them (e.g. going from
+        # "all on" to "mixed" after one row's button is clicked).
+        self.model.dataChanged.connect(lambda *a: self.table.horizontalHeader().viewport().update())
         self.table.setAlternatingRowColors(True)
         self.table.setEditTriggers(QAbstractItemView.DoubleClicked | QAbstractItemView.EditKeyPressed)
         self.table.setMinimumHeight(320)

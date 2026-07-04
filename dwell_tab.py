@@ -6,16 +6,20 @@ dwell_tab.py
 set, all sent together in one frame (unlike Cal/Isolation/Soft Reset, Dwell
 has no single-QTRM-target convention).
 
-Two ways to fill the 96-row table: type values in directly, or import an
-Excel (.xlsx) sheet - one row per QTRM, columns "QTRM ID" (optional, else
-row order = QTRM 1-96) and "Ch{1-4} Control/Tx Phase/Tx Atten/Rx Phase/Rx
-Atten". Imported data is latched into the table (stays until edited or
-re-imported) until Send is pressed.
+Two ways to fill the 96-row table: type values in directly, or import a
+CSV file - one row per QTRM, columns "QTRM ID" (optional, else row order =
+QTRM 1-96) and "Ch{1-4} Control/Tx Phase/Tx Atten/Rx Phase/Rx Atten".
+Imported data is latched into the table (stays until edited or
+re-imported) until Send is pressed. "Save to CSV..." writes the same
+layout back out, so a saved file re-imports directly (round-trip), and
+the plain-text format is easy to review/diff outside the app.
 
 Every QTRM's Dwell command requests a Link-type status response (per
 Yuvraj: every command except Status and Soft Reset does) - the 96-cell LED
 matrix (reused from link_test_tab.py) shows which QTRMs acknowledged.
 """
+
+import csv
 
 from PySide6.QtCore import QAbstractTableModel, Qt, QModelIndex, Signal
 from PySide6.QtWidgets import (
@@ -126,33 +130,38 @@ def _clamp(value, lo, hi):
     return max(lo, min(hi, ivalue))
 
 
-def load_channels_from_excel(path: str):
+def _csv_header():
+    header = ["QTRM ID"]
+    for ch in range(1, 5):
+        for label, _, _, _ in _CHANNEL_FIELDS:
+            header.append(f"Ch{ch} {label}")
+    return header
+
+
+def load_channels_from_csv(path: str):
     """
-    Parse an .xlsx sheet into a NUM_QTRM-length list of 4 QTRMChannel each.
+    Parse a CSV file into a NUM_QTRM-length list of 4 QTRMChannel each.
     First row is headers; "QTRM ID" (1-based) is optional - if absent, row
     order is taken as QTRM 1..96. Missing Ch{n} columns default to 0.
     """
-    from openpyxl import load_workbook
-
-    wb = load_workbook(path, data_only=True)
-    ws = wb.active
-    rows = list(ws.iter_rows(values_only=True))
+    with open(path, newline="", encoding="utf-8-sig") as f:
+        rows = list(csv.reader(f))
     if not rows:
-        raise ValueError("Spreadsheet has no rows.")
+        raise ValueError("CSV file has no rows.")
 
-    header = [str(c).strip() if c is not None else "" for c in rows[0]]
+    header = [c.strip() for c in rows[0]]
     col_index = {name: idx for idx, name in enumerate(header)}
     has_id_col = "QTRM ID" in col_index
 
     channels = _default_channels()
     for row_i, row in enumerate(rows[1:]):
+        if not row:
+            continue
         if has_id_col:
             id_col = col_index["QTRM ID"]
-            if id_col >= len(row):
+            if id_col >= len(row) or not row[id_col].strip():
                 continue
-            qtrm_index = _clamp(row[id_col], 1, NUM_QTRM) - 1 if row[id_col] is not None else None
-            if qtrm_index is None:
-                continue
+            qtrm_index = _clamp(row[id_col], 1, NUM_QTRM) - 1
         else:
             qtrm_index = row_i
         if not (0 <= qtrm_index < NUM_QTRM):
@@ -163,40 +172,29 @@ def load_channels_from_excel(path: str):
             values = {}
             for label, attr, lo, hi in _CHANNEL_FIELDS:
                 col = col_index.get(f"Ch{ch} {label}")
-                raw = row[col] if col is not None and col < len(row) else 0
-                values[attr] = _clamp(raw if raw is not None else 0, lo, hi)
+                raw = row[col] if col is not None and col < len(row) and row[col].strip() != "" else 0
+                values[attr] = _clamp(raw, lo, hi)
             row_channels.append(QTRMChannel(**values))
         channels[qtrm_index] = row_channels
 
     return channels
 
 
-def save_channels_to_excel(path: str, channels):
+def save_channels_to_csv(path: str, channels):
     """
-    Write the current NUM_QTRM x 4-channel data to an .xlsx sheet with the
-    same header layout load_channels_from_excel expects ("QTRM ID" +
+    Write the current NUM_QTRM x 4-channel data to a CSV file with the same
+    header layout load_channels_from_csv expects ("QTRM ID" +
     "Ch{1-4} <field>") - a saved file re-imports directly, round-trip.
     """
-    from openpyxl import Workbook
-
-    wb = Workbook()
-    ws = wb.active
-    ws.title = "Dwell Data"
-
-    header = ["QTRM ID"]
-    for ch in range(1, 5):
-        for label, _, _, _ in _CHANNEL_FIELDS:
-            header.append(f"Ch{ch} {label}")
-    ws.append(header)
-
-    for qtrm_index, row_channels in enumerate(channels):
-        row = [qtrm_index + 1]
-        for channel in row_channels:
-            for _, attr, _, _ in _CHANNEL_FIELDS:
-                row.append(getattr(channel, attr))
-        ws.append(row)
-
-    wb.save(path)
+    with open(path, "w", newline="", encoding="utf-8-sig") as f:
+        writer = csv.writer(f)
+        writer.writerow(_csv_header())
+        for qtrm_index, row_channels in enumerate(channels):
+            row = [qtrm_index + 1]
+            for channel in row_channels:
+                for _, attr, _, _ in _CHANNEL_FIELDS:
+                    row.append(getattr(channel, attr))
+            writer.writerow(row)
 
 
 class DwellTab(QWidget):
@@ -209,11 +207,11 @@ class DwellTab(QWidget):
         layout = QVBoxLayout(content)
 
         top_row = QHBoxLayout()
-        self.import_btn = QPushButton("Import from Excel...")
+        self.import_btn = QPushButton("Import from CSV...")
         self.import_btn.clicked.connect(self._on_import_clicked)
         top_row.addWidget(self.import_btn)
 
-        self.save_btn = QPushButton("Save to Excel...")
+        self.save_btn = QPushButton("Save to CSV...")
         self.save_btn.clicked.connect(self._on_save_clicked)
         top_row.addWidget(self.save_btn)
 
@@ -255,25 +253,25 @@ class DwellTab(QWidget):
         outer.addWidget(self.header_panel)
 
     def _on_import_clicked(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import Dwell Data", "", "Excel Files (*.xlsx)")
+        path, _ = QFileDialog.getOpenFileName(self, "Import Dwell Data", "", "CSV Files (*.csv)")
         if not path:
             return
         try:
-            channels = load_channels_from_excel(path)
+            channels = load_channels_from_csv(path)
         except Exception as e:
             QMessageBox.warning(self, "Import failed", f"Could not read '{path}':\n{e}")
             return
         self.model.load_channels(channels)
-        self.summary_label.setText("Imported from Excel - not yet sent")
+        self.summary_label.setText("Imported from CSV - not yet sent")
 
     def _on_save_clicked(self):
-        path, _ = QFileDialog.getSaveFileName(self, "Save Dwell Data", "", "Excel Files (*.xlsx)")
+        path, _ = QFileDialog.getSaveFileName(self, "Save Dwell Data", "", "CSV Files (*.csv)")
         if not path:
             return
-        if not path.lower().endswith(".xlsx"):
-            path += ".xlsx"
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
         try:
-            save_channels_to_excel(path, self.model.get_channels())
+            save_channels_to_csv(path, self.model.get_channels())
         except Exception as e:
             QMessageBox.warning(self, "Save failed", f"Could not write '{path}':\n{e}")
             return

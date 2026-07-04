@@ -151,6 +151,15 @@ _FILTER_BTN_STYLE_ON = (
     "QPushButton:hover { background-color: #1fc2ca; }"
 )
 
+# Send button color - shared across every command tab's primary send button
+# so they all read consistently, distinct from the app's default teal.
+_SEND_BTN_STYLE = (
+    "QPushButton { background-color: #7C3AED; color: #eeeeee; border: none;"
+    "border-radius: 16px; padding: 11px 24px; font-weight: 600; }"
+    "QPushButton:hover { background-color: #6D28D9; }"
+    "QPushButton:pressed { background-color: #5B21B6; }"
+)
+
 
 class StatusTab(QWidget):
     # status_type, sub_status_type, beam_register_address (always 0 - not implemented)
@@ -177,6 +186,7 @@ class StatusTab(QWidget):
 
         top_row = QHBoxLayout()
         self.send_btn = QPushButton("Send All")
+        self.send_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.send_btn.clicked.connect(self._on_send_all_clicked)
         top_row.addWidget(self.send_btn)
 

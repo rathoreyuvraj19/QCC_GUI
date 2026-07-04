@@ -27,9 +27,9 @@ from qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_
 
 # Matches Link Test's LED / Isolation's matrix button idle color exactly -
 # these 96 buttons are per-QTRM identifiers just like those, so they should
-# look the same. "Reset All" is left at the app's default teal (unchanged),
-# same as Isolation's "Send All" and Link Test's "Send Link Test" - it's an
-# action button, not a per-QTRM status indicator.
+# look the same. "Reset All" gets the shared purple send-button color
+# instead (see _SEND_BTN_STYLE) - it's an action button, not a per-QTRM
+# status indicator.
 _IDLE_COLOR = "rgb(222, 224, 227)"
 _IDLE_HOVER_COLOR = "rgb(200, 203, 208)"
 _IDLE_PRESSED_COLOR = "rgb(180, 184, 190)"
@@ -47,6 +47,15 @@ _BUTTON_STYLE = (
 )
 _BUTTON_MIN_WIDTH = 46
 _BUTTON_MIN_HEIGHT = 24
+
+# Send button color - shared across every command tab's primary send button
+# so they all read consistently, distinct from the app's default teal.
+_SEND_BTN_STYLE = (
+    "QPushButton { background-color: #7C3AED; color: #eeeeee; border: none;"
+    "border-radius: 16px; padding: 11px 24px; font-weight: 600; }"
+    "QPushButton:hover { background-color: #6D28D9; }"
+    "QPushButton:pressed { background-color: #5B21B6; }"
+)
 
 # See link_test_tab.py's _CP_BOX_STYLE for why this override exists - no
 # drawn box/border, just the "CP{n}" title text above each group so the
@@ -72,6 +81,7 @@ class SoftResetTab(QWidget):
         top_row = QHBoxLayout()
         top_row.addStretch(1)
         self.reset_all_btn = QPushButton("Reset All")
+        self.reset_all_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.reset_all_btn.clicked.connect(self.reset_all_requested.emit)
         top_row.addWidget(self.reset_all_btn)
         top_row.addStretch(1)

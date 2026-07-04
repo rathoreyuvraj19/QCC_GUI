@@ -39,13 +39,13 @@ from packet import NUM_QTRM, QTRMChannel
 PHASE_MAX = 63    # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
 ATTEN_MAX = 63    # 6-bit attenuation (frame_type.vhd: No_of_Attenuator_bits = 6)
 
-# Vibrant, distinct from the app's default teal accent (used by Import/Save
-# right next to it) and from the green/red/grey status colors used
-# elsewhere - this is the one button on the tab that actually transmits to
-# the array, so it should read as visually different at a glance.
-_SEND_COLOR = "#ff6b35"
-_SEND_HOVER_COLOR = "#ff8659"
-_SEND_PRESSED_COLOR = "#e0552a"
+# Send button color - shared across every command tab's primary send button
+# so they all read consistently, distinct from the app's default teal (used
+# by Import/Save right next to it) and from the green/red/grey status
+# colors used elsewhere.
+_SEND_COLOR = "#7C3AED"
+_SEND_HOVER_COLOR = "#6D28D9"
+_SEND_PRESSED_COLOR = "#5B21B6"
 
 _SEND_BTN_STYLE = (
     f"QPushButton {{ background-color: {_SEND_COLOR}; color: #ffffff; border: none;"

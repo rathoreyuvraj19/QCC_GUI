@@ -47,6 +47,15 @@ _CP_BOX_STYLE = (
 _LED_MIN_WIDTH = 46
 _LED_MIN_HEIGHT = 24
 
+# Send button color - shared across every command tab's primary send button
+# so they all read consistently, distinct from the app's default teal.
+_SEND_BTN_STYLE = (
+    "QPushButton { background-color: #7C3AED; color: #eeeeee; border: none;"
+    "border-radius: 16px; padding: 11px 24px; font-weight: 600; }"
+    "QPushButton:hover { background-color: #6D28D9; }"
+    "QPushButton:pressed { background-color: #5B21B6; }"
+)
+
 
 class _Led(QLabel):
     """A single clickable rectangular status cell for one QTRM (0-indexed label)."""
@@ -152,6 +161,7 @@ class LinkTestTab(QWidget):
 
         top_row = QHBoxLayout()
         self.send_btn = QPushButton("Send Link Test")
+        self.send_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.send_btn.clicked.connect(self._on_send_btn_clicked)
         top_row.addWidget(self.send_btn)
 

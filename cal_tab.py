@@ -45,10 +45,13 @@ _CARD_MAX_WIDTH = 540
 
 _TITLE_MAP = {"RX Cal": "RX Calibration", "TX Cal": "TX Calibration"}
 
-# Send-button states: idle (the app's normal accent teal, with real hover/
-# pressed feedback) before anything's been sent, grey while waiting on the
-# targeted QTRM's Link-type response, green if it replied, red if the 1s
-# timeout elapsed without one.
+# Send-button states: idle (a distinct purple, shared across every command
+# tab's send button so they all read consistently), grey while waiting on
+# the targeted QTRM's Link-type response, green if it replied, red if the
+# 1s timeout elapsed without one.
+_SEND_COLOR = "#7C3AED"
+_SEND_HOVER_COLOR = "#6D28D9"
+_SEND_PRESSED_COLOR = "#5B21B6"
 _PENDING_COLOR = "rgb(160, 165, 172)"
 _LINKED_COLOR = "rgb(146, 208, 165)"
 _NOT_LINKED_COLOR = "rgb(240, 149, 149)"
@@ -58,10 +61,10 @@ _STATE_TEXT_COLOR = "#1f2328"
 def _send_button_style(bg_color: str = None) -> str:
     if bg_color is None:
         return (
-            f"QPushButton {{ background-color: {_ACCENT}; color: {_TEXT}; border: none;"
+            f"QPushButton {{ background-color: {_SEND_COLOR}; color: {_TEXT}; border: none;"
             "border-radius: 12px; font-size: 14px; font-weight: 600; }"
-            f"QPushButton:hover {{ background-color: {_ACCENT_HOVER}; }}"
-            f"QPushButton:pressed {{ background-color: {_ACCENT_PRESSED}; }}"
+            f"QPushButton:hover {{ background-color: {_SEND_HOVER_COLOR}; }}"
+            f"QPushButton:pressed {{ background-color: {_SEND_PRESSED_COLOR}; }}"
         )
     return (
         f"QPushButton {{ background-color: {bg_color}; color: {_STATE_TEXT_COLOR}; border: none;"

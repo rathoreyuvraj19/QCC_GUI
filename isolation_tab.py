@@ -45,8 +45,9 @@ _CP_BOX_STYLE = (
 # grey/idle, darker grey/pending, green/linked, red/not-linked) - each of
 # these 96 buttons is a per-QTRM status indicator, same role as one of Link
 # Test's LEDs, so it should look like one. This is distinct from "Send
-# All"/"Send Link Test", which stay the app's default teal always since they
-# represent an action, not a single QTRM's status.
+# All", which stays a fixed purple always (matching every other command
+# tab's send button) since it represents an action, not a single QTRM's
+# status.
 _IDLE_COLOR = "rgb(222, 224, 227)"
 _IDLE_HOVER_COLOR = "rgb(200, 203, 208)"
 _IDLE_PRESSED_COLOR = "rgb(180, 184, 190)"
@@ -54,6 +55,15 @@ _PENDING_COLOR = "rgb(160, 165, 172)"
 _LINKED_COLOR = "rgb(146, 208, 165)"
 _NOT_LINKED_COLOR = "rgb(240, 149, 149)"
 _STATE_TEXT_COLOR = "#1f2328"
+
+# Send button color - shared across every command tab's primary send button
+# so they all read consistently, distinct from the app's default teal.
+_SEND_BTN_STYLE = (
+    "QPushButton { background-color: #7C3AED; color: #eeeeee; border: none;"
+    "border-radius: 16px; padding: 11px 24px; font-weight: 600; }"
+    "QPushButton:hover { background-color: #6D28D9; }"
+    "QPushButton:pressed { background-color: #5B21B6; }"
+)
 
 
 def _matrix_button_style(bg_color: str = None) -> str:
@@ -97,6 +107,7 @@ class IsolationTab(QWidget):
         # this button doesn't represent any single QTRM's result, so it never
         # gets recolored by mark_all_pending/show_all_results/show_all_no_response.
         self.send_all_btn = QPushButton("Send All")
+        self.send_all_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.send_all_btn.clicked.connect(self._on_send_all_clicked)
         top_row.addWidget(self.send_all_btn)
         top_row.addStretch(1)
@@ -167,7 +178,7 @@ class IsolationTab(QWidget):
             btn.setStyleSheet(_matrix_button_style(color))
 
     def mark_all_pending(self):
-        # Send All itself always stays its idle teal - only the 96 matrix
+        # Send All itself always stays its idle purple - only the 96 matrix
         # buttons (each representing one QTRM's actual result) change color.
         self._set_all_matrix_color(_PENDING_COLOR)
 

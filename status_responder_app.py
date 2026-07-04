@@ -1,0 +1,360 @@
+"""
+status_responder_app.py
+
+Standalone test responder - simulates the QTRM side answering Status
+Command queries (Section 10 of the QTRM Message Format IDD), so the main
+GUI's Status tab can be tested end-to-end without real hardware. Doesn't do
+much: listens on a UDP port, and for every QTRM slot in an incoming frame
+that carries a real Status Command (Header 0xAA, Packet Size ID 0x00,
+Command Type 0x21 - Status), replies with a plausible, correctly-
+checksummed mock response for whatever Status Type (and, for DIAGNOSTIC,
+Sub Status Type) was requested. Slots that weren't addressed (all-zero, or
+not a Status Command) get no reply, matching how a real QTRM would behave.
+LINK is included too even though the main GUI's Link Test tab has its own
+dedicated flow, since it's the same Status Command Format at the wire
+level and costs nothing extra to support here.
+
+Unlike udp_worker.py's UdpWorker (which always sends to one fixed
+configured destination), this replies directly to whichever address the
+query actually came from, so it works regardless of what local port the
+main GUI happens to be using.
+
+Run directly:  python status_responder_app.py
+"""
+
+import socket
+import sys
+
+from PySide6.QtCore import QThread, Signal
+from PySide6.QtWidgets import (
+    QApplication, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QPlainTextEdit,
+    QPushButton, QVBoxLayout, QWidget,
+)
+
+from packet import (
+    QTRMSlot, QCCHeaderRx, QTRM_SLOT_SIZE, NUM_QTRM, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
+    TOTAL_PACKET_SIZE, CMD_STATUS,
+    STATUS_TYPE_ACK, STATUS_TYPE_LINK, STATUS_TYPE_HEALTH,
+    STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
+    DIAGNOSTIC_TYPE_DETAILED_HEALTH, LINK_SENTINEL,
+)
+from spin_field import SpinField
+from theme import STYLESHEET
+
+_STATUS_TYPE_NAMES = {
+    STATUS_TYPE_ACK: "ACK",
+    STATUS_TYPE_LINK: "LINK",
+    STATUS_TYPE_HEALTH: "HEALTH",
+    STATUS_TYPE_ERR_LOG: "TRM Err. Log",
+    STATUS_TYPE_MFG: "TRM Mfg. Details",
+    STATUS_TYPE_DIAGNOSTIC: "DIAGNOSTIC",
+}
+
+# ---------------------------------------------------------------------------
+# Mock reply builders - one per Status Type. Values are plausible dummy data
+# (varied a little per QTRM index so the Status tab's per-QTRM field display
+# actually shows something distinguishable) rather than real measurements -
+# this tool only exists to exercise the wire format, not simulate real TRM
+# behavior.
+# ---------------------------------------------------------------------------
+
+
+def _checksum(data: bytes) -> int:
+    chk = 0
+    for b in data:
+        chk ^= b
+    return chk
+
+
+def _finish_10_byte(body: bytearray) -> bytes:
+    body[9] = _checksum(bytes(body[:9]))
+    return bytes(body)
+
+
+def _mock_link_reply(qtrm_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(QTRM_SLOT_SIZE)
+    body[0] = QTRMSlot.HEADER_BYTE
+    body[1] = 0x00
+    body[2] = query_slot[2]
+    body[3] = STATUS_TYPE_LINK
+    body[4:9] = LINK_SENTINEL
+    return _finish_10_byte(body)
+
+
+def _mock_ack_reply(qtrm_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(QTRM_SLOT_SIZE)
+    body[0] = QTRMSlot.HEADER_BYTE
+    body[1] = 0x00
+    body[2] = query_slot[2]
+    body[3] = query_slot[3]       # echo Sub Status/Status Type
+    body[4] = query_slot[4]       # echo Message/Dwell ID
+    body[5:9] = query_slot[5:9]   # echo the rest of the query (ACK Message Format, Section 10.1.1.2)
+    return _finish_10_byte(body)
+
+
+def _mock_health_reply(qtrm_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(QTRM_SLOT_SIZE)
+    body[0] = QTRMSlot.HEADER_BYTE
+    body[1] = 0x00
+    body[2] = query_slot[2]
+    body[3] = STATUS_TYPE_HEALTH
+    body[4] = 200 + (qtrm_index % 20)   # DC Voltage Status
+    body[5] = 50 + (qtrm_index % 10)    # DC Current Status
+    body[6] = 30 + (qtrm_index % 40)    # Temperature Status
+    body[7] = 80 + (qtrm_index % 15)    # Tx Forward RF Status
+    body[8] = 90 + (qtrm_index % 5)     # Rx/Reverse RF Status
+    return _finish_10_byte(body)
+
+
+def _mock_err_log_reply(qtrm_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(QTRM_SLOT_SIZE)
+    body[0] = QTRMSlot.HEADER_BYTE
+    body[1] = 0x00
+    body[2] = query_slot[2]
+    body[3] = STATUS_TYPE_ERR_LOG
+    body[4] = 0   # TRM shutdown flags - none
+    body[5] = 0   # Header Error
+    body[6] = 0   # Footer/CRC Error
+    body[7] = 0   # Timeout Error
+    body[8] = ((qtrm_index % 3) << 4) | (qtrm_index % 4)  # PRT duty/width violation counts
+    return _finish_10_byte(body)
+
+
+def _mock_mfg_reply(qtrm_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(QTRM_SLOT_SIZE)
+    body[0] = QTRMSlot.HEADER_BYTE
+    body[1] = 0x00
+    body[2] = query_slot[2]
+    body[3] = STATUS_TYPE_MFG
+    body[4] = (0 << 4) | 1  # Mfg Agency ID 0 (LRDE), firmware version 1
+    serial = 1000 + qtrm_index
+    body[5] = serial & 0xFF
+    body[6] = (serial >> 8) & 0xFF
+    on_time = 100 + qtrm_index
+    body[7] = on_time & 0xFF
+    body[8] = (on_time >> 8) & 0xFF
+    return _finish_10_byte(body)
+
+
+def _mock_diagnostic_reply(qtrm_index: int, query_slot: bytes) -> bytes:
+    diagnostic_type = (query_slot[3] >> 4) & 0x0F
+    msg_len = 30  # Diagnostic responses are always full Dwell-size, regardless of the 10-byte query
+    body = bytearray(QTRM_SLOT_SIZE)
+    body[0] = QTRMSlot.HEADER_BYTE
+    body[1] = 0x04
+    body[2] = query_slot[2]
+    body[3] = (diagnostic_type << 4) | STATUS_TYPE_DIAGNOSTIC
+    body[5] = 200 + (qtrm_index % 10)  # Total PRT Count
+    body[6] = 198 + (qtrm_index % 10)  # Processed PRT Count
+    body[7] = 2                        # Dwell PRT Count
+    body[8] = 5 + (qtrm_index % 3)      # Total SOB Count
+
+    if diagnostic_type == DIAGNOSTIC_TYPE_DETAILED_HEALTH:
+        body[4] = 1  # Operation Command Type
+        for ch in range(4):
+            off = 9 + ch * 5
+            body[off] = 30 + ((qtrm_index + ch) % 40)       # Temp
+            body[off + 1] = 200 + ((qtrm_index + ch) % 20)  # DC Status
+            body[off + 2] = 80 + ((qtrm_index + ch) % 15)   # RF Status
+            body[off + 3] = ch                               # Tx Control Count
+            body[off + 4] = ch                               # Rx Control Count
+    else:
+        body[4] = 0  # Beam Data Register Address - not implemented, always 0
+        for ch in range(4):
+            off = 9 + ch * 5
+            body[off] = (1 << 4) | 3       # Op Mode | Control
+            body[off + 1] = 10 + ch        # Tx Phase
+            body[off + 2] = 20 + ch        # Tx Atten
+            body[off + 3] = 30 + ch        # Rx Phase
+            body[off + 4] = 40 + ch        # Rx Atten
+
+    body[msg_len - 1] = _checksum(bytes(body[:msg_len - 1]))
+    return bytes(body)
+
+
+_REPLY_BUILDERS = {
+    STATUS_TYPE_LINK: _mock_link_reply,
+    STATUS_TYPE_ACK: _mock_ack_reply,
+    STATUS_TYPE_HEALTH: _mock_health_reply,
+    STATUS_TYPE_ERR_LOG: _mock_err_log_reply,
+    STATUS_TYPE_MFG: _mock_mfg_reply,
+    STATUS_TYPE_DIAGNOSTIC: _mock_diagnostic_reply,
+}
+
+# The real app always sends/expects an all-zero 90-byte header for now (see
+# packet.py's build_tx_frame docstring), so there's nothing "real" to mirror
+# back here - but an all-zero response header makes the RX/TX HeaderPanel
+# sidebars look identically blank for every test, which isn't a useful test
+# signal. Filled with a fixed (not re-randomized per run - reproducible
+# between test sessions), clearly-non-zero pattern instead, so there's
+# always something to actually look at, and QCCHeaderRx.to_bytes() computes
+# a real, correct CRC-8 so "CHECKSUM: OK" reports truthfully.
+_MOCK_FIXED_HEADER = bytes((i + 1) & 0xFF for i in range(FIXED_HEADER_SIZE))
+_MOCK_QCC_HEADER = QCCHeaderRx(
+    msg_id=0x99,
+    mode=QCCHeaderRx.MODE_NORMAL,
+    command_data=bytes((i + 1) & 0xFF for i in range(55)),
+).to_bytes()
+
+
+def build_mock_response_frame(query_frame: bytes):
+    """Returns (response_frame, [(qtrm_index, status_type_name), ...] for every QTRM that got a reply)."""
+    base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    out = bytearray(_MOCK_FIXED_HEADER + _MOCK_QCC_HEADER)
+    replied = []
+    for i in range(NUM_QTRM):
+        slot = query_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE]
+        status_type = slot[3] & 0x0F if slot[0] == QTRMSlot.HEADER_BYTE else None
+        builder = _REPLY_BUILDERS.get(status_type) if slot[2] == CMD_STATUS else None
+        if builder is not None:
+            out.extend(builder(i, slot))
+            replied.append((i, _STATUS_TYPE_NAMES.get(status_type, str(status_type))))
+        else:
+            out.extend(bytes(QTRM_SLOT_SIZE))
+    return bytes(out), replied
+
+
+class ResponderWorker(QThread):
+    frame_processed = Signal(bytes, bytes, list, tuple)  # query, response, replied, addr
+    error = Signal(str)
+    status = Signal(str)
+
+    def __init__(self, local_port: int, parent=None):
+        super().__init__(parent)
+        self.local_port = local_port
+        self._sock = None
+        self._running = False
+
+    def run(self):
+        try:
+            self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._sock.bind(("0.0.0.0", self.local_port))
+            self._sock.settimeout(0.5)
+        except OSError as e:
+            self.error.emit(f"Failed to bind local UDP port {self.local_port}: {e}")
+            return
+
+        self._running = True
+        self.status.emit(f"Listening on 0.0.0.0:{self.local_port}")
+
+        while self._running:
+            try:
+                data, addr = self._sock.recvfrom(65536)
+            except socket.timeout:
+                continue
+            except OSError as e:
+                if self._running:
+                    self.error.emit(f"Socket error while receiving: {e}")
+                break
+
+            if len(data) != TOTAL_PACKET_SIZE:
+                self.error.emit(f"Received {len(data)} bytes from {addr}, expected {TOTAL_PACKET_SIZE} - dropped")
+                continue
+
+            response, replied = build_mock_response_frame(data)
+            try:
+                self._sock.sendto(response, addr)
+            except OSError as e:
+                self.error.emit(f"Failed to send response: {e}")
+                continue
+            self.frame_processed.emit(data, response, replied, addr)
+
+        if self._sock:
+            self._sock.close()
+        self.status.emit("Stopped")
+
+    def stop(self):
+        self._running = False
+        self.wait(2000)
+
+
+class StatusResponderWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("QCC Status Responder - Mock QTRM")
+        self.resize(900, 600)
+
+        self.worker: ResponderWorker | None = None
+        self._frame_count = 0
+
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+
+        root.addWidget(self._build_listen_group())
+        root.addWidget(self._build_log_group(), 1)
+
+    def _build_listen_group(self):
+        box = QGroupBox("Listener")
+        row = QHBoxLayout(box)
+
+        self.port_spin = SpinField(1, 65535, 5000, field_width=64)
+        self.listen_btn = QPushButton("Start Responding")
+        self.listen_btn.clicked.connect(self._on_listen_clicked)
+        self.status_label = QLabel("Stopped")
+        self.count_label = QLabel("Frames processed: 0")
+
+        row.addWidget(QLabel("Listen Port:"))
+        row.addWidget(self.port_spin)
+        row.addWidget(self.listen_btn)
+        row.addWidget(self.status_label)
+        row.addStretch(1)
+        row.addWidget(self.count_label)
+        return box
+
+    def _build_log_group(self):
+        box = QGroupBox("Activity Log")
+        layout = QVBoxLayout(box)
+        self.log_view = QPlainTextEdit()
+        self.log_view.setReadOnly(True)
+        layout.addWidget(self.log_view)
+        return box
+
+    def _on_listen_clicked(self):
+        if self.worker is not None:
+            self.worker.stop()
+            self.worker = None
+            self.listen_btn.setText("Start Responding")
+            self.status_label.setText("Stopped")
+            return
+
+        port = self.port_spin.value()
+        self.worker = ResponderWorker(local_port=port)
+        self.worker.frame_processed.connect(self._on_frame_processed)
+        self.worker.error.connect(self._on_error)
+        self.worker.status.connect(self.status_label.setText)
+        self.worker.start()
+        self.listen_btn.setText("Stop Responding")
+
+    def _on_error(self, msg: str):
+        self.log_view.appendPlainText(f"[error] {msg}")
+
+    def _on_frame_processed(self, query: bytes, response: bytes, replied: list, addr: tuple):
+        self._frame_count += 1
+        self.count_label.setText(f"Frames processed: {self._frame_count}")
+
+        host, port = addr
+        if not replied:
+            self.log_view.appendPlainText(f"From {host}:{port} - no Status Command found in any of the 96 slots")
+            return
+
+        summary = ", ".join(f"QTRM-{i}={name}" for i, name in replied)
+        self.log_view.appendPlainText(f"From {host}:{port} - replied to {len(replied)} QTRM(s): {summary}")
+
+    def closeEvent(self, event):
+        if self.worker is not None:
+            self.worker.stop()
+        super().closeEvent(event)
+
+
+def main():
+    app = QApplication(sys.argv)
+    app.setStyleSheet(STYLESHEET)
+    window = StatusResponderWindow()
+    window.show()
+    sys.exit(app.exec())
+
+
+if __name__ == "__main__":
+    main()

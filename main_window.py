@@ -1,0 +1,751 @@
+"""
+main_window.py
+
+Top-level window:
+  - Connection bar (local port, QCC IP, QCC port, Connect/Disconnect, Ping Test)
+  - QCC header controls (Send button)
+  - Last response summary (QCC header fields, checksum status)
+  - 96-row QTRM table (QTableView + QTRMTableModel)
+
+The first 90 bytes of every frame (fixed header + QCC header) are zero for
+now - MSG_ID, MODE, and per-QTRM MSG_ID/Frequency ID are not implemented on
+the QCC/QTRM side yet.
+"""
+
+import time
+
+from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (
+    QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
+    QLineEdit, QPushButton, QTableView, QLabel,
+    QGroupBox, QMessageBox, QHeaderView, QTabWidget, QScrollArea,
+)
+
+from packet import (
+    build_tx_frame, parse_rx_frame, default_qtrm_slots, TOTAL_PACKET_SIZE,
+    build_link_test_frame, build_individual_link_frame, parse_link_test_response,
+    build_cal_frame, build_soft_reset_frame, build_isolation_frame,
+    build_status_frame, parse_status_frame, STATUS_TYPE_DIAGNOSTIC,
+)
+from qtrm_model import QTRMTableModel
+from udp_worker import UdpWorker
+from ping_worker import PingWorker
+from header_panel import HeaderPanel
+from link_test_tab import LinkTestTab
+from status_tab import StatusTab
+from cal_tab import CalTab
+from isolation_tab import IsolationTab
+from soft_reset_tab import SoftResetTab
+from spin_field import SpinField
+from rx_test_app import RxTestWindow
+from tx_test_window import TxTestWindow
+from status_responder_app import StatusResponderWindow
+
+
+RESPONSE_TIMEOUT_MS = 1000
+
+
+class MainWindow(QMainWindow):
+    def __init__(self):
+        super().__init__()
+        self.setWindowTitle("QCC / 96x QTRM Control")
+        self.resize(1400, 700)
+
+        self.worker: UdpWorker | None = None
+        self.qtrm_slots = default_qtrm_slots()
+        # None | "command" | "link_test" | "individual_link_test" | "rx_cal" |
+        # "tx_cal" | "isolation_all" | "isolation_individual" | "status_all" |
+        # "status_individual"
+        self._awaiting_kind = None
+        self._individual_link_qtrm = None
+        self._rx_cal_target = None
+        self._tx_cal_target = None
+        self._individual_isolation_qtrm = None
+        self._individual_status_qtrm = None
+        self._status_type_in_flight = None
+        self._status_sub_type_in_flight = None
+        self._ping_worker: PingWorker | None = None
+        self._send_time = None
+        self._pending_timer = None
+        self._rx_test_window: RxTestWindow | None = None
+        self._tx_test_window: TxTestWindow | None = None
+        self._responder_window: StatusResponderWindow | None = None
+
+        self._build_ui()
+
+    # -- UI construction ------------------------------------------------
+
+    def _build_ui(self):
+        central = QWidget()
+        self.setCentralWidget(central)
+        root = QVBoxLayout(central)
+
+        root.addWidget(self._build_connection_group())
+
+        self.tabs = QTabWidget()
+        self.tabs.addTab(self._build_command_tab(), "Command / QTRM Grid")
+
+        self.link_test_tab = LinkTestTab()
+        self.link_test_tab.send_requested.connect(self._on_link_test_clicked)
+        self.link_test_tab.individual_send_requested.connect(self._on_individual_link_test_clicked)
+        self.tabs.addTab(self.link_test_tab, "Link Test")
+
+        self.status_tab = StatusTab()
+        self.status_tab.send_all_requested.connect(self._on_status_send_all)
+        self.status_tab.individual_send_requested.connect(self._on_status_send_one)
+        self.tabs.addTab(self.status_tab, "Status")
+
+        self.rx_cal_tab = CalTab("RX Cal")
+        self.rx_cal_tab.send_requested.connect(self._on_rx_cal_send)
+        self.tabs.addTab(self.rx_cal_tab, "RX Cal")
+
+        self.tx_cal_tab = CalTab("TX Cal")
+        self.tx_cal_tab.send_requested.connect(self._on_tx_cal_send)
+        self.tabs.addTab(self.tx_cal_tab, "TX Cal")
+
+        self.isolation_tab = IsolationTab()
+        self.isolation_tab.send_all_requested.connect(self._on_isolation_send_all)
+        self.isolation_tab.send_one_requested.connect(self._on_isolation_send_one)
+        self.tabs.addTab(self.isolation_tab, "Isolation")
+
+        self.soft_reset_tab = SoftResetTab()
+        self.soft_reset_tab.reset_all_requested.connect(self._on_reset_all_clicked)
+        self.soft_reset_tab.reset_one_requested.connect(self._on_reset_one_clicked)
+        self.tabs.addTab(self.soft_reset_tab, "Soft Reset")
+
+        # Status tab's matrix resets to idle whenever the current tab
+        # changes (to it or away from it) - a previous query's results
+        # don't apply to whatever gets selected/sent next, so they
+        # shouldn't linger and look like they're still current.
+        self.tabs.currentChanged.connect(lambda index: self.status_tab.reset_to_idle())
+
+        root.addWidget(self.tabs)
+
+        footer = QLabel("Made by Yuvraj DRAM")
+        footer.setAlignment(Qt.AlignRight)
+        footer.setStyleSheet("color: #9a9aa0; font-size: 8pt; padding: 2px 6px;")
+        root.addWidget(footer)
+
+    def _build_command_tab(self):
+        content = QWidget()
+        layout = QVBoxLayout(content)
+        layout.addWidget(self._build_command_group())
+        layout.addWidget(self._build_response_group())
+        layout.addWidget(self._build_table())
+
+        # Wrapped in a QScrollArea so this tab's minimumSizeHint stays small
+        # (bounded by the scroll area itself, not the response panel/table's
+        # natural size) - lets the whole window shrink to fit any screen,
+        # with scrollbars appearing instead of the window refusing to
+        # shrink. Same pattern used by every other tab in this app.
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setWidget(content)
+
+        # Dedicated right-side space for the raw 90-byte header of the last
+        # received frame - same as every other tab, even though this tab
+        # already has a decoded "Last Response (QCC header)" panel above
+        # the table; this one is deliberately just the raw bytes.
+        self.command_header_panel = HeaderPanel()
+
+        tab = QWidget()
+        tab_layout = QHBoxLayout(tab)
+        tab_layout.setContentsMargins(0, 0, 0, 0)
+        tab_layout.addWidget(scroll, 1)
+        tab_layout.addWidget(self.command_header_panel)
+        return tab
+
+    def _build_connection_group(self):
+        box = QGroupBox("Connection")
+
+        self.local_port_edit = SpinField(1, 65535, 5001, field_width=64)
+
+        self.qcc_ip_edit = QLineEdit("192.168.1.10")
+        self.qcc_port_edit = SpinField(1, 65535, 5000, field_width=64)
+
+        self.connect_btn = QPushButton("Connect")
+        self.connect_btn.clicked.connect(self._on_connect_clicked)
+
+        self.conn_status_label = QLabel("Disconnected")
+
+        self.ping_btn = QPushButton("Ping Test")
+        self.ping_btn.clicked.connect(self._on_ping_clicked)
+        self.ping_result_label = QLabel("")
+
+        self.rx_test_btn = QPushButton("Open RX Test Window")
+        self.rx_test_btn.clicked.connect(self._on_open_rx_test_clicked)
+
+        self.tx_test_btn = QPushButton("Open TX Test Window")
+        self.tx_test_btn.clicked.connect(self._on_open_tx_test_clicked)
+
+        self.responder_btn = QPushButton("Open Status Responder")
+        self.responder_btn.clicked.connect(self._on_open_responder_clicked)
+
+        row = QHBoxLayout(box)
+        row.addWidget(QLabel("Local Port:"))
+        row.addWidget(self.local_port_edit)
+        row.addWidget(QLabel("QCC IP:"))
+        row.addWidget(self.qcc_ip_edit)
+        row.addWidget(QLabel("QCC Port:"))
+        row.addWidget(self.qcc_port_edit)
+        row.addWidget(self.connect_btn)
+        row.addWidget(self.conn_status_label)
+        row.addWidget(self.ping_btn)
+        row.addWidget(self.ping_result_label)
+        row.addStretch(1)
+        row.addWidget(self.rx_test_btn)
+        row.addWidget(self.tx_test_btn)
+        row.addWidget(self.responder_btn)
+        return box
+
+    def _build_command_group(self):
+        box = QGroupBox("QCC Header (command)")
+        row = QHBoxLayout(box)
+
+        self.send_btn = QPushButton("Build && Send Frame")
+        self.send_btn.clicked.connect(self._on_send_clicked)
+
+        self.response_time_label = QLabel("")
+
+        row.addWidget(self.send_btn)
+        row.addWidget(self.response_time_label)
+        row.addStretch(1)
+        return box
+
+    def _build_response_group(self):
+        box = QGroupBox("Last Response (QCC header)")
+
+        self.resp_labels = {}
+        fields = [
+            "MSG_ID", "MODE", "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
+            "OUTPUT_PRT_COUNT", "OUTPUT_SOB_COUNT", "INPUT_SOB_WIDTH_US",
+            "OUTPUT_SOB_WIDTH_US", "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US",
+            "INPUT_PPS_WIDTH_US", "CHECKSUM",
+        ]
+        # Wrapped into a grid (not one long row) - 13 fields side by side
+        # forced the whole window to need 2000+ px of width to fit on screen.
+        wrap_cols = 5
+        grid = QGridLayout(box)
+        for i, f in enumerate(fields):
+            lbl = QLabel("-")
+            self.resp_labels[f] = lbl
+            col_box = QVBoxLayout()
+            col_box.addWidget(QLabel(f))
+            col_box.addWidget(lbl)
+            cell = QWidget()
+            cell.setLayout(col_box)
+            grid.addWidget(cell, i // wrap_cols, i % wrap_cols)
+        return box
+
+    def _build_table(self):
+        self.model = QTRMTableModel(self.qtrm_slots)
+        self.table = QTableView()
+        self.table.setModel(self.model)
+        self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Interactive)
+        self.table.setAlternatingRowColors(True)
+        return self.table
+
+    # -- connection handling ---------------------------------------------
+
+    def _on_ping_clicked(self):
+        host = self.qcc_ip_edit.text().strip()
+        if not host:
+            QMessageBox.warning(self, "No IP", "Enter the QCC IP first.")
+            return
+
+        self.ping_btn.setEnabled(False)
+        self.ping_btn.setStyleSheet("background-color: rgb(160, 165, 172);")
+        self.ping_result_label.setText("Pinging...")
+
+        self._ping_worker = PingWorker(host)
+        self._ping_worker.result.connect(self._on_ping_result)
+        self._ping_worker.start()
+
+    def _on_ping_result(self, success: bool, latency_text: str):
+        self.ping_btn.setEnabled(True)
+        color = "rgb(146, 208, 165)" if success else "rgb(240, 149, 149)"
+        self.ping_btn.setStyleSheet(f"background-color: {color};")
+        self.ping_result_label.setText(latency_text)
+
+    def _on_connect_clicked(self):
+        if self.worker is not None:
+            self.worker.stop()
+            self.worker = None
+            self.connect_btn.setText("Connect")
+            self.conn_status_label.setText("Disconnected")
+            return
+
+        local_port = self.local_port_edit.value()
+        qcc_ip = self.qcc_ip_edit.text().strip()
+        qcc_port = self.qcc_port_edit.value()
+
+        self.worker = UdpWorker(local_port, qcc_ip, qcc_port)
+        self.worker.frame_received.connect(self._on_frame_received)
+        self.worker.frame_sent.connect(self._on_frame_sent)
+        self.worker.error.connect(self._on_worker_error)
+        self.worker.status.connect(self.conn_status_label.setText)
+        self.worker.start()
+
+        self.connect_btn.setText("Disconnect")
+
+    def _on_worker_error(self, msg: str):
+        QMessageBox.warning(self, "UDP Error", msg)
+
+    def _on_frame_sent(self, raw: bytes):
+        if self._tx_test_window is not None:
+            self._tx_test_window.show_frame(raw)
+
+    def _on_open_rx_test_clicked(self):
+        # One shared instance - closing it just hides it (Qt's default), so
+        # re-clicking the button re-shows/raises the same window instead of
+        # opening a second one that would fight over the same UDP port.
+        if self._rx_test_window is None:
+            self._rx_test_window = RxTestWindow()
+        self._rx_test_window.show()
+        self._rx_test_window.raise_()
+        self._rx_test_window.activateWindow()
+
+    def _on_open_tx_test_clicked(self):
+        # Same one-shared-instance pattern as the RX test window - this one
+        # has no listener of its own, it just displays whatever the main
+        # window's own worker sends (see _on_frame_sent), so there's no port
+        # conflict risk, but reusing one instance still avoids window clutter.
+        if self._tx_test_window is None:
+            self._tx_test_window = TxTestWindow()
+        self._tx_test_window.show()
+        self._tx_test_window.raise_()
+        self._tx_test_window.activateWindow()
+
+    def _on_open_responder_clicked(self):
+        # Same one-shared-instance pattern - StatusResponderWindow has its
+        # own "Start Responding" button, still off by default when this
+        # window is (re)shown, so opening it doesn't silently start binding
+        # a UDP port until the user actually asks it to.
+        if self._responder_window is None:
+            self._responder_window = StatusResponderWindow()
+        self._responder_window.show()
+        self._responder_window.raise_()
+        self._responder_window.activateWindow()
+
+    # -- response timing / timeout ----------------------------------------
+
+    def _begin_wait(self, timeout_callback):
+        """Start timing a round trip; timeout_callback fires if nothing comes back."""
+        self._send_time = time.perf_counter()
+        if self._pending_timer is not None:
+            self._pending_timer.stop()
+        self._pending_timer = QTimer(self)
+        self._pending_timer.setSingleShot(True)
+        self._pending_timer.timeout.connect(timeout_callback)
+        self._pending_timer.start(RESPONSE_TIMEOUT_MS)
+
+    def _end_wait(self):
+        """Stop timing and return elapsed microseconds, or None if nothing was pending."""
+        if self._send_time is None:
+            return None
+        elapsed_us = (time.perf_counter() - self._send_time) * 1_000_000
+        self._send_time = None
+        if self._pending_timer is not None:
+            self._pending_timer.stop()
+            self._pending_timer = None
+        return elapsed_us
+
+    def _on_command_timeout(self):
+        if self._awaiting_kind != "command":
+            return
+        self._awaiting_kind = None
+        self.response_time_label.setText("No response")
+
+    def _on_link_test_timeout(self):
+        if self._awaiting_kind != "link_test":
+            return
+        self._awaiting_kind = None
+        self.link_test_tab.show_no_response()
+
+    def _on_individual_link_test_timeout(self):
+        if self._awaiting_kind != "individual_link_test":
+            return
+        self._awaiting_kind = None
+        qtrm_index, self._individual_link_qtrm = self._individual_link_qtrm, None
+        self.link_test_tab.show_individual_no_response(qtrm_index)
+
+    def _on_rx_cal_timeout(self):
+        if self._awaiting_kind != "rx_cal":
+            return
+        self._awaiting_kind = None
+        self.rx_cal_tab.show_no_response()
+
+    def _on_tx_cal_timeout(self):
+        if self._awaiting_kind != "tx_cal":
+            return
+        self._awaiting_kind = None
+        self.tx_cal_tab.show_no_response()
+
+    def _on_isolation_all_timeout(self):
+        if self._awaiting_kind != "isolation_all":
+            return
+        self._awaiting_kind = None
+        self.isolation_tab.show_all_no_response()
+
+    def _on_isolation_individual_timeout(self):
+        if self._awaiting_kind != "isolation_individual":
+            return
+        self._awaiting_kind = None
+        qtrm_index, self._individual_isolation_qtrm = self._individual_isolation_qtrm, None
+        self.isolation_tab.show_individual_no_response(qtrm_index)
+
+    def _on_status_all_timeout(self):
+        if self._awaiting_kind != "status_all":
+            return
+        self._awaiting_kind = None
+        self.status_tab.show_no_response()
+
+    def _on_status_individual_timeout(self):
+        if self._awaiting_kind != "status_individual":
+            return
+        self._awaiting_kind = None
+        qtrm_index, self._individual_status_qtrm = self._individual_status_qtrm, None
+        self.status_tab.show_individual_no_response(qtrm_index)
+
+    def _check_not_busy(self, silent: bool = False) -> bool:
+        """
+        Only one command may be in flight at a time (single request/response
+        link). silent=True is for auto-resend ticks - skip quietly instead
+        of popping a warning dialog every interval.
+        """
+        if self._awaiting_kind is not None:
+            if not silent:
+                QMessageBox.warning(
+                    self, "Busy", "Still waiting for the previous command's response - try again shortly.",
+                )
+            return False
+        return True
+
+    # -- send / receive ---------------------------------------------------
+
+    def _on_send_clicked(self):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_tx_frame(self.model.get_slots())
+        assert len(frame) == TOTAL_PACKET_SIZE
+        self.response_time_label.setText("Sending...")
+        self._awaiting_kind = "command"
+        self._begin_wait(self._on_command_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_link_test_clicked(self, is_auto_resend: bool = False):
+        if self.worker is None:
+            if not is_auto_resend:
+                QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+
+        if is_auto_resend:
+            # Auto-resend fires on its own timer regardless of whether the
+            # previous Link Test ever got a response or hit its 2-second
+            # timeout. If the resend interval is shorter than that timeout,
+            # this cancels the still-pending wait and sends again right away
+            # instead of waiting the full timeout out. If something unrelated
+            # (RX Cal, TX Cal, a manual command) is in flight, skip this tick
+            # rather than stomping on it.
+            if self._awaiting_kind not in (None, "link_test"):
+                return
+            self._awaiting_kind = None
+            if self._pending_timer is not None:
+                self._pending_timer.stop()
+                self._pending_timer = None
+            self._send_time = None
+        elif not self._check_not_busy():
+            return
+
+        frame = build_link_test_frame()
+
+        self._awaiting_kind = "link_test"
+        self.link_test_tab.mark_pending()
+        self._begin_wait(self._on_link_test_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_individual_link_test_clicked(self, qtrm_index: int):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_individual_link_frame(qtrm_index)
+
+        self._awaiting_kind = "individual_link_test"
+        self._individual_link_qtrm = qtrm_index
+        self.link_test_tab.mark_individual_pending(qtrm_index)
+        self._begin_wait(self._on_individual_link_test_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_rx_cal_send(self, qtrm_index, channel, phase, atten, tx_isolation_for_others):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_cal_frame(
+            False, qtrm_index, channel, phase, atten,
+            tx_isolation_for_others=tx_isolation_for_others,
+        )
+
+        self._awaiting_kind = "rx_cal"
+        self._rx_cal_target = qtrm_index
+        self.rx_cal_tab.mark_pending()
+        self._begin_wait(self._on_rx_cal_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_tx_cal_send(self, qtrm_index, channel, phase, atten, tx_isolation_for_others):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_cal_frame(
+            True, qtrm_index, channel, phase, atten,
+            tx_isolation_for_others=tx_isolation_for_others,
+        )
+
+        self._awaiting_kind = "tx_cal"
+        self._tx_cal_target = qtrm_index
+        self.tx_cal_tab.mark_pending()
+        self._begin_wait(self._on_tx_cal_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_isolation_send_all(self, tx_isolation: bool):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_isolation_frame(tx_isolation, target_qtrm_index=None)
+
+        self._awaiting_kind = "isolation_all"
+        self.isolation_tab.mark_all_pending()
+        self._begin_wait(self._on_isolation_all_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_isolation_send_one(self, qtrm_index: int, tx_isolation: bool):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_isolation_frame(tx_isolation, target_qtrm_index=qtrm_index)
+
+        self._awaiting_kind = "isolation_individual"
+        self._individual_isolation_qtrm = qtrm_index
+        self.isolation_tab.mark_individual_pending(qtrm_index)
+        self._begin_wait(self._on_isolation_individual_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_status_send_all(self, status_type: int, sub_status_type: int, beam_register_address: int):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_status_frame(
+            status_type, target_qtrm_index=None,
+            sub_status_type=sub_status_type, beam_register_address=beam_register_address,
+        )
+
+        self._awaiting_kind = "status_all"
+        self._status_type_in_flight = status_type
+        self._status_sub_type_in_flight = sub_status_type
+        self.status_tab.mark_pending()
+        self._begin_wait(self._on_status_all_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_status_send_one(self, qtrm_index: int, status_type: int, sub_status_type: int,
+                             beam_register_address: int):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_status_frame(
+            status_type, target_qtrm_index=qtrm_index,
+            sub_status_type=sub_status_type, beam_register_address=beam_register_address,
+        )
+
+        self._awaiting_kind = "status_individual"
+        self._individual_status_qtrm = qtrm_index
+        self._status_type_in_flight = status_type
+        self._status_sub_type_in_flight = sub_status_type
+        self.status_tab.mark_individual_pending(qtrm_index)
+        self._begin_wait(self._on_status_individual_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_reset_all_clicked(self):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        # Soft Reset gets no response - fire and forget, no timing/timeout tracking.
+        frame = build_soft_reset_frame(target_qtrm_index=None)
+        self.worker.send_frame(frame)
+
+    def _on_reset_one_clicked(self, qtrm_index):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        frame = build_soft_reset_frame(target_qtrm_index=qtrm_index)
+        self.worker.send_frame(frame)
+
+    # Which tab's HeaderPanel gets fed the raw 90-byte header for each
+    # _awaiting_kind - anything not listed here falls through to the
+    # Command/QTRM Grid tab's own header_panel (the default/"command" case).
+    _HEADER_PANEL_TAB_BY_KIND = {
+        "link_test": "link_test_tab", "individual_link_test": "link_test_tab",
+        "rx_cal": "rx_cal_tab", "tx_cal": "tx_cal_tab",
+        "isolation_all": "isolation_tab", "isolation_individual": "isolation_tab",
+        "status_all": "status_tab", "status_individual": "status_tab",
+    }
+
+    def _update_header_panel(self, kind, raw: bytes):
+        tab_attr = self._HEADER_PANEL_TAB_BY_KIND.get(kind)
+        if tab_attr is not None:
+            getattr(self, tab_attr).header_panel.show_frame(raw)
+        else:
+            self.command_header_panel.show_frame(raw)
+
+    def _on_frame_received(self, raw: bytes):
+        elapsed_us = self._end_wait()
+        kind, self._awaiting_kind = self._awaiting_kind, None
+        self._update_header_panel(kind, raw)
+
+        if kind == "link_test":
+            try:
+                results = parse_link_test_response(raw)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.link_test_tab.show_results(results)
+            if elapsed_us is not None:
+                self.link_test_tab.show_response_time(elapsed_us)
+            return
+
+        if kind == "individual_link_test":
+            qtrm_index, self._individual_link_qtrm = self._individual_link_qtrm, None
+            try:
+                results = parse_link_test_response(raw)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.link_test_tab.show_individual_result(qtrm_index, results[qtrm_index])
+            if elapsed_us is not None:
+                self.link_test_tab.show_individual_response_time(elapsed_us)
+            return
+
+        if kind == "rx_cal":
+            qtrm_index, self._rx_cal_target = self._rx_cal_target, None
+            if elapsed_us is not None:
+                self.rx_cal_tab.show_response_time(elapsed_us)
+            try:
+                results = parse_link_test_response(raw)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.rx_cal_tab.show_result(results[qtrm_index])
+            return
+
+        if kind == "tx_cal":
+            qtrm_index, self._tx_cal_target = self._tx_cal_target, None
+            if elapsed_us is not None:
+                self.tx_cal_tab.show_response_time(elapsed_us)
+            try:
+                results = parse_link_test_response(raw)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.tx_cal_tab.show_result(results[qtrm_index])
+            return
+
+        if kind == "isolation_all":
+            try:
+                results = parse_link_test_response(raw)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.isolation_tab.show_all_results(results)
+            return
+
+        if kind == "isolation_individual":
+            qtrm_index, self._individual_isolation_qtrm = self._individual_isolation_qtrm, None
+            try:
+                results = parse_link_test_response(raw)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.isolation_tab.show_individual_result(qtrm_index, results[qtrm_index])
+            return
+
+        if kind == "status_all":
+            status_type = self._status_type_in_flight
+            diagnostic_type = self._status_sub_type_in_flight if status_type == STATUS_TYPE_DIAGNOSTIC else 0
+            if elapsed_us is not None:
+                self.status_tab.show_response_time(elapsed_us)
+            try:
+                results = parse_status_frame(raw, status_type, diagnostic_type)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.status_tab.show_results(results)
+            return
+
+        if kind == "status_individual":
+            qtrm_index, self._individual_status_qtrm = self._individual_status_qtrm, None
+            status_type = self._status_type_in_flight
+            diagnostic_type = self._status_sub_type_in_flight if status_type == STATUS_TYPE_DIAGNOSTIC else 0
+            if elapsed_us is not None:
+                self.status_tab.show_individual_response_time(elapsed_us)
+            try:
+                results = parse_status_frame(raw, status_type, diagnostic_type)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.status_tab.show_individual_result(qtrm_index, results[qtrm_index])
+            return
+
+        if elapsed_us is not None:
+            self.response_time_label.setText(f"{elapsed_us:.0f} µs")
+
+        try:
+            fixed_header, qcc_header, qtrm_slots = parse_rx_frame(raw)
+        except AssertionError as e:
+            QMessageBox.warning(self, "Parse error", str(e))
+            return
+
+        self.resp_labels["MSG_ID"].setText(str(qcc_header.msg_id))
+        self.resp_labels["MODE"].setText(str(qcc_header.mode))
+        self.resp_labels["INPUT_SOB_COUNT"].setText(str(qcc_header.input_sob_count))
+        self.resp_labels["INPUT_PRT_COUNT"].setText(str(qcc_header.input_prt_count))
+        self.resp_labels["INPUT_PPS_COUNT"].setText(str(qcc_header.input_pps_count))
+        self.resp_labels["OUTPUT_PRT_COUNT"].setText(str(qcc_header.output_prt_count))
+        self.resp_labels["OUTPUT_SOB_COUNT"].setText(str(qcc_header.output_sob_count))
+        self.resp_labels["INPUT_SOB_WIDTH_US"].setText(str(qcc_header.input_sob_width_us))
+        self.resp_labels["OUTPUT_SOB_WIDTH_US"].setText(str(qcc_header.output_sob_width_us))
+        self.resp_labels["INPUT_PRT_WIDTH_US"].setText(str(qcc_header.input_prt_width_us))
+        self.resp_labels["OUTPUT_PRT_WIDTH_US"].setText(str(qcc_header.output_prt_width_us))
+        self.resp_labels["INPUT_PPS_WIDTH_US"].setText(str(qcc_header.input_pps_width_us))
+        self.resp_labels["CHECKSUM"].setText("OK" if qcc_header.checksum_ok else "FAIL")
+
+        # Refresh the 96-row grid with whatever QCC reported back for each QTRM
+        self.model.replace_slots(qtrm_slots)
+
+    def closeEvent(self, event):
+        if self.worker is not None:
+            self.worker.stop()
+        super().closeEvent(event)

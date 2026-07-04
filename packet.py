@@ -1,0 +1,723 @@
+"""
+packet.py
+
+Byte-exact packet builder/parser for the QCC Ethernet UDP frame.
+
+Overall frame layout (little-endian throughout):
+    [ 32 bytes ] Fixed header      - TBD / reserved for now (all zero)
+    [ 58 bytes ] QCC header        - defined below (QCCHeaderTx / QCCHeaderRx)
+    [ 2880 bytes ] QTRM data block - 96 x 30-byte QTRM slots (QTRMSlot)
+    -------------------------------
+    Total: 2970 bytes
+
+QTRM 30-byte slot checksum (XOR of bytes 0-28) is generated/verified on the
+QTRM/GUI side per the QTRM Message Format IDD - QCC does not touch it.
+QCC header checksum is CRC-8/CCITT (poly 0x07, init 0x00, no reflection,
+xorout 0x00) over header bytes 0-56, stored in byte 57.
+"""
+
+import struct
+
+FIXED_HEADER_SIZE = 32
+QCC_HEADER_SIZE = 58
+QTRM_SLOT_SIZE = 30
+NUM_QTRM = 96
+QTRM_BLOCK_SIZE = QTRM_SLOT_SIZE * NUM_QTRM          # 2880
+TOTAL_PACKET_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + QTRM_BLOCK_SIZE  # 2970
+
+# ---------------------------------------------------------------------------
+# CRC-8 / CCITT  (poly 0x07, init 0x00, no reflect, xorout 0x00)
+# Check value: crc8(b"123456789") == 0xF4
+# ---------------------------------------------------------------------------
+
+_CRC8_TABLE = []
+for _i in range(256):
+    _c = _i
+    for _ in range(8):
+        _c = ((_c << 1) ^ 0x07) & 0xFF if (_c & 0x80) else (_c << 1) & 0xFF
+    _CRC8_TABLE.append(_c)
+
+
+def crc8(data: bytes) -> int:
+    crc = 0x00
+    for b in data:
+        crc = _CRC8_TABLE[crc ^ b]
+    return crc
+
+
+assert crc8(b"123456789") == 0xF4, "CRC-8 table generation is wrong"
+
+# ---------------------------------------------------------------------------
+# QTRM command types (Section 3 of the QTRM Message Format IDD)
+# ---------------------------------------------------------------------------
+
+CMD_RESERVED = 0x00
+CMD_DWELL = 0x01
+CMD_RX_CAL = 0x02
+CMD_TX_CAL = 0x03
+CMD_RX_ISOLATION = 0x04
+CMD_TX_ISOLATION = 0x05
+CMD_RX_PATTERN = 0x06
+CMD_TX_PATTERN = 0x07
+CMD_SOFT_RESET = 0x20
+CMD_STATUS = 0x21
+CMD_DATA_STORAGE = 0x22
+CMD_DC_CONTROL = 0x23
+CMD_TIMING_SIGNAL_GEN = 0x40
+
+QTRM_PACKET_SIZE_ID = 0x04  # per Table 6, QTRM = 4 channels
+
+# ---------------------------------------------------------------------------
+# Status Types (Section 10.1 of the QTRM Message Format IDD) - byte 4 low
+# nibble of any command requests what kind of response the TRM sends back.
+# ---------------------------------------------------------------------------
+
+STATUS_TYPE_NONE = 0x0
+STATUS_TYPE_ACK = 0x1
+STATUS_TYPE_LINK = 0x2
+STATUS_TYPE_HEALTH = 0x3
+STATUS_TYPE_ERR_LOG = 0x4
+STATUS_TYPE_MFG = 0x5
+STATUS_TYPE_DIAGNOSTIC = 0x6
+
+# Diagnostic Status Type IDs (Section 10.1.5.1) - only meaningful when
+# STATUS_TYPE_DIAGNOSTIC is requested; carried in the Sub Status Type nibble.
+DIAGNOSTIC_TYPE_DETAILED_HEALTH = 0x0
+DIAGNOSTIC_TYPE_FUTURE_BUFFER = 0x1
+DIAGNOSTIC_TYPE_PRESENT_BUFFER = 0x2
+DIAGNOSTIC_TYPE_ADAR_STATUS = 0x3
+
+# Link Status Response sentinel bytes (Section 10.1.2), confirmed against
+# STATUS_MODULE.vhd - a live QTRM echoes these 5 bytes verbatim.
+LINK_SENTINEL = bytes([0xA1, 0xA2, 0xA3, 0xA4, 0xA5])
+
+
+def message_length(packet_size_id: int) -> int:
+    """Total message size for a given Packet Size Identifier: id*5 + 10 (IDD Section 4)."""
+    return packet_size_id * 5 + 10
+
+
+def build_link_query_slot(command_type: int = CMD_STATUS) -> bytes:
+    """
+    30-byte wire slot requesting a Link status response from one QTRM.
+    Packet Size Identifier = 0x00 -> 10-byte message (checksum at byte 10),
+    zero-padded to fill the fixed 30-byte slot on the wire.
+    """
+    return _build_status_family_slot(command_type, STATUS_TYPE_LINK)
+
+
+def is_link_response_ok(raw_slot: bytes) -> bool:
+    """True if a QTRM slot from a response frame is a valid Link-test reply."""
+    if len(raw_slot) != QTRM_SLOT_SIZE or raw_slot[0] != QTRMSlot.HEADER_BYTE:
+        return False
+    msg_len = message_length(raw_slot[1])
+    if not (10 <= msg_len <= QTRM_SLOT_SIZE):
+        return False
+    chk = 0
+    for b in raw_slot[: msg_len - 1]:
+        chk ^= b
+    if chk != raw_slot[msg_len - 1]:
+        return False
+    if (raw_slot[3] & 0x0F) != STATUS_TYPE_LINK:
+        return False
+    return raw_slot[4:9] == LINK_SENTINEL
+
+
+def build_link_test_frame() -> bytes:
+    """
+    Full 2970-byte frame: identical Link query to all 96 QTRMs. The first 90
+    bytes (fixed header + QCC header) are all zero for now - MSG_ID/MODE
+    aren't implemented on the QCC/QTRM side yet.
+    """
+    link_slot = build_link_query_slot()
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for _ in range(NUM_QTRM):
+        out.extend(link_slot)
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
+
+def parse_link_test_response(raw_frame: bytes):
+    """Return a list of NUM_QTRM bools: True where that QTRM's Link reply is valid."""
+    assert len(raw_frame) == TOTAL_PACKET_SIZE, f"expected {TOTAL_PACKET_SIZE} bytes, got {len(raw_frame)}"
+    base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    return [
+        is_link_response_ok(raw_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE])
+        for i in range(NUM_QTRM)
+    ]
+
+
+def build_individual_link_frame(target_qtrm_index: int) -> bytes:
+    """
+    Full 2970-byte frame: Link query sent to only ONE QTRM (0-based index),
+    mirroring the Soft Reset "individual" pattern - every other QTRM's slot
+    is left entirely zero-filled (no header, no command at all).
+    """
+    assert 0 <= target_qtrm_index < NUM_QTRM
+    link_slot = build_link_query_slot()
+    empty_slot = bytes(QTRM_SLOT_SIZE)
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for i in range(NUM_QTRM):
+        out.extend(link_slot if i == target_qtrm_index else empty_slot)
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
+
+def _build_status_family_slot(command_type: int, status_type: int, payload: bytes = b"",
+                               sub_status_type: int = 0) -> bytes:
+    """
+    Shared builder for the 10-byte (Packet Size ID = 0x00) command family:
+    byte0=Header, byte1=0x00, byte2=CommandType, byte3=Sub Status Type (high
+    nibble) | Status Type (low nibble), byte4=MSG_ID (always 0 - not
+    implemented on the QTRM side), bytes5-8=payload (zero-padded),
+    byte9=checksum, rest zero. Sub Status Type's meaning depends on
+    status_type (e.g. ACK's 4 ack-phase bits, or Diagnostic's status-type
+    selector) - default 0 for status types that don't use it.
+    """
+    msg_len = message_length(0x00)  # 10
+    body = bytearray(QTRM_SLOT_SIZE)
+    body[0] = QTRMSlot.HEADER_BYTE
+    body[1] = 0x00
+    body[2] = command_type
+    body[3] = ((sub_status_type & 0x0F) << 4) | (status_type & 0x0F)
+    body[4] = 0x00  # MSG_ID - not implemented in QTRM firmware, always zero
+    body[5:5 + len(payload)] = payload
+    chk = 0
+    for b in body[: msg_len - 1]:
+        chk ^= b
+    body[msg_len - 1] = chk
+    return bytes(body)
+
+
+# ---------------------------------------------------------------------------
+# Status Command (Section 10 of the QTRM Message Format IDD) - a single
+# "Status Command Format" query (cmd 0x21) covers every Status Type; the
+# response's shape (and size) depends on which Status Type was requested.
+# Link (handled above, its own dedicated tab) and No Status aren't part of
+# this - everything else (ACK, HEALTH, TRM Err. Log, TRM Mfg. Details,
+# DIAGNOSTIC) is.
+# ---------------------------------------------------------------------------
+
+
+def build_status_query_slot(status_type: int, sub_status_type: int = 0,
+                            beam_register_address: int = 0) -> bytes:
+    """
+    30-byte wire slot requesting a status response from one QTRM. Always a
+    10-byte message (Packet Size Identifier 0x00) regardless of status_type -
+    even DIAGNOSTIC, whose *response* comes back as a full 30-byte message.
+    byte6 (Beam Data Register Address) only matters for DIAGNOSTIC types
+    1/2/3 (Future Buffer/Present Buffer/ADAR Status) - harmlessly ignored by
+    the QTRM for every other status type.
+    """
+    payload = bytes([beam_register_address & 0xFF])
+    return _build_status_family_slot(CMD_STATUS, status_type, payload=payload, sub_status_type=sub_status_type)
+
+
+def build_status_frame(status_type: int, target_qtrm_index: int = None, sub_status_type: int = 0,
+                        beam_register_address: int = 0) -> bytes:
+    """
+    Full 2970-byte frame requesting a status response. If target_qtrm_index
+    is None, every QTRM gets the same query (mirrors build_link_test_frame).
+    Otherwise only that QTRM (0-based index) gets it; every other slot is
+    left entirely zero-filled (no header, no command) - same individual-
+    target convention as build_individual_link_frame/build_soft_reset_frame.
+    """
+    status_slot = build_status_query_slot(status_type, sub_status_type, beam_register_address)
+    empty_slot = bytes(QTRM_SLOT_SIZE)
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for i in range(NUM_QTRM):
+        if target_qtrm_index is None or i == target_qtrm_index:
+            out.extend(status_slot)
+        else:
+            out.extend(empty_slot)
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
+
+def _valid_status_header(raw_slot: bytes, expected_status_type: int, expected_message_length: int) -> bool:
+    """Header/checksum/status-type/length validity shared by every status response parser below."""
+    if len(raw_slot) != QTRM_SLOT_SIZE or raw_slot[0] != QTRMSlot.HEADER_BYTE:
+        return False
+    msg_len = message_length(raw_slot[1])
+    if msg_len != expected_message_length:
+        return False
+    chk = 0
+    for b in raw_slot[: msg_len - 1]:
+        chk ^= b
+    if chk != raw_slot[msg_len - 1]:
+        return False
+    return (raw_slot[3] & 0x0F) == expected_status_type
+
+
+def parse_ack_response(raw_slot: bytes):
+    """
+    ACK Message Format (Section 10.1.1.2) - 10-byte message. Mostly a
+    liveness/receipt confirmation (byte4=Message/Dwell ID echo, bytes5-8=the
+    querying command's own bytes 6-9 echoed back) rather than new data, so
+    only the echoed bytes are surfaced raw - there's no further semantic
+    breakdown documented for them.
+    """
+    if not _valid_status_header(raw_slot, STATUS_TYPE_ACK, 10):
+        return None
+    return {
+        "message_id": raw_slot[4],
+        "echoed_bytes": bytes(raw_slot[5:9]),
+    }
+
+
+def parse_health_response(raw_slot: bytes):
+    """Health Status Message Format (Section 10.1.3) - 10-byte message, 5 raw status bytes."""
+    if not _valid_status_header(raw_slot, STATUS_TYPE_HEALTH, 10):
+        return None
+    return {
+        "dc_voltage_status": raw_slot[4],
+        "dc_current_status": raw_slot[5],
+        "temperature_status": raw_slot[6],
+        "tx_forward_rf_status": raw_slot[7],
+        "rx_reverse_rf_status": raw_slot[8],
+    }
+
+
+def parse_err_log_response(raw_slot: bytes):
+    """
+    Error MSG format (Section 10.1's Error MSG table) - 10-byte message.
+    byte5's individual TRM-shutdown-cause bit flags are ambiguously tabled in
+    the IDD (garbled cell layout in the source doc) so it's surfaced as a
+    raw byte rather than guessed apart; everything else is clean.
+    """
+    if not _valid_status_header(raw_slot, STATUS_TYPE_ERR_LOG, 10):
+        return None
+    return {
+        "trm_shutdown_flags": raw_slot[4],
+        "header_error": raw_slot[5],
+        "footer_crc_error": raw_slot[6],
+        "timeout_error": raw_slot[7],
+        "prt_duty_violation_count": (raw_slot[8] >> 4) & 0x0F,
+        "prt_width_violation_count": raw_slot[8] & 0x0F,
+    }
+
+
+def parse_mfg_response(raw_slot: bytes):
+    """Mfg Status Response Message Format (Section 10.1.4) - 10-byte message."""
+    if not _valid_status_header(raw_slot, STATUS_TYPE_MFG, 10):
+        return None
+    return {
+        "mfg_agency_id": (raw_slot[4] >> 4) & 0x0F,
+        "firmware_version": raw_slot[4] & 0x0F,
+        "serial_number": raw_slot[5] | (raw_slot[6] << 8),
+        "on_time_hours": raw_slot[7] | (raw_slot[8] << 8),
+    }
+
+
+def parse_diagnostic_response(raw_slot: bytes, diagnostic_type: int):
+    """
+    Diagnostic Status response format (Section 10.1.5.2) - a full 30-byte
+    message ("same as Dwell message size"), unlike every other status type's
+    10-byte reply. Layout depends on diagnostic_type:
+      - DETAILED_HEALTH: per-channel Temp/DC/RF status + Tx/Rx control counts.
+      - FUTURE_BUFFER/PRESENT_BUFFER/ADAR_STATUS: per-channel OP Mode|Control
+        nibble byte + the same Tx/Rx Phase/Attenuation layout as a Dwell
+        message (the IDD tables these three identically).
+    """
+    if not _valid_status_header(raw_slot, STATUS_TYPE_DIAGNOSTIC, 30):
+        return None
+
+    common = {
+        "total_prt_count": raw_slot[5],
+        "processed_prt_count": raw_slot[6],
+        "dwell_prt_count": raw_slot[7],
+        "total_sob_count": raw_slot[8],
+    }
+
+    if diagnostic_type == DIAGNOSTIC_TYPE_DETAILED_HEALTH:
+        common["operation_command_type"] = raw_slot[4]
+        channels = []
+        for ch in range(4):
+            off = 9 + ch * 5
+            channels.append({
+                "temperature_status": raw_slot[off],
+                "dc_status": raw_slot[off + 1],
+                "rf_status": raw_slot[off + 2],
+                "tx_control_count": raw_slot[off + 3],
+                "rx_control_count": raw_slot[off + 4],
+            })
+        common["channels"] = channels
+        return common
+
+    # FUTURE_BUFFER / PRESENT_BUFFER / ADAR_STATUS all share this layout.
+    common["beam_data_register_address"] = raw_slot[4]
+    channels = []
+    for ch in range(4):
+        off = 9 + ch * 5
+        op_mode_control = raw_slot[off]
+        channels.append({
+            "op_mode": (op_mode_control >> 4) & 0x0F,
+            "control": op_mode_control & 0x0F,
+            "tx_phase": raw_slot[off + 1],
+            "tx_atten": raw_slot[off + 2],
+            "rx_phase": raw_slot[off + 3],
+            "rx_atten": raw_slot[off + 4],
+        })
+    common["channels"] = channels
+    return common
+
+
+_STATUS_PARSERS = {
+    STATUS_TYPE_ACK: lambda raw_slot, diagnostic_type: parse_ack_response(raw_slot),
+    STATUS_TYPE_HEALTH: lambda raw_slot, diagnostic_type: parse_health_response(raw_slot),
+    STATUS_TYPE_ERR_LOG: lambda raw_slot, diagnostic_type: parse_err_log_response(raw_slot),
+    STATUS_TYPE_MFG: lambda raw_slot, diagnostic_type: parse_mfg_response(raw_slot),
+    STATUS_TYPE_DIAGNOSTIC: parse_diagnostic_response,
+}
+
+
+def parse_status_frame(raw_frame: bytes, status_type: int, diagnostic_type: int = 0):
+    """
+    Return a list of NUM_QTRM decoded-dict-or-None: None where that QTRM's
+    reply didn't validate for the requested status_type (no reply, wrong
+    status type echoed back, bad checksum, wrong message length, etc.),
+    otherwise the parsed fields for that status type.
+    """
+    assert len(raw_frame) == TOTAL_PACKET_SIZE, f"expected {TOTAL_PACKET_SIZE} bytes, got {len(raw_frame)}"
+    parser = _STATUS_PARSERS[status_type]
+    base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    return [
+        parser(raw_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE], diagnostic_type)
+        for i in range(NUM_QTRM)
+    ]
+
+
+def build_cal_slot(tx_cal: bool, channel: int, phase: int, atten: int) -> bytes:
+    """
+    30-byte wire slot: RX or TX Calibration command (Section 5/6) selecting
+    one of this QTRM's 1-4 channels for calibration; requests a Link-type
+    status response back (every command except Soft Reset does, per
+    Yuvraj's spec - lets the GUI confirm the targeted QTRM actually replied).
+    """
+    command_type = CMD_TX_CAL if tx_cal else CMD_RX_CAL
+    payload = bytes([channel & 0xFF, (channel >> 8) & 0xFF, phase & 0xFF, atten & 0xFF])
+    return _build_status_family_slot(command_type, STATUS_TYPE_LINK, payload)
+
+
+def build_isolation_slot(tx_isolation: bool) -> bytes:
+    """30-byte wire slot: Rx or Tx Isolation command (Section 7/8), requests a Link-type status response."""
+    command_type = CMD_TX_ISOLATION if tx_isolation else CMD_RX_ISOLATION
+    return _build_status_family_slot(command_type, STATUS_TYPE_LINK)
+
+
+def build_cal_frame(tx_cal: bool, target_qtrm_index: int, channel: int, phase: int, atten: int,
+                     tx_isolation_for_others: bool = False) -> bytes:
+    """
+    Full 2970-byte frame: one QTRM (0-based index) gets an RX or TX
+    Calibration command (per tx_cal) for the given channel, all other 95
+    QTRMs get an Isolation command (Rx or Tx, per tx_isolation_for_others) so
+    they don't interfere with the calibration measurement. First 90 bytes
+    are zero for now.
+    """
+    assert 0 <= target_qtrm_index < NUM_QTRM
+    cal_slot = build_cal_slot(tx_cal, channel, phase, atten)
+    iso_slot = build_isolation_slot(tx_isolation_for_others)
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for i in range(NUM_QTRM):
+        out.extend(cal_slot if i == target_qtrm_index else iso_slot)
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
+
+def build_soft_reset_slot() -> bytes:
+    """30-byte wire slot: Soft Reset command (Section 9), fixed/no delay. No response is expected."""
+    return _build_status_family_slot(CMD_SOFT_RESET, STATUS_TYPE_NONE)
+
+
+def build_soft_reset_frame(target_qtrm_index: int = None) -> bytes:
+    """
+    Full 2970-byte Soft Reset frame. If target_qtrm_index is None, every QTRM
+    gets the Soft Reset command. Otherwise only that QTRM (0-based index) gets
+    it; every other slot is left entirely zero-filled (no header, no command).
+    First 90 bytes are zero for now.
+    """
+    reset_slot = build_soft_reset_slot()
+    empty_slot = bytes(QTRM_SLOT_SIZE)
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for i in range(NUM_QTRM):
+        if target_qtrm_index is None or i == target_qtrm_index:
+            out.extend(reset_slot)
+        else:
+            out.extend(empty_slot)
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
+
+def build_isolation_frame(tx_isolation: bool, target_qtrm_index: int = None) -> bytes:
+    """
+    Full 2970-byte frame: Rx or Tx Isolation command (Section 7/8), no
+    response expected - fire and forget, same as Soft Reset. If
+    target_qtrm_index is None, every QTRM gets the isolation command.
+    Otherwise only that QTRM (0-based index) gets it; every other slot is
+    left entirely zero-filled (no header, no command). First 90 bytes are
+    zero for now.
+    """
+    iso_slot = build_isolation_slot(tx_isolation)
+    empty_slot = bytes(QTRM_SLOT_SIZE)
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for i in range(NUM_QTRM):
+        if target_qtrm_index is None or i == target_qtrm_index:
+            out.extend(iso_slot)
+        else:
+            out.extend(empty_slot)
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
+# ---------------------------------------------------------------------------
+# QCC RX header (Host -> QCC) - 58 bytes
+# ---------------------------------------------------------------------------
+
+
+class QCCHeaderRx:
+    """
+    Offset  Field           Size  Notes
+    0       MSG_ID          1     host-assigned, echoed back by QCC
+    1       MODE            1     0=Normal,1=Internal Loopback,2=External Loopback,
+                                   3=Status/Response Only,4=QCC Reset,5=Remote Programming
+    2-56    COMMAND_DATA    55    TBD - varies per MODE (currently unused, sent as zero)
+    57      CHECKSUM        1     CRC-8 over bytes 0-56
+    """
+
+    MODE_NORMAL = 0
+    MODE_INTERNAL_LOOPBACK = 1
+    MODE_EXTERNAL_LOOPBACK = 2
+    MODE_STATUS_ONLY = 3
+    MODE_QCC_RESET = 4
+    MODE_REMOTE_PROGRAMMING = 5
+
+    def __init__(self, msg_id: int = 0, mode: int = 0, command_data: bytes = b""):
+        self.msg_id = msg_id & 0xFF
+        self.mode = mode & 0xFF
+        cd = bytearray(55)
+        if command_data:
+            cd[: len(command_data)] = command_data[:55]
+        self.command_data = bytes(cd)
+
+    def to_bytes(self) -> bytes:
+        body = struct.pack("<BB55s", self.msg_id, self.mode, self.command_data)
+        chk = crc8(body)
+        return body + struct.pack("<B", chk)
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "QCCHeaderRx":
+        assert len(raw) == QCC_HEADER_SIZE
+        msg_id, mode, command_data, chk = struct.unpack("<BB55sB", raw)
+        obj = cls(msg_id, mode, command_data)
+        obj.checksum_ok = crc8(raw[:57]) == chk
+        return obj
+
+
+# ---------------------------------------------------------------------------
+# QCC TX header (QCC -> Host, response) - 58 bytes, fixed format
+# ---------------------------------------------------------------------------
+
+
+class QCCHeaderTx:
+    """
+    Offset   Field                 Size  Type
+    0        MSG_ID                1     byte    - echo of command's MSG_ID
+    1        MODE                  1     byte    - echo of QCC's current mode
+    2-5      INPUT_SOB_COUNT       4     uint32
+    6-9      INPUT_PRT_COUNT       4     uint32
+    10-13    INPUT_PPS_COUNT       4     uint32
+    14-17    OUTPUT_PRT_COUNT      4     uint32
+    18-21    OUTPUT_SOB_COUNT      4     uint32
+    22-23    INPUT_SOB_WIDTH_US    2     uint16
+    24-25    OUTPUT_SOB_WIDTH_US   2     uint16
+    26-27    INPUT_PRT_WIDTH_US    2     uint16
+    28-29    OUTPUT_PRT_WIDTH_US   2     uint16
+    30-31    INPUT_PPS_WIDTH_US    2     uint16
+    32-56    RESERVED              25    byte[25]
+    57       CHECKSUM              1     byte    - CRC-8 over bytes 0-56
+    """
+
+    _STRUCT_FMT = "<BBIIIIIHHHHH25sB"
+
+    def __init__(self):
+        self.msg_id = 0
+        self.mode = 0
+        self.input_sob_count = 0
+        self.input_prt_count = 0
+        self.input_pps_count = 0
+        self.output_prt_count = 0
+        self.output_sob_count = 0
+        self.input_sob_width_us = 0
+        self.output_sob_width_us = 0
+        self.input_prt_width_us = 0
+        self.output_prt_width_us = 0
+        self.input_pps_width_us = 0
+        self.checksum_ok = None
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "QCCHeaderTx":
+        assert len(raw) == QCC_HEADER_SIZE
+        (
+            msg_id, mode,
+            in_sob_c, in_prt_c, in_pps_c, out_prt_c, out_sob_c,
+            in_sob_w, out_sob_w, in_prt_w, out_prt_w, in_pps_w,
+            _reserved, chk,
+        ) = struct.unpack(cls._STRUCT_FMT, raw)
+        obj = cls()
+        obj.msg_id = msg_id
+        obj.mode = mode
+        obj.input_sob_count = in_sob_c
+        obj.input_prt_count = in_prt_c
+        obj.input_pps_count = in_pps_c
+        obj.output_prt_count = out_prt_c
+        obj.output_sob_count = out_sob_c
+        obj.input_sob_width_us = in_sob_w
+        obj.output_sob_width_us = out_sob_w
+        obj.input_prt_width_us = in_prt_w
+        obj.output_prt_width_us = out_prt_w
+        obj.input_pps_width_us = in_pps_w
+        obj.checksum_ok = crc8(raw[:57]) == chk
+        return obj
+
+
+# ---------------------------------------------------------------------------
+# QTRM 30-byte slot (per QTRM Message Format IDD, Dwell layout, Table 43)
+# ---------------------------------------------------------------------------
+
+
+class QTRMChannel:
+    __slots__ = ("control", "tx_phase", "tx_atten", "rx_phase", "rx_atten")
+
+    def __init__(self, control=0, tx_phase=0, tx_atten=0, rx_phase=0, rx_atten=0):
+        self.control = control & 0xFF
+        self.tx_phase = tx_phase & 0xFF
+        self.tx_atten = tx_atten & 0xFF
+        self.rx_phase = rx_phase & 0xFF
+        self.rx_atten = rx_atten & 0xFF
+
+    def to_bytes(self) -> bytes:
+        return bytes([self.control, self.tx_phase, self.tx_atten, self.rx_phase, self.rx_atten])
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "QTRMChannel":
+        control, tx_phase, tx_atten, rx_phase, rx_atten = raw
+        return cls(control, tx_phase, tx_atten, rx_phase, rx_atten)
+
+
+class QTRMSlot:
+    """
+    One 30-byte slot, always sent in full even for commands smaller than 30
+    bytes (unused trailing bytes are zero-padded).
+
+    Offset  Field                       Size
+    0       Header (0xAA)               1
+    1       Packet Size Identifier      1   (0x04 for QTRM)
+    2       Command Type                1
+    3       ACK_TYPE(hi nibble) / ACK_ON_OFF(lo nibble)   1
+    4       Dwell/MSG ID                1
+    5       Frequency ID                1
+    6-8     Reserved                    3
+    9-13    Channel 1 (control,txph,txatt,rxph,rxatt)     5
+    14-18   Channel 2                                     5
+    19-23   Channel 3                                     5
+    24-28   Channel 4                                     5
+    29      XOR Checksum (bytes 0-28)   1
+    """
+
+    HEADER_BYTE = 0xAA
+
+    def __init__(self, qtrm_id: int, command_type: int = CMD_RESERVED,
+                 ack_type: int = 0, ack_on_off: int = 0,
+                 dwell_id: int = 0, frequency_id: int = 0,
+                 channels=None):
+        self.qtrm_id = qtrm_id  # 1..96, positional only - not encoded in the bytes
+        self.command_type = command_type & 0xFF
+        self.ack_type = ack_type & 0x0F
+        self.ack_on_off = ack_on_off & 0x0F
+        self.dwell_id = dwell_id & 0xFF
+        self.frequency_id = frequency_id & 0xFF
+        self.channels = channels or [QTRMChannel() for _ in range(4)]
+
+    def to_bytes(self) -> bytes:
+        status_byte = ((self.ack_type & 0x0F) << 4) | (self.ack_on_off & 0x0F)
+        body = bytearray()
+        body.append(self.HEADER_BYTE)
+        body.append(QTRM_PACKET_SIZE_ID)
+        body.append(self.command_type)
+        body.append(status_byte)
+        body.append(self.dwell_id)
+        body.append(self.frequency_id)
+        body.extend(b"\x00\x00\x00")  # reserved
+        for ch in self.channels[:4]:
+            body.extend(ch.to_bytes())
+        assert len(body) == QTRM_SLOT_SIZE - 1
+        chk = 0
+        for b in body:
+            chk ^= b
+        body.append(chk)
+        assert len(body) == QTRM_SLOT_SIZE
+        return bytes(body)
+
+    @classmethod
+    def from_bytes(cls, qtrm_id: int, raw: bytes) -> "QTRMSlot":
+        assert len(raw) == QTRM_SLOT_SIZE
+        header, size_id, cmd_type, status_byte, dwell_id, freq_id = raw[0:6]
+        channels = []
+        for i in range(4):
+            off = 9 + i * 5
+            channels.append(QTRMChannel.from_bytes(raw[off:off + 5]))
+        obj = cls(
+            qtrm_id=qtrm_id,
+            command_type=cmd_type,
+            ack_type=(status_byte >> 4) & 0x0F,
+            ack_on_off=status_byte & 0x0F,
+            dwell_id=dwell_id,
+            frequency_id=freq_id,
+            channels=channels,
+        )
+        chk = 0
+        for b in raw[:-1]:
+            chk ^= b
+        obj.checksum_ok = (chk == raw[-1])
+        obj.header_ok = (header == cls.HEADER_BYTE)
+        return obj
+
+
+# ---------------------------------------------------------------------------
+# Full frame builder / parser
+# ---------------------------------------------------------------------------
+
+
+def build_tx_frame(qtrm_slots) -> bytes:
+    """
+    Build the full 2970-byte frame to send to QCC (GUI -> QCC direction).
+    First 90 bytes (fixed header + QCC header) are zero for now - MSG_ID/MODE
+    aren't implemented on the QCC/QTRM side yet.
+    """
+    assert len(qtrm_slots) == NUM_QTRM
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for slot in qtrm_slots:
+        out.extend(slot.to_bytes())
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
+
+def parse_rx_frame(raw: bytes):
+    """Parse a full 2970-byte frame received from QCC (QCC -> GUI direction)."""
+    assert len(raw) == TOTAL_PACKET_SIZE, f"expected {TOTAL_PACKET_SIZE} bytes, got {len(raw)}"
+    fixed_header = raw[0:FIXED_HEADER_SIZE]
+    qcc_raw = raw[FIXED_HEADER_SIZE:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
+    qcc_header = QCCHeaderTx.from_bytes(qcc_raw)
+
+    qtrm_slots = []
+    base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    for i in range(NUM_QTRM):
+        off = base + i * QTRM_SLOT_SIZE
+        slot_raw = raw[off:off + QTRM_SLOT_SIZE]
+        qtrm_slots.append(QTRMSlot.from_bytes(i + 1, slot_raw))
+
+    return fixed_header, qcc_header, qtrm_slots
+
+
+def default_qtrm_slots():
+    """96 blank QTRM slots (command type = Reserved), ready to be edited."""
+    return [QTRMSlot(qtrm_id=i + 1) for i in range(NUM_QTRM)]

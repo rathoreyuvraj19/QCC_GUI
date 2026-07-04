@@ -501,6 +501,63 @@ def build_dwell_frame(qtrm_channels) -> bytes:
     assert len(out) == TOTAL_PACKET_SIZE
     return bytes(out)
 
+
+# ---------------------------------------------------------------------------
+# Data Storage / Memory Read-Write (Section 11 of the IDD) - persists data to
+# the QTRM's on-board flash. Data Type IDs and the operation-code nibble
+# below follow flash_spi.vhd (E:\Downloads\a10_soc_devkit_ghrd_pro), NOT the
+# IDD doc's own numbering - the doc says Manufacturing=1/TRM Config=3, but
+# the actual FPGA code (which explicitly flags itself as WIP - "needs to be
+# changed as per updated IDD" - in its own comments) uses Manufacturing=1/
+# TRM Config=2, and only these two data types are implemented at all
+# (Positional Address/Calibration/Factory Cal are commented-out stubs).
+# Trusting the firmware over the doc here since it's what actually runs.
+# ---------------------------------------------------------------------------
+
+MEM_DATA_TYPE_MANUFACTURING = 0x1
+MEM_DATA_TYPE_TRM_CONFIGURATION = 0x2
+
+# High nibble of byte6 (1-indexed) / payload[0] - operation selector. Only
+# Flash Write actually persists to non-volatile memory (flash_spi.vhd's
+# s6_write_data_to_bram only proceeds to the erase/program-flash sequence
+# when this nibble is Flash Write); BRAM Write only touches the volatile
+# staging buffer.
+MEM_OP_BRAM_WRITE = 0x1
+MEM_OP_FLASH_WRITE = 0x3
+MEM_OP_FLASH_READ = 0x4
+
+
+def build_memory_write_slot(data_type: int, payload: bytes, mem_op: int = MEM_OP_FLASH_WRITE) -> bytes:
+    """
+    30-byte wire slot: Data Storage / Memory Write command (Section 11),
+    requesting a Link-type status response like every command except Status
+    and Soft Reset. byte6 (1-indexed) = mem_op (hi nibble) | data_type (lo
+    nibble); bytes7-9 = payload (data-type-specific, zero-padded).
+    """
+    op_byte = ((mem_op & 0x0F) << 4) | (data_type & 0x0F)
+    full_payload = bytes([op_byte]) + payload
+    return _build_status_family_slot(CMD_DATA_STORAGE, STATUS_TYPE_LINK, full_payload)
+
+
+def build_memory_write_frame(data_type: int, target_qtrm_index: int, payload: bytes,
+                              mem_op: int = MEM_OP_FLASH_WRITE) -> bytes:
+    """
+    Full 2970-byte frame: Memory Write sent to exactly ONE QTRM (0-based
+    index) - deliberately single-target only (unlike Dwell's all-96 send),
+    since this persists to non-volatile memory and a targeted, one-at-a-
+    time action is safer than writing the same data to all 96 QTRMs in one
+    shot. Every other slot is left entirely zero-filled (no header, no
+    command) - same convention as Cal/Isolation/Soft Reset individual sends.
+    """
+    assert 0 <= target_qtrm_index < NUM_QTRM
+    write_slot = build_memory_write_slot(data_type, payload, mem_op)
+    empty_slot = bytes(QTRM_SLOT_SIZE)
+    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    for i in range(NUM_QTRM):
+        out.extend(write_slot if i == target_qtrm_index else empty_slot)
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
+
 # ---------------------------------------------------------------------------
 # QCC RX header (Host -> QCC) - 58 bytes
 # ---------------------------------------------------------------------------

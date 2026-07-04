@@ -18,7 +18,7 @@ from PySide6.QtCore import Qt, QTimer
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, QGridLayout, QFormLayout,
     QLineEdit, QPushButton, QTableView, QLabel,
-    QGroupBox, QMessageBox, QHeaderView, QTabWidget, QScrollArea,
+    QGroupBox, QMessageBox, QHeaderView, QTabWidget, QScrollArea, QInputDialog,
 )
 
 from packet import (
@@ -26,7 +26,7 @@ from packet import (
     build_link_test_frame, build_individual_link_frame, parse_link_test_response,
     build_cal_frame, build_soft_reset_frame, build_isolation_frame,
     build_status_frame, parse_status_frame, STATUS_TYPE_DIAGNOSTIC,
-    build_dwell_frame,
+    build_dwell_frame, build_memory_write_frame,
 )
 from qtrm_model import QTRMTableModel
 from udp_worker import UdpWorker
@@ -38,6 +38,11 @@ from cal_tab import CalTab
 from isolation_tab import IsolationTab
 from soft_reset_tab import SoftResetTab
 from dwell_tab import DwellTab
+from memory_tab import MemoryTab
+
+# Plain local gate, not real security - just requires a deliberate action
+# before this NVM-write-capable tab can be opened, per Yuvraj's explicit ask.
+MEMORY_TAB_PASSWORD = "0145"
 from spin_field import SpinField
 from rx_test_app import RxTestWindow
 from tx_test_window import TxTestWindow
@@ -55,9 +60,9 @@ class MainWindow(QMainWindow):
 
         self.worker: UdpWorker | None = None
         self.qtrm_slots = default_qtrm_slots()
-        # None | "command" | "dwell" | "link_test" | "individual_link_test" |
-        # "rx_cal" | "tx_cal" | "isolation_all" | "isolation_individual" |
-        # "status_all" | "status_individual"
+        # None | "command" | "dwell" | "memory_write" | "link_test" |
+        # "individual_link_test" | "rx_cal" | "tx_cal" | "isolation_all" |
+        # "isolation_individual" | "status_all" | "status_individual"
         self._awaiting_kind = None
         self._individual_link_qtrm = None
         self._rx_cal_target = None
@@ -66,6 +71,9 @@ class MainWindow(QMainWindow):
         self._individual_status_qtrm = None
         self._status_type_in_flight = None
         self._status_sub_type_in_flight = None
+        self._memory_write_target = None
+        self._memory_tab_unlocked = False
+        self._last_unlocked_tab_index = 0
         self._ping_worker: PingWorker | None = None
         self._send_time = None
         self._pending_timer = None
@@ -90,6 +98,10 @@ class MainWindow(QMainWindow):
         self.dwell_tab = DwellTab()
         self.dwell_tab.send_requested.connect(self._on_dwell_send)
         self.tabs.addTab(self.dwell_tab, "Dwell")
+
+        self.memory_tab = MemoryTab()
+        self.memory_tab.write_requested.connect(self._on_memory_write)
+        self._memory_tab_index = self.tabs.addTab(self.memory_tab, "Memory Operation")
 
         self.link_test_tab = LinkTestTab()
         self.link_test_tab.send_requested.connect(self._on_link_test_clicked)
@@ -122,8 +134,10 @@ class MainWindow(QMainWindow):
         # Status tab's matrix resets to idle whenever the current tab
         # changes (to it or away from it) - a previous query's results
         # don't apply to whatever gets selected/sent next, so they
-        # shouldn't linger and look like they're still current.
-        self.tabs.currentChanged.connect(lambda index: self.status_tab.reset_to_idle())
+        # shouldn't linger and look like they're still current. Also gates
+        # the Memory Operation tab behind a password, per Yuvraj's ask -
+        # this tab can write to real hardware's non-volatile flash.
+        self.tabs.currentChanged.connect(self._on_tab_changed)
 
         root.addWidget(self.tabs)
 
@@ -131,6 +145,23 @@ class MainWindow(QMainWindow):
         footer.setAlignment(Qt.AlignRight)
         footer.setStyleSheet("color: #9a9aa0; font-size: 8pt; padding: 2px 6px;")
         root.addWidget(footer)
+
+    def _on_tab_changed(self, index):
+        self.status_tab.reset_to_idle()
+
+        if index == self._memory_tab_index and not self._memory_tab_unlocked:
+            password, ok = QInputDialog.getText(
+                self, "Memory Operation - Locked",
+                "This tab can write to real hardware's flash memory.\nEnter password:",
+                QLineEdit.Password,
+            )
+            if ok and password == MEMORY_TAB_PASSWORD:
+                self._memory_tab_unlocked = True
+            else:
+                self.tabs.setCurrentIndex(self._last_unlocked_tab_index)
+                return
+
+        self._last_unlocked_tab_index = index
 
     def _build_command_tab(self):
         content = QWidget()
@@ -369,6 +400,13 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = None
         self.dwell_tab.show_no_response()
 
+    def _on_memory_write_timeout(self):
+        if self._awaiting_kind != "memory_write":
+            return
+        self._awaiting_kind = None
+        qtrm_index, self._memory_write_target = self._memory_write_target, None
+        self.memory_tab.show_no_response(qtrm_index)
+
     def _on_link_test_timeout(self):
         if self._awaiting_kind != "link_test":
             return
@@ -462,6 +500,21 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "dwell"
         self.dwell_tab.mark_pending()
         self._begin_wait(self._on_dwell_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_memory_write(self, data_type: int, qtrm_index: int, payload: bytes):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        frame = build_memory_write_frame(data_type, qtrm_index, payload)
+
+        self._awaiting_kind = "memory_write"
+        self._memory_write_target = qtrm_index
+        self.memory_tab.mark_pending()
+        self._begin_wait(self._on_memory_write_timeout)
         self.worker.send_frame(frame)
 
     def _on_link_test_clicked(self, is_auto_resend: bool = False):
@@ -634,7 +687,7 @@ class MainWindow(QMainWindow):
     # _awaiting_kind - anything not listed here falls through to the
     # Command/QTRM Grid tab's own header_panel (the default/"command" case).
     _HEADER_PANEL_TAB_BY_KIND = {
-        "dwell": "dwell_tab",
+        "dwell": "dwell_tab", "memory_write": "memory_tab",
         "link_test": "link_test_tab", "individual_link_test": "link_test_tab",
         "rx_cal": "rx_cal_tab", "tx_cal": "tx_cal_tab",
         "isolation_all": "isolation_tab", "isolation_individual": "isolation_tab",
@@ -673,6 +726,18 @@ class MainWindow(QMainWindow):
             self.dwell_tab.show_results(results)
             if elapsed_us is not None:
                 self.dwell_tab.show_response_time(elapsed_us)
+            return
+
+        if kind == "memory_write":
+            qtrm_index, self._memory_write_target = self._memory_write_target, None
+            try:
+                results = parse_link_test_response(raw)
+            except AssertionError as e:
+                QMessageBox.warning(self, "Parse error", str(e))
+                return
+            self.memory_tab.show_result(qtrm_index, results[qtrm_index])
+            if elapsed_us is not None:
+                self.memory_tab.show_response_time(elapsed_us)
             return
 
         if kind == "individual_link_test":

@@ -29,10 +29,11 @@ Run directly:  python status_responder_app.py
 import socket
 import sys
 
-from PySide6.QtCore import QThread, Signal
+from PySide6.QtCore import QRegularExpression, Qt, QThread, Signal
+from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
-    QApplication, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
-    QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
 from packet import (
@@ -60,21 +61,6 @@ _STATUS_TYPE_NAMES = {
     STATUS_TYPE_DIAGNOSTIC: "DIAGNOSTIC",
 }
 
-
-def format_hex_bytes(data: bytes) -> str:
-    return " ".join(f"{b:02X}" for b in data)
-
-
-def parse_hex_bytes(text: str, expected_len: int) -> bytes:
-    """Accepts space/comma-separated hex ("AA BB CC" or "AA,BB,CC" or "AABBCC"). Raises ValueError on bad input or wrong length."""
-    cleaned = text.replace(",", " ").split()
-    if len(cleaned) == 1 and len(cleaned[0]) == expected_len * 2:
-        # One unbroken hex string, e.g. "AABBCC..." - split into byte pairs.
-        cleaned = [cleaned[0][i:i + 2] for i in range(0, len(cleaned[0]), 2)]
-    data = bytes(int(tok, 16) for tok in cleaned)
-    if len(data) != expected_len:
-        raise ValueError(f"Expected {expected_len} bytes, got {len(data)}.")
-    return data
 
 # ---------------------------------------------------------------------------
 # Mock reply builders - one per Status Type. Values are plausible dummy data
@@ -313,6 +299,41 @@ class ResponderWorker(QThread):
         self.wait(2000)
 
 
+class HexByteGrid(QWidget):
+    """
+    One small 2-hex-digit QLineEdit per byte, wrapped into a grid - lets
+    every byte of a header be set individually instead of only as one
+    long pasted hex string.
+    """
+
+    def __init__(self, num_bytes: int, wrap_cols: int = 16, parent=None):
+        super().__init__(parent)
+        self._validator = QRegularExpressionValidator(QRegularExpression("[0-9A-Fa-f]{0,2}"))
+        self._cells = []
+        grid = QGridLayout(self)
+        grid.setSpacing(3)
+        for i in range(num_bytes):
+            cell = QLineEdit("00")
+            cell.setMaxLength(2)
+            cell.setFixedWidth(30)
+            cell.setAlignment(Qt.AlignCenter)
+            cell.setValidator(self._validator)
+            cell.setToolTip(f"Byte {i}")
+            # The app's global QLineEdit style pads 8px/12px, meant for
+            # normal-width fields - on a 30px-wide cell that leaves almost
+            # no room for the digits themselves, making them invisible.
+            cell.setStyleSheet("padding: 2px;")
+            self._cells.append(cell)
+            grid.addWidget(cell, i // wrap_cols, i % wrap_cols)
+
+    def get_bytes(self) -> bytes:
+        return bytes(int(cell.text(), 16) if cell.text() else 0 for cell in self._cells)
+
+    def set_bytes(self, data: bytes):
+        for cell, b in zip(self._cells, data):
+            cell.setText(f"{b:02X}")
+
+
 class StatusResponderWindow(QMainWindow):
     closed = Signal()
 
@@ -333,20 +354,18 @@ class StatusResponderWindow(QMainWindow):
         root.addWidget(self._build_log_group(), 1)
 
     def _build_response_header_group(self):
-        box = QGroupBox("Response Header (90 bytes)")
+        box = QGroupBox("Response Header (90 bytes) - edit any byte individually")
         layout = QVBoxLayout(box)
 
-        fixed_row = QHBoxLayout()
-        fixed_row.addWidget(QLabel(f"Fixed Header ({FIXED_HEADER_SIZE} bytes, hex):"))
-        self.fixed_header_edit = QLineEdit(format_hex_bytes(_MOCK_FIXED_HEADER))
-        fixed_row.addWidget(self.fixed_header_edit, 1)
-        layout.addLayout(fixed_row)
+        layout.addWidget(QLabel(f"Fixed Header ({FIXED_HEADER_SIZE} bytes, hex):"))
+        self.fixed_header_grid = HexByteGrid(FIXED_HEADER_SIZE)
+        self.fixed_header_grid.set_bytes(_MOCK_FIXED_HEADER)
+        layout.addWidget(self.fixed_header_grid)
 
-        qcc_row = QHBoxLayout()
-        qcc_row.addWidget(QLabel(f"QCC Header ({QCC_HEADER_SIZE} bytes, hex):"))
-        self.qcc_header_edit = QLineEdit(format_hex_bytes(_MOCK_QCC_HEADER))
-        qcc_row.addWidget(self.qcc_header_edit, 1)
-        layout.addLayout(qcc_row)
+        layout.addWidget(QLabel(f"QCC Header ({QCC_HEADER_SIZE} bytes, hex):"))
+        self.qcc_header_grid = HexByteGrid(QCC_HEADER_SIZE)
+        self.qcc_header_grid.set_bytes(_MOCK_QCC_HEADER)
+        layout.addWidget(self.qcc_header_grid)
 
         reset_row = QHBoxLayout()
         reset_row.addStretch(1)
@@ -358,8 +377,8 @@ class StatusResponderWindow(QMainWindow):
         return box
 
     def _on_reset_header_clicked(self):
-        self.fixed_header_edit.setText(format_hex_bytes(_MOCK_FIXED_HEADER))
-        self.qcc_header_edit.setText(format_hex_bytes(_MOCK_QCC_HEADER))
+        self.fixed_header_grid.set_bytes(_MOCK_FIXED_HEADER)
+        self.qcc_header_grid.set_bytes(_MOCK_QCC_HEADER)
 
     def _build_listen_group(self):
         box = QGroupBox("Listener")
@@ -405,12 +424,11 @@ class StatusResponderWindow(QMainWindow):
     def start_listening(self):
         if self.worker is not None:
             return
-        try:
-            fixed_header = parse_hex_bytes(self.fixed_header_edit.text(), FIXED_HEADER_SIZE)
-            qcc_header = parse_hex_bytes(self.qcc_header_edit.text(), QCC_HEADER_SIZE)
-        except ValueError as e:
-            QMessageBox.warning(self, "Invalid Response Header", f"Could not parse header hex: {e}")
-            return
+        # Each cell is already constrained to 0-2 valid hex digits by its
+        # own validator, so there's nothing that can fail to parse here -
+        # an empty cell just reads as 0x00.
+        fixed_header = self.fixed_header_grid.get_bytes()
+        qcc_header = self.qcc_header_grid.get_bytes()
 
         port = self.port_spin.value()
         self.worker = ResponderWorker(local_port=port, fixed_header=fixed_header, qcc_header=qcc_header)

@@ -31,8 +31,8 @@ import sys
 
 from PySide6.QtCore import QThread, Signal
 from PySide6.QtWidgets import (
-    QApplication, QGroupBox, QHBoxLayout, QLabel, QMainWindow, QPlainTextEdit,
-    QPushButton, QVBoxLayout, QWidget,
+    QApplication, QGroupBox, QHBoxLayout, QLabel, QLineEdit, QMainWindow,
+    QMessageBox, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
 from packet import (
@@ -59,6 +59,22 @@ _STATUS_TYPE_NAMES = {
     STATUS_TYPE_MFG: "TRM Mfg. Details",
     STATUS_TYPE_DIAGNOSTIC: "DIAGNOSTIC",
 }
+
+
+def format_hex_bytes(data: bytes) -> str:
+    return " ".join(f"{b:02X}" for b in data)
+
+
+def parse_hex_bytes(text: str, expected_len: int) -> bytes:
+    """Accepts space/comma-separated hex ("AA BB CC" or "AA,BB,CC" or "AABBCC"). Raises ValueError on bad input or wrong length."""
+    cleaned = text.replace(",", " ").split()
+    if len(cleaned) == 1 and len(cleaned[0]) == expected_len * 2:
+        # One unbroken hex string, e.g. "AABBCC..." - split into byte pairs.
+        cleaned = [cleaned[0][i:i + 2] for i in range(0, len(cleaned[0]), 2)]
+    data = bytes(int(tok, 16) for tok in cleaned)
+    if len(data) != expected_len:
+        raise ValueError(f"Expected {expected_len} bytes, got {len(data)}.")
+    return data
 
 # ---------------------------------------------------------------------------
 # Mock reply builders - one per Status Type. Values are plausible dummy data
@@ -198,7 +214,11 @@ _REPLY_BUILDERS = {
 # signal. Filled with a fixed (not re-randomized per run - reproducible
 # between test sessions), clearly-non-zero pattern instead, so there's
 # always something to actually look at, and QCCHeaderRx.to_bytes() computes
-# a real, correct CRC-8 so "CHECKSUM: OK" reports truthfully.
+# a real, correct CRC-8 so "CHECKSUM: OK" reports truthfully. These are just
+# the defaults shown in the window's editable "Response Header" hex fields -
+# start_listening() reads whatever's actually in those fields at Start time,
+# not these constants directly, so editing them changes every future
+# response's header without touching this file.
 _MOCK_FIXED_HEADER = bytes((i + 1) & 0xFF for i in range(FIXED_HEADER_SIZE))
 _MOCK_QCC_HEADER = QCCHeaderRx(
     msg_id=0x99,
@@ -207,10 +227,19 @@ _MOCK_QCC_HEADER = QCCHeaderRx(
 ).to_bytes()
 
 
-def build_mock_response_frame(query_frame: bytes):
-    """Returns (response_frame, [(qtrm_index, status_type_name), ...] for every QTRM that got a reply)."""
+def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qcc_header: bytes = None):
+    """
+    Returns (response_frame, [(qtrm_index, status_type_name), ...] for every
+    QTRM that got a reply). fixed_header/qcc_header default to the fixed
+    test-pattern bytes below if not given - pass explicit bytes (e.g. from
+    the window's editable hex fields) to send a different 90-byte header.
+    """
+    if fixed_header is None:
+        fixed_header = _MOCK_FIXED_HEADER
+    if qcc_header is None:
+        qcc_header = _MOCK_QCC_HEADER
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
-    out = bytearray(_MOCK_FIXED_HEADER + _MOCK_QCC_HEADER)
+    out = bytearray(fixed_header + qcc_header)
     replied = []
     for i in range(NUM_QTRM):
         slot = query_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE]
@@ -232,9 +261,11 @@ class ResponderWorker(QThread):
     error = Signal(str)
     status = Signal(str)
 
-    def __init__(self, local_port: int, parent=None):
+    def __init__(self, local_port: int, fixed_header: bytes = None, qcc_header: bytes = None, parent=None):
         super().__init__(parent)
         self.local_port = local_port
+        self.fixed_header = fixed_header if fixed_header is not None else _MOCK_FIXED_HEADER
+        self.qcc_header = qcc_header if qcc_header is not None else _MOCK_QCC_HEADER
         self._sock = None
         self._running = False
 
@@ -265,7 +296,7 @@ class ResponderWorker(QThread):
                 self.error.emit(f"Received {len(data)} bytes from {addr}, expected {TOTAL_PACKET_SIZE} - dropped")
                 continue
 
-            response, replied = build_mock_response_frame(data)
+            response, replied = build_mock_response_frame(data, self.fixed_header, self.qcc_header)
             try:
                 self._sock.sendto(response, addr)
             except OSError as e:
@@ -298,7 +329,37 @@ class StatusResponderWindow(QMainWindow):
         root = QVBoxLayout(central)
 
         root.addWidget(self._build_listen_group())
+        root.addWidget(self._build_response_header_group())
         root.addWidget(self._build_log_group(), 1)
+
+    def _build_response_header_group(self):
+        box = QGroupBox("Response Header (90 bytes)")
+        layout = QVBoxLayout(box)
+
+        fixed_row = QHBoxLayout()
+        fixed_row.addWidget(QLabel(f"Fixed Header ({FIXED_HEADER_SIZE} bytes, hex):"))
+        self.fixed_header_edit = QLineEdit(format_hex_bytes(_MOCK_FIXED_HEADER))
+        fixed_row.addWidget(self.fixed_header_edit, 1)
+        layout.addLayout(fixed_row)
+
+        qcc_row = QHBoxLayout()
+        qcc_row.addWidget(QLabel(f"QCC Header ({QCC_HEADER_SIZE} bytes, hex):"))
+        self.qcc_header_edit = QLineEdit(format_hex_bytes(_MOCK_QCC_HEADER))
+        qcc_row.addWidget(self.qcc_header_edit, 1)
+        layout.addLayout(qcc_row)
+
+        reset_row = QHBoxLayout()
+        reset_row.addStretch(1)
+        self.reset_header_btn = QPushButton("Reset to Default")
+        self.reset_header_btn.clicked.connect(self._on_reset_header_clicked)
+        reset_row.addWidget(self.reset_header_btn)
+        layout.addLayout(reset_row)
+
+        return box
+
+    def _on_reset_header_clicked(self):
+        self.fixed_header_edit.setText(format_hex_bytes(_MOCK_FIXED_HEADER))
+        self.qcc_header_edit.setText(format_hex_bytes(_MOCK_QCC_HEADER))
 
     def _build_listen_group(self):
         box = QGroupBox("Listener")
@@ -344,8 +405,15 @@ class StatusResponderWindow(QMainWindow):
     def start_listening(self):
         if self.worker is not None:
             return
+        try:
+            fixed_header = parse_hex_bytes(self.fixed_header_edit.text(), FIXED_HEADER_SIZE)
+            qcc_header = parse_hex_bytes(self.qcc_header_edit.text(), QCC_HEADER_SIZE)
+        except ValueError as e:
+            QMessageBox.warning(self, "Invalid Response Header", f"Could not parse header hex: {e}")
+            return
+
         port = self.port_spin.value()
-        self.worker = ResponderWorker(local_port=port)
+        self.worker = ResponderWorker(local_port=port, fixed_header=fixed_header, qcc_header=qcc_header)
         self.worker.frame_processed.connect(self._on_frame_processed)
         self.worker.error.connect(self._on_error)
         self.worker.status.connect(self.status_label.setText)

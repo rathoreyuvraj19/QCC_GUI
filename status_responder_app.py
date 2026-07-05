@@ -49,6 +49,7 @@ from packet import (
 # like) and Soft Reset (fire-and-forget by design). Every other command
 # type replies based on its Status Type alone - see module docstring.
 _NO_REPLY_COMMAND_TYPES = (CMD_RESERVED, CMD_SOFT_RESET)
+from segmented_control import SegmentedControl
 from spin_field import SpinField
 from theme import STYLESHEET
 
@@ -299,39 +300,75 @@ class ResponderWorker(QThread):
         self.wait(2000)
 
 
-class HexByteGrid(QWidget):
+_HEX_VALIDATOR_PATTERN = "[0-9A-Fa-f]{0,2}"
+# Incremental-typing-safe: 0-2 digit prefixes are always allowed (covers
+# every partial state while typing), a full 3-digit value must be 100-255.
+_DEC_VALIDATOR_PATTERN = r"[0-9]{0,2}|1[0-9]{2}|2[0-4][0-9]|25[0-5]"
+
+
+class ByteGrid(QWidget):
     """
-    One small 2-hex-digit QLineEdit per byte, wrapped into a grid - lets
-    every byte of a header be set individually instead of only as one
-    long pasted hex string.
+    One small editable cell per byte, wrapped into a grid, each labeled
+    with its byte index above it - lets every byte of a header be set
+    individually instead of only as one long pasted hex string.
+    Hex/decimal entry is toggled via set_hex_mode(bool) - switching
+    re-renders every cell's current value in the new base without
+    changing the underlying byte values at all.
     """
 
     def __init__(self, num_bytes: int, wrap_cols: int = 16, parent=None):
         super().__init__(parent)
-        self._validator = QRegularExpressionValidator(QRegularExpression("[0-9A-Fa-f]{0,2}"))
+        self._hex_mode = True
+        self._hex_validator = QRegularExpressionValidator(QRegularExpression(_HEX_VALIDATOR_PATTERN))
+        self._dec_validator = QRegularExpressionValidator(QRegularExpression(_DEC_VALIDATOR_PATTERN))
         self._cells = []
         grid = QGridLayout(self)
         grid.setSpacing(3)
         for i in range(num_bytes):
+            index_label = QLabel(str(i))
+            index_label.setAlignment(Qt.AlignCenter)
+            index_label.setStyleSheet("font-size: 7pt; color: rgba(238, 238, 238, 0.5);")
+
             cell = QLineEdit("00")
             cell.setMaxLength(2)
             cell.setFixedWidth(30)
             cell.setAlignment(Qt.AlignCenter)
-            cell.setValidator(self._validator)
+            cell.setValidator(self._hex_validator)
             cell.setToolTip(f"Byte {i}")
             # The app's global QLineEdit style pads 8px/12px, meant for
             # normal-width fields - on a 30px-wide cell that leaves almost
             # no room for the digits themselves, making them invisible.
             cell.setStyleSheet("padding: 2px;")
+
+            cell_col = QVBoxLayout()
+            cell_col.setSpacing(0)
+            cell_col.setContentsMargins(0, 0, 0, 0)
+            cell_col.addWidget(index_label)
+            cell_col.addWidget(cell)
+            cell_widget = QWidget()
+            cell_widget.setLayout(cell_col)
+
             self._cells.append(cell)
-            grid.addWidget(cell, i // wrap_cols, i % wrap_cols)
+            grid.addWidget(cell_widget, i // wrap_cols, i % wrap_cols)
 
     def get_bytes(self) -> bytes:
-        return bytes(int(cell.text(), 16) if cell.text() else 0 for cell in self._cells)
+        base = 16 if self._hex_mode else 10
+        return bytes(int(cell.text(), base) if cell.text() else 0 for cell in self._cells)
 
     def set_bytes(self, data: bytes):
         for cell, b in zip(self._cells, data):
-            cell.setText(f"{b:02X}")
+            cell.setText(f"{b:02X}" if self._hex_mode else str(b))
+
+    def set_hex_mode(self, hex_mode: bool):
+        if hex_mode == self._hex_mode:
+            return
+        current = self.get_bytes()  # read using the OLD mode before switching
+        self._hex_mode = hex_mode
+        for cell in self._cells:
+            cell.setValidator(self._hex_validator if hex_mode else self._dec_validator)
+            cell.setMaxLength(2 if hex_mode else 3)
+            cell.setFixedWidth(30 if hex_mode else 36)
+        self.set_bytes(current)  # rewrite using the NEW mode
 
 
 class StatusResponderWindow(QMainWindow):
@@ -357,13 +394,22 @@ class StatusResponderWindow(QMainWindow):
         box = QGroupBox("Response Header (90 bytes) - edit any byte individually")
         layout = QVBoxLayout(box)
 
-        layout.addWidget(QLabel(f"Fixed Header ({FIXED_HEADER_SIZE} bytes, hex):"))
-        self.fixed_header_grid = HexByteGrid(FIXED_HEADER_SIZE)
+        top_row = QHBoxLayout()
+        top_row.addWidget(QLabel("Byte entry:"))
+        self.byte_mode_switch = SegmentedControl("Decimal", "Hex")
+        self.byte_mode_switch.setChecked(True)  # Hex by default, matching every other raw-byte view in this app
+        self.byte_mode_switch.toggled.connect(self._on_byte_mode_toggled)
+        top_row.addWidget(self.byte_mode_switch)
+        top_row.addStretch(1)
+        layout.addLayout(top_row)
+
+        layout.addWidget(QLabel(f"Fixed Header ({FIXED_HEADER_SIZE} bytes):"))
+        self.fixed_header_grid = ByteGrid(FIXED_HEADER_SIZE)
         self.fixed_header_grid.set_bytes(_MOCK_FIXED_HEADER)
         layout.addWidget(self.fixed_header_grid)
 
-        layout.addWidget(QLabel(f"QCC Header ({QCC_HEADER_SIZE} bytes, hex):"))
-        self.qcc_header_grid = HexByteGrid(QCC_HEADER_SIZE)
+        layout.addWidget(QLabel(f"QCC Header ({QCC_HEADER_SIZE} bytes):"))
+        self.qcc_header_grid = ByteGrid(QCC_HEADER_SIZE)
         self.qcc_header_grid.set_bytes(_MOCK_QCC_HEADER)
         layout.addWidget(self.qcc_header_grid)
 
@@ -375,6 +421,10 @@ class StatusResponderWindow(QMainWindow):
         layout.addLayout(reset_row)
 
         return box
+
+    def _on_byte_mode_toggled(self, is_hex: bool):
+        self.fixed_header_grid.set_hex_mode(is_hex)
+        self.qcc_header_grid.set_hex_mode(is_hex)
 
     def _on_reset_header_clicked(self):
         self.fixed_header_grid.set_bytes(_MOCK_FIXED_HEADER)

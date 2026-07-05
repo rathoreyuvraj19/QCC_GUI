@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
 )
 
 from packet import (
-    QTRMSlot, QCCHeaderRx, QTRM_SLOT_SIZE, NUM_QTRM, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
+    QTRMSlot, QCCHeaderTx, QTRM_SLOT_SIZE, NUM_QTRM, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
     TOTAL_PACKET_SIZE, CMD_RESERVED, CMD_SOFT_RESET,
     STATUS_TYPE_ACK, STATUS_TYPE_LINK, STATUS_TYPE_HEALTH,
     STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
@@ -194,24 +194,51 @@ _REPLY_BUILDERS = {
     STATUS_TYPE_DIAGNOSTIC: _mock_diagnostic_reply,
 }
 
-# The real app always sends/expects an all-zero 90-byte header for now (see
-# packet.py's build_tx_frame docstring), so there's nothing "real" to mirror
-# back here - but an all-zero response header makes the RX/TX HeaderPanel
-# sidebars look identically blank for every test, which isn't a useful test
-# signal. Filled with a fixed (not re-randomized per run - reproducible
-# between test sessions), clearly-non-zero pattern instead, so there's
-# always something to actually look at, and QCCHeaderRx.to_bytes() computes
-# a real, correct CRC-8 so "CHECKSUM: OK" reports truthfully. These are just
-# the defaults shown in the window's editable "Response Header" hex fields -
-# start_listening() reads whatever's actually in those fields at Start time,
-# not these constants directly, so editing them changes every future
-# response's header without touching this file.
-_MOCK_FIXED_HEADER = bytes((i + 1) & 0xFF for i in range(FIXED_HEADER_SIZE))
-_MOCK_QCC_HEADER = QCCHeaderRx(
-    msg_id=0x99,
-    mode=QCCHeaderRx.MODE_NORMAL,
-    command_data=bytes((i + 1) & 0xFF for i in range(55)),
-).to_bytes()
+# Fixed (not re-randomized per run - reproducible between test sessions),
+# plausible non-zero default response header, so there's always something
+# to actually look at in the RX/TX/tab HeaderPanel sidebars, and
+# QCCHeaderTx.to_bytes() computes a real, correct CRC-8 so "CHECKSUM: OK"
+# reports truthfully. Built as one real 90-byte QCCHeaderTx (per
+# QCC_90Byte_Header_BitTable.docx, 2026-07-05) and then split into the two
+# 32/58-byte pieces the window's editable byte grids use - the checksum
+# (the header's very last byte) covers the whole 90 bytes, so it stays
+# valid as long as both pieces are sent back-to-back unchanged, which
+# build_mock_response_frame already does. These are just the *defaults*
+# shown in the window's editable byte grids - start_listening() reads
+# whatever's actually in those grids at Start time, not these constants
+# directly, so editing them changes every future response's header
+# without touching this file.
+_mock_header = QCCHeaderTx()
+_mock_header.destination_id = 0x01
+_mock_header.source_id = 0x02
+_mock_header.packet_size = TOTAL_PACKET_SIZE
+_mock_header.command_id = QCCHeaderTx.MODE_NORMAL
+_mock_header.command_ack = 1
+_mock_header.message_number = 1
+_mock_header.date = 5
+_mock_header.month = 7
+_mock_header.year = 2026
+_mock_header.time_of_day = 0
+_mock_header.command_id_repeat = _mock_header.command_id
+_mock_header.fpga_temperature = 42
+_mock_header.board_temperature = 350
+_mock_header.board_humidity = 550
+_mock_header.input_sob_count = 100
+_mock_header.input_prt_count = 200
+_mock_header.input_pps_count = 300
+_mock_header.output_prt_count = 400
+_mock_header.output_sob_count = 500
+_mock_header.input_sob_width_us = 10
+_mock_header.output_sob_width_us = 20
+_mock_header.input_prt_width_us = 30
+_mock_header.output_prt_width_us = 40
+_mock_header.input_pps_width_us = 50
+_mock_header.pps_counter = 600
+_mock_header.chip_id = 0x12345678
+_mock_header_bytes = _mock_header.to_bytes()
+
+_MOCK_FIXED_HEADER = _mock_header_bytes[:FIXED_HEADER_SIZE]
+_MOCK_QCC_HEADER = _mock_header_bytes[FIXED_HEADER_SIZE:]
 
 
 def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qcc_header: bytes = None):

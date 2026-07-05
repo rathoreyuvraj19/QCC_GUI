@@ -4,16 +4,25 @@ packet.py
 Byte-exact packet builder/parser for the QCC Ethernet UDP frame.
 
 Overall frame layout (little-endian throughout):
-    [ 32 bytes ] Fixed header      - TBD / reserved for now (all zero)
-    [ 58 bytes ] QCC header        - defined below (QCCHeaderTx / QCCHeaderRx)
+    [ 90 bytes ]   Header          - defined below (QCCHeaderTx for QCC->RC
+                                      responses, per QCC_90Byte_Header_
+                                      BitTable.docx, 2026-07-05; QCCHeaderRx
+                                      for RC->QCC commands is still the
+                                      older 58-byte-only format - not yet
+                                      updated to match the new command-side
+                                      tables in that doc)
     [ 2880 bytes ] QTRM data block - 96 x 30-byte QTRM slots (QTRMSlot)
     -------------------------------
     Total: 2970 bytes
 
 QTRM 30-byte slot checksum (XOR of bytes 0-28) is generated/verified on the
 QTRM/GUI side per the QTRM Message Format IDD - QCC does not touch it.
-QCC header checksum is CRC-8/CCITT (poly 0x07, init 0x00, no reflection,
-xorout 0x00) over header bytes 0-56, stored in byte 57.
+QCCHeaderTx's checksum is CRC-8/CCITT (poly 0x07, init 0x00, no reflection,
+xorout 0x00) over the whole 90-byte header's bytes 0-88, stored in byte 89 -
+NOT split into separately-checksummed 32+58 byte pieces (that was the
+pre-2026-07-05 design). FIXED_HEADER_SIZE/QCC_HEADER_SIZE (32/58) still
+correctly describe the header's total byte layout (32+58=90), just not an
+internal (de)serialization boundary for QCCHeaderTx anymore.
 """
 
 import struct
@@ -606,34 +615,78 @@ class QCCHeaderRx:
 
 
 # ---------------------------------------------------------------------------
-# QCC TX header (QCC -> Host, response) - 58 bytes, fixed format
+# QCC TX header (QCC -> RC, response) - full 90-byte header, fixed format.
+# Per QCC_90Byte_Header_BitTable.docx (2026-07-05) - supersedes the earlier
+# 58-byte-only QCCHeaderTx. The old "32-byte Fixed Header (still TBD) +
+# 58-byte QCC Header" split is gone as an implementation boundary: this doc
+# defines real fields across the whole 90 bytes, and the single CRC-8 at
+# the very last byte covers all 89 bytes before it (not just the last 58) -
+# so encode/decode must happen on the full 90-byte block as one unit.
+# FIXED_HEADER_SIZE/QCC_HEADER_SIZE (32/58) still correctly describe the
+# frame's overall byte layout (32+58=90, unchanged), just not a boundary
+# this class's own (de)serialization respects internally anymore.
 # ---------------------------------------------------------------------------
 
 
 class QCCHeaderTx:
     """
-    Offset   Field                 Size  Type
-    0        MSG_ID                1     byte    - echo of command's MSG_ID
-    1        MODE                  1     byte    - echo of QCC's current mode
-    2-5      INPUT_SOB_COUNT       4     uint32
-    6-9      INPUT_PRT_COUNT       4     uint32
-    10-13    INPUT_PPS_COUNT       4     uint32
-    14-17    OUTPUT_PRT_COUNT      4     uint32
-    18-21    OUTPUT_SOB_COUNT      4     uint32
-    22-23    INPUT_SOB_WIDTH_US    2     uint16
-    24-25    OUTPUT_SOB_WIDTH_US   2     uint16
-    26-27    INPUT_PRT_WIDTH_US    2     uint16
-    28-29    OUTPUT_PRT_WIDTH_US   2     uint16
-    30-31    INPUT_PPS_WIDTH_US    2     uint16
-    32-56    RESERVED              25    byte[25]
-    57       CHECKSUM              1     byte    - CRC-8 over bytes 0-56
+    Offset  Field                  Size  Type    Notes
+    0       DESTINATION_ID         1     byte    Echo of the command's Source ID
+    1       SOURCE_ID              1     byte    Echo of the command's Destination ID
+    2-3     PACKET_SIZE            2     uint16  Fixed 2970 (whole-frame size)
+    4       COMMAND_ID             1     byte    Echoed QCC mode (0-5, MODE_* below)
+    5       COMMAND_ACK            1     byte    0x01 for a response (vs 0x00 for a command)
+    6-9     MESSAGE_NUMBER         4     uint32  Echoed command message counter
+    10      DATE                   1     byte    Decimal 1-31, echoed
+    11      MONTH                  1     byte    Decimal 1-12, echoed
+    12-13   YEAR                   2     uint16  Decimal (not hex), echoed
+    14-17   TIME_OF_DAY            4     uint32  Echoed, exact format still TBD
+    18-31   RESERVED0              14    byte[14]
+    32      COMMAND_ID (repeat)    1     byte    Same value as offset 4
+    33-34   FPGA_TEMPERATURE       2     int16   10-bit 2's complement in bits 0-9, bits 10-15 = 0
+    35-36   BOARD_TEMPERATURE      2     uint16
+    37-38   BOARD_HUMIDITY         2     uint16
+    39-42   INPUT_SOB_COUNT        4     uint32
+    43-46   INPUT_PRT_COUNT        4     uint32
+    47-50   INPUT_PPS_COUNT        4     uint32
+    51-54   OUTPUT_PRT_COUNT       4     uint32
+    55-58   OUTPUT_SOB_COUNT       4     uint32
+    59-60   INPUT_SOB_WIDTH_US     2     uint16
+    61-62   OUTPUT_SOB_WIDTH_US    2     uint16
+    63-64   INPUT_PRT_WIDTH_US     2     uint16
+    65-66   OUTPUT_PRT_WIDTH_US    2     uint16
+    67-68   INPUT_PPS_WIDTH_US     2     uint16
+    69-72   PPS_COUNTER            4     uint32  Separate 32-bit counter, distinct from INPUT_PPS_COUNT
+    73-84   RESERVED1              12    byte[12]
+    85-88   CHIP_ID                4     uint32  Lower 32 bits of a 64-bit chip ID
+    89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
     """
 
-    _STRUCT_FMT = "<BBIIIIIHHHHH25sB"
+    MODE_NORMAL = 0
+    MODE_INTERNAL_LOOPBACK = 1
+    MODE_EXTERNAL_LOOPBACK = 2
+    MODE_STATUS_ONLY = 3
+    MODE_QCC_RESET = 4
+    MODE_REMOTE_PROGRAMMING = 5
+
+    # Everything except the final checksum byte (89 bytes).
+    _BODY_FMT = "<BBHBBIBBHI14sBHHHIIIIIHHHHHI12sI"
 
     def __init__(self):
-        self.msg_id = 0
-        self.mode = 0
+        self.destination_id = 0
+        self.source_id = 0
+        self.packet_size = TOTAL_PACKET_SIZE
+        self.command_id = 0
+        self.command_ack = 1
+        self.message_number = 0
+        self.date = 0
+        self.month = 0
+        self.year = 0
+        self.time_of_day = 0
+        self.command_id_repeat = 0
+        self.fpga_temperature = 0  # signed, -512..511 (10-bit 2's complement)
+        self.board_temperature = 0
+        self.board_humidity = 0
         self.input_sob_count = 0
         self.input_prt_count = 0
         self.input_pps_count = 0
@@ -644,31 +697,79 @@ class QCCHeaderTx:
         self.input_prt_width_us = 0
         self.output_prt_width_us = 0
         self.input_pps_width_us = 0
+        self.pps_counter = 0
+        self.chip_id = 0
         self.checksum_ok = None
+
+    def to_bytes(self) -> bytes:
+        body = struct.pack(
+            self._BODY_FMT,
+            self.destination_id, self.source_id, self.packet_size,
+            self.command_id, self.command_ack, self.message_number,
+            self.date, self.month, self.year, self.time_of_day,
+            bytes(14),
+            self.command_id_repeat,
+            (self.fpga_temperature & 0x3FF), self.board_temperature, self.board_humidity,
+            self.input_sob_count, self.input_prt_count, self.input_pps_count,
+            self.output_prt_count, self.output_sob_count,
+            self.input_sob_width_us, self.output_sob_width_us,
+            self.input_prt_width_us, self.output_prt_width_us, self.input_pps_width_us,
+            self.pps_counter,
+            bytes(12),
+            self.chip_id,
+        )
+        assert len(body) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE - 1
+        return body + struct.pack("<B", crc8(body))
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "QCCHeaderTx":
-        assert len(raw) == QCC_HEADER_SIZE
+        assert len(raw) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
         (
-            msg_id, mode,
-            in_sob_c, in_prt_c, in_pps_c, out_prt_c, out_sob_c,
-            in_sob_w, out_sob_w, in_prt_w, out_prt_w, in_pps_w,
-            _reserved, chk,
-        ) = struct.unpack(cls._STRUCT_FMT, raw)
+            destination_id, source_id, packet_size,
+            command_id, command_ack, message_number,
+            date, month, year, time_of_day,
+            _reserved0,
+            command_id_repeat,
+            fpga_temp_raw, board_temperature, board_humidity,
+            input_sob_count, input_prt_count, input_pps_count,
+            output_prt_count, output_sob_count,
+            input_sob_width_us, output_sob_width_us,
+            input_prt_width_us, output_prt_width_us, input_pps_width_us,
+            pps_counter,
+            _reserved1,
+            chip_id,
+            chk,
+        ) = struct.unpack(cls._BODY_FMT + "B", raw)
+
         obj = cls()
-        obj.msg_id = msg_id
-        obj.mode = mode
-        obj.input_sob_count = in_sob_c
-        obj.input_prt_count = in_prt_c
-        obj.input_pps_count = in_pps_c
-        obj.output_prt_count = out_prt_c
-        obj.output_sob_count = out_sob_c
-        obj.input_sob_width_us = in_sob_w
-        obj.output_sob_width_us = out_sob_w
-        obj.input_prt_width_us = in_prt_w
-        obj.output_prt_width_us = out_prt_w
-        obj.input_pps_width_us = in_pps_w
-        obj.checksum_ok = crc8(raw[:57]) == chk
+        obj.destination_id = destination_id
+        obj.source_id = source_id
+        obj.packet_size = packet_size
+        obj.command_id = command_id
+        obj.command_ack = command_ack
+        obj.message_number = message_number
+        obj.date = date
+        obj.month = month
+        obj.year = year
+        obj.time_of_day = time_of_day
+        obj.command_id_repeat = command_id_repeat
+        fpga_temp_raw &= 0x3FF
+        obj.fpga_temperature = fpga_temp_raw - 1024 if fpga_temp_raw >= 512 else fpga_temp_raw
+        obj.board_temperature = board_temperature
+        obj.board_humidity = board_humidity
+        obj.input_sob_count = input_sob_count
+        obj.input_prt_count = input_prt_count
+        obj.input_pps_count = input_pps_count
+        obj.output_prt_count = output_prt_count
+        obj.output_sob_count = output_sob_count
+        obj.input_sob_width_us = input_sob_width_us
+        obj.output_sob_width_us = output_sob_width_us
+        obj.input_prt_width_us = input_prt_width_us
+        obj.output_prt_width_us = output_prt_width_us
+        obj.input_pps_width_us = input_pps_width_us
+        obj.pps_counter = pps_counter
+        obj.chip_id = chip_id
+        obj.checksum_ok = crc8(raw[:-1]) == chk
         return obj
 
 
@@ -797,9 +898,8 @@ def build_tx_frame(qtrm_slots) -> bytes:
 def parse_rx_frame(raw: bytes):
     """Parse a full 2970-byte frame received from QCC (QCC -> GUI direction)."""
     assert len(raw) == TOTAL_PACKET_SIZE, f"expected {TOTAL_PACKET_SIZE} bytes, got {len(raw)}"
-    fixed_header = raw[0:FIXED_HEADER_SIZE]
-    qcc_raw = raw[FIXED_HEADER_SIZE:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
-    qcc_header = QCCHeaderTx.from_bytes(qcc_raw)
+    header_raw = raw[0:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
+    qcc_header = QCCHeaderTx.from_bytes(header_raw)
 
     qtrm_slots = []
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
@@ -808,7 +908,7 @@ def parse_rx_frame(raw: bytes):
         slot_raw = raw[off:off + QTRM_SLOT_SIZE]
         qtrm_slots.append(QTRMSlot.from_bytes(i + 1, slot_raw))
 
-    return fixed_header, qcc_header, qtrm_slots
+    return qcc_header, qtrm_slots
 
 
 def default_qtrm_slots():

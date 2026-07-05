@@ -37,10 +37,14 @@ from raw_slot_model import RawSlotTableModel
 from segmented_control import SegmentedControl
 
 _RESPONSE_FIELDS = [
-    "MSG_ID", "MODE", "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
-    "OUTPUT_PRT_COUNT", "OUTPUT_SOB_COUNT", "INPUT_SOB_WIDTH_US",
-    "OUTPUT_SOB_WIDTH_US", "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US",
-    "INPUT_PPS_WIDTH_US", "CHECKSUM",
+    "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE", "COMMAND_ID", "COMMAND_ACK",
+    "MESSAGE_NUMBER", "DATE", "MONTH", "YEAR", "TIME_OF_DAY",
+    "COMMAND_ID_REPEAT", "FPGA_TEMPERATURE", "BOARD_TEMPERATURE", "BOARD_HUMIDITY",
+    "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
+    "OUTPUT_PRT_COUNT", "OUTPUT_SOB_COUNT",
+    "INPUT_SOB_WIDTH_US", "OUTPUT_SOB_WIDTH_US",
+    "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US", "INPUT_PPS_WIDTH_US",
+    "PPS_COUNTER", "CHIP_ID", "CHECKSUM",
 ]
 
 
@@ -120,22 +124,36 @@ class RxTestWindow(QMainWindow):
         self.count_label.setText(f"Frames received: {self._frame_count}")
         self.status_label.setText("Frame received")
 
-        qcc_raw = raw[FIXED_HEADER_SIZE:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
-        qcc_header = QCCHeaderTx.from_bytes(qcc_raw)
+        header_raw = raw[0:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
+        h = QCCHeaderTx.from_bytes(header_raw)
 
-        self.resp_labels["MSG_ID"].setText(str(qcc_header.msg_id))
-        self.resp_labels["MODE"].setText(str(qcc_header.mode))
-        self.resp_labels["INPUT_SOB_COUNT"].setText(str(qcc_header.input_sob_count))
-        self.resp_labels["INPUT_PRT_COUNT"].setText(str(qcc_header.input_prt_count))
-        self.resp_labels["INPUT_PPS_COUNT"].setText(str(qcc_header.input_pps_count))
-        self.resp_labels["OUTPUT_PRT_COUNT"].setText(str(qcc_header.output_prt_count))
-        self.resp_labels["OUTPUT_SOB_COUNT"].setText(str(qcc_header.output_sob_count))
-        self.resp_labels["INPUT_SOB_WIDTH_US"].setText(str(qcc_header.input_sob_width_us))
-        self.resp_labels["OUTPUT_SOB_WIDTH_US"].setText(str(qcc_header.output_sob_width_us))
-        self.resp_labels["INPUT_PRT_WIDTH_US"].setText(str(qcc_header.input_prt_width_us))
-        self.resp_labels["OUTPUT_PRT_WIDTH_US"].setText(str(qcc_header.output_prt_width_us))
-        self.resp_labels["INPUT_PPS_WIDTH_US"].setText(str(qcc_header.input_pps_width_us))
-        self.resp_labels["CHECKSUM"].setText("OK" if qcc_header.checksum_ok else "FAIL")
+        self.resp_labels["DESTINATION_ID"].setText(str(h.destination_id))
+        self.resp_labels["SOURCE_ID"].setText(str(h.source_id))
+        self.resp_labels["PACKET_SIZE"].setText(str(h.packet_size))
+        self.resp_labels["COMMAND_ID"].setText(str(h.command_id))
+        self.resp_labels["COMMAND_ACK"].setText(str(h.command_ack))
+        self.resp_labels["MESSAGE_NUMBER"].setText(str(h.message_number))
+        self.resp_labels["DATE"].setText(str(h.date))
+        self.resp_labels["MONTH"].setText(str(h.month))
+        self.resp_labels["YEAR"].setText(str(h.year))
+        self.resp_labels["TIME_OF_DAY"].setText(str(h.time_of_day))
+        self.resp_labels["COMMAND_ID_REPEAT"].setText(str(h.command_id_repeat))
+        self.resp_labels["FPGA_TEMPERATURE"].setText(str(h.fpga_temperature))
+        self.resp_labels["BOARD_TEMPERATURE"].setText(str(h.board_temperature))
+        self.resp_labels["BOARD_HUMIDITY"].setText(str(h.board_humidity))
+        self.resp_labels["INPUT_SOB_COUNT"].setText(str(h.input_sob_count))
+        self.resp_labels["INPUT_PRT_COUNT"].setText(str(h.input_prt_count))
+        self.resp_labels["INPUT_PPS_COUNT"].setText(str(h.input_pps_count))
+        self.resp_labels["OUTPUT_PRT_COUNT"].setText(str(h.output_prt_count))
+        self.resp_labels["OUTPUT_SOB_COUNT"].setText(str(h.output_sob_count))
+        self.resp_labels["INPUT_SOB_WIDTH_US"].setText(str(h.input_sob_width_us))
+        self.resp_labels["OUTPUT_SOB_WIDTH_US"].setText(str(h.output_sob_width_us))
+        self.resp_labels["INPUT_PRT_WIDTH_US"].setText(str(h.input_prt_width_us))
+        self.resp_labels["OUTPUT_PRT_WIDTH_US"].setText(str(h.output_prt_width_us))
+        self.resp_labels["INPUT_PPS_WIDTH_US"].setText(str(h.input_pps_width_us))
+        self.resp_labels["PPS_COUNTER"].setText(str(h.pps_counter))
+        self.resp_labels["CHIP_ID"].setText(f"0x{h.chip_id:08X}")
+        self.resp_labels["CHECKSUM"].setText("OK" if h.checksum_ok else "FAIL")
 
         base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
         slots = [raw[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE] for i in range(NUM_QTRM)]

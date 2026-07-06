@@ -17,7 +17,7 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel,
-    QGroupBox, QMessageBox, QTabWidget, QScrollArea, QInputDialog,
+    QGroupBox, QMessageBox, QTabWidget, QInputDialog,
 )
 
 from packet import (

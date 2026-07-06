@@ -56,6 +56,19 @@ def crc8(data: bytes) -> int:
 
 assert crc8(b"123456789") == 0xF4, "CRC-8 table generation is wrong"
 
+
+def _make_header_bytes(header: bytes = None) -> bytearray:
+    """
+    header, when given, is a real 90-byte RC->QCC header (built by
+    rc_settings.build_header() with the actual COMMAND_ID for whatever's
+    being sent) - callers that don't pass one keep the old all-zero
+    behavior, so existing tests/dead code paths are unaffected.
+    """
+    if header is None:
+        return bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    return bytearray(header)
+
 # ---------------------------------------------------------------------------
 # QTRM command types (Section 3 of the QTRM Message Format IDD)
 # ---------------------------------------------------------------------------
@@ -132,14 +145,12 @@ def is_link_response_ok(raw_slot: bytes) -> bool:
     return raw_slot[4:9] == LINK_SENTINEL
 
 
-def build_link_test_frame() -> bytes:
+def build_link_test_frame(header: bytes = None) -> bytes:
     """
-    Full 2970-byte frame: identical Link query to all 96 QTRMs. The first 90
-    bytes (fixed header + QCC header) are all zero for now - MSG_ID/MODE
-    aren't implemented on the QCC/QTRM side yet.
+    Full 2970-byte frame: identical Link query to all 96 QTRMs.
     """
     link_slot = build_link_query_slot()
-    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    out = _make_header_bytes(header)
     for _ in range(NUM_QTRM):
         out.extend(link_slot)
     assert len(out) == TOTAL_PACKET_SIZE
@@ -156,7 +167,7 @@ def parse_link_test_response(raw_frame: bytes):
     ]
 
 
-def build_individual_link_frame(target_qtrm_index: int) -> bytes:
+def build_individual_link_frame(target_qtrm_index: int, header: bytes = None) -> bytes:
     """
     Full 2970-byte frame: Link query sent to only ONE QTRM (0-based index),
     mirroring the Soft Reset "individual" pattern - every other QTRM's slot
@@ -165,7 +176,7 @@ def build_individual_link_frame(target_qtrm_index: int) -> bytes:
     assert 0 <= target_qtrm_index < NUM_QTRM
     link_slot = build_link_query_slot()
     empty_slot = bytes(QTRM_SLOT_SIZE)
-    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    out = _make_header_bytes(header)
     for i in range(NUM_QTRM):
         out.extend(link_slot if i == target_qtrm_index else empty_slot)
     assert len(out) == TOTAL_PACKET_SIZE
@@ -223,7 +234,7 @@ def build_status_query_slot(status_type: int, sub_status_type: int = 0,
 
 
 def build_status_frame(status_type: int, target_qtrm_index: int = None, sub_status_type: int = 0,
-                        beam_register_address: int = 0) -> bytes:
+                        beam_register_address: int = 0, header: bytes = None) -> bytes:
     """
     Full 2970-byte frame requesting a status response. If target_qtrm_index
     is None, every QTRM gets the same query (mirrors build_link_test_frame).
@@ -233,7 +244,7 @@ def build_status_frame(status_type: int, target_qtrm_index: int = None, sub_stat
     """
     status_slot = build_status_query_slot(status_type, sub_status_type, beam_register_address)
     empty_slot = bytes(QTRM_SLOT_SIZE)
-    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    out = _make_header_bytes(header)
     for i in range(NUM_QTRM):
         if target_qtrm_index is None or i == target_qtrm_index:
             out.extend(status_slot)
@@ -415,18 +426,17 @@ def build_isolation_slot(tx_isolation: bool) -> bytes:
 
 
 def build_cal_frame(tx_cal: bool, target_qtrm_index: int, channel: int, phase: int, atten: int,
-                     tx_isolation_for_others: bool = False) -> bytes:
+                     tx_isolation_for_others: bool = False, header: bytes = None) -> bytes:
     """
     Full 2970-byte frame: one QTRM (0-based index) gets an RX or TX
     Calibration command (per tx_cal) for the given channel, all other 95
     QTRMs get an Isolation command (Rx or Tx, per tx_isolation_for_others) so
-    they don't interfere with the calibration measurement. First 90 bytes
-    are zero for now.
+    they don't interfere with the calibration measurement.
     """
     assert 0 <= target_qtrm_index < NUM_QTRM
     cal_slot = build_cal_slot(tx_cal, channel, phase, atten)
     iso_slot = build_isolation_slot(tx_isolation_for_others)
-    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    out = _make_header_bytes(header)
     for i in range(NUM_QTRM):
         out.extend(cal_slot if i == target_qtrm_index else iso_slot)
     assert len(out) == TOTAL_PACKET_SIZE
@@ -438,16 +448,15 @@ def build_soft_reset_slot() -> bytes:
     return _build_status_family_slot(CMD_SOFT_RESET, STATUS_TYPE_NONE)
 
 
-def build_soft_reset_frame(target_qtrm_index: int = None) -> bytes:
+def build_soft_reset_frame(target_qtrm_index: int = None, header: bytes = None) -> bytes:
     """
     Full 2970-byte Soft Reset frame. If target_qtrm_index is None, every QTRM
     gets the Soft Reset command. Otherwise only that QTRM (0-based index) gets
     it; every other slot is left entirely zero-filled (no header, no command).
-    First 90 bytes are zero for now.
     """
     reset_slot = build_soft_reset_slot()
     empty_slot = bytes(QTRM_SLOT_SIZE)
-    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    out = _make_header_bytes(header)
     for i in range(NUM_QTRM):
         if target_qtrm_index is None or i == target_qtrm_index:
             out.extend(reset_slot)
@@ -457,18 +466,17 @@ def build_soft_reset_frame(target_qtrm_index: int = None) -> bytes:
     return bytes(out)
 
 
-def build_isolation_frame(tx_isolation: bool, target_qtrm_index: int = None) -> bytes:
+def build_isolation_frame(tx_isolation: bool, target_qtrm_index: int = None, header: bytes = None) -> bytes:
     """
     Full 2970-byte frame: Rx or Tx Isolation command (Section 7/8), no
     response expected - fire and forget, same as Soft Reset. If
     target_qtrm_index is None, every QTRM gets the isolation command.
     Otherwise only that QTRM (0-based index) gets it; every other slot is
-    left entirely zero-filled (no header, no command). First 90 bytes are
-    zero for now.
+    left entirely zero-filled (no header, no command).
     """
     iso_slot = build_isolation_slot(tx_isolation)
     empty_slot = bytes(QTRM_SLOT_SIZE)
-    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    out = _make_header_bytes(header)
     for i in range(NUM_QTRM):
         if target_qtrm_index is None or i == target_qtrm_index:
             out.extend(iso_slot)
@@ -495,16 +503,15 @@ def build_dwell_slot(channels) -> bytes:
     ).to_bytes()
 
 
-def build_dwell_frame(qtrm_channels) -> bytes:
+def build_dwell_frame(qtrm_channels, header: bytes = None) -> bytes:
     """
     Full 2970-byte Dwell frame. qtrm_channels is a list of NUM_QTRM items,
     each a list of 4 QTRMChannel objects (that QTRM's channels 1-4). Unlike
     Cal/Isolation/Soft Reset, Dwell has no single-QTRM-target convention -
-    every QTRM gets its own Dwell command, all in the same send. First 90
-    bytes are zero for now.
+    every QTRM gets its own Dwell command, all in the same send.
     """
     assert len(qtrm_channels) == NUM_QTRM
-    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    out = _make_header_bytes(header)
     for channels in qtrm_channels:
         out.extend(build_dwell_slot(channels))
     assert len(out) == TOTAL_PACKET_SIZE
@@ -549,7 +556,7 @@ def build_memory_write_slot(data_type: int, payload: bytes, mem_op: int = MEM_OP
 
 
 def build_memory_write_frame(data_type: int, payload: bytes, target_qtrm_index: int = None,
-                              mem_op: int = MEM_OP_FLASH_WRITE) -> bytes:
+                              mem_op: int = MEM_OP_FLASH_WRITE, header: bytes = None) -> bytes:
     """
     Full 2970-byte frame: Memory Write. If target_qtrm_index is None, every
     QTRM gets the same write (e.g. a uniform Temp Cutoff setting across the
@@ -561,7 +568,7 @@ def build_memory_write_frame(data_type: int, payload: bytes, target_qtrm_index: 
     assert target_qtrm_index is None or 0 <= target_qtrm_index < NUM_QTRM
     write_slot = build_memory_write_slot(data_type, payload, mem_op)
     empty_slot = bytes(QTRM_SLOT_SIZE)
-    out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
+    out = _make_header_bytes(header)
     for i in range(NUM_QTRM):
         if target_qtrm_index is None or i == target_qtrm_index:
             out.extend(write_slot)
@@ -571,18 +578,44 @@ def build_memory_write_frame(data_type: int, payload: bytes, target_qtrm_index: 
     return bytes(out)
 
 # ---------------------------------------------------------------------------
-# QCC RX header (Host -> QCC) - 58 bytes
+# QCC RX header (RC -> QCC, command) - full 90-byte header, per
+# QCC_90Byte_Header_BitTable.docx (2026-07-05)'s TX PACKET tables.
+#
+# Display/decode only for now - deliberately NOT wired into any of the
+# actual build_*_frame functions below, which still all send an all-zero
+# 90-byte header ("first 90 bytes zero for now" - unchanged, separate
+# decision). This class exists so tx_test_window.py can show the correct
+# field names for what's actually being sent (all zero) rather than the
+# old MSG_ID/MODE/COMMAND_DATA layout, which no longer matches the current
+# spec. Bytes 0-32 share the exact same structure as QCCHeaderTx's (the
+# response); the 56-byte Message Body (bytes 33-88) is mode-dependent and
+# still undefined for every mode per the doc (Mode 0/3/4 explicitly need
+# none; Mode 1/2/5 TBD) - kept as a generic opaque blob, not decoded further,
+# EXCEPT Mode 1/2 (Internal/External Loopback)'s SOB/PRT/PPS sub-commands,
+# which the Timing Generation tab does build for real (see
+# build_sob_message_body/build_prt_message_body/build_pps_message_body and
+# build_timing_command_frame below).
 # ---------------------------------------------------------------------------
 
 
 class QCCHeaderRx:
     """
-    Offset  Field           Size  Notes
-    0       MSG_ID          1     host-assigned, echoed back by QCC
-    1       MODE            1     0=Normal,1=Internal Loopback,2=External Loopback,
-                                   3=Status/Response Only,4=QCC Reset,5=Remote Programming
-    2-56    COMMAND_DATA    55    TBD - varies per MODE (currently unused, sent as zero)
-    57      CHECKSUM        1     CRC-8 over bytes 0-56
+    Offset  Field                  Size  Type    Notes
+    0       DESTINATION_ID         1     byte    RC fills - QCC swaps this into its response's Source ID
+    1       SOURCE_ID              1     byte    RC fills - QCC swaps this into its response's Destination ID
+    2-3     PACKET_SIZE            2     uint16  Fixed 2970
+    4       COMMAND_ID             1     byte    QCC mode: 0=Normal,1=Internal Loopback,2=External Loopback,
+                                                   3=Status/Response Only,4=QCC Reset,5=Remote Programming
+    5       COMMAND_ACK            1     byte    0x00 for a command (vs 0x01 for a response)
+    6-9     MESSAGE_NUMBER         4     uint32  Counter of messages sent by RC to QCC, incremented per message
+    10      DATE                   1     byte    Decimal 1-31
+    11      MONTH                  1     byte    Decimal 1-12
+    12-13   YEAR                   2     uint16  Decimal
+    14-17   TIME_OF_DAY            4     uint32  Format still TBD
+    18-31   RESERVED0              14    byte[14]
+    32      COMMAND_ID (repeat)    1     byte    Same as offset 4
+    33-88   MESSAGE_BODY           56    byte[56] Mode-dependent, undefined for every mode currently
+    89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
     """
 
     MODE_NORMAL = 0
@@ -592,26 +625,135 @@ class QCCHeaderRx:
     MODE_QCC_RESET = 4
     MODE_REMOTE_PROGRAMMING = 5
 
-    def __init__(self, msg_id: int = 0, mode: int = 0, command_data: bytes = b""):
-        self.msg_id = msg_id & 0xFF
-        self.mode = mode & 0xFF
-        cd = bytearray(55)
-        if command_data:
-            cd[: len(command_data)] = command_data[:55]
-        self.command_data = bytes(cd)
+    # Everything except the final checksum byte (89 bytes).
+    _BODY_FMT = "<BBHBBIBBHI14sB56s"
+
+    def __init__(self, destination_id: int = 0, source_id: int = 0, command_id: int = 0,
+                 message_number: int = 0, date: int = 0, month: int = 0, year: int = 0,
+                 time_of_day: int = 0, message_body: bytes = b"", reserved0: bytes = b""):
+        self.destination_id = destination_id & 0xFF
+        self.source_id = source_id & 0xFF
+        self.packet_size = TOTAL_PACKET_SIZE
+        self.command_id = command_id & 0xFF
+        self.command_ack = 0
+        self.message_number = message_number & 0xFFFFFFFF
+        self.date = date & 0xFF
+        self.month = month & 0xFF
+        self.year = year & 0xFFFF
+        self.time_of_day = time_of_day & 0xFFFFFFFF
+        self.command_id_repeat = self.command_id
+        body = bytearray(56)
+        if message_body:
+            body[: len(message_body)] = message_body[:56]
+        self.message_body = bytes(body)
+        reserved = bytearray(14)
+        if reserved0:
+            reserved[: len(reserved0)] = reserved0[:14]
+        self.reserved0 = bytes(reserved)
+        self.checksum_ok = None
 
     def to_bytes(self) -> bytes:
-        body = struct.pack("<BB55s", self.msg_id, self.mode, self.command_data)
-        chk = crc8(body)
-        return body + struct.pack("<B", chk)
+        body = struct.pack(
+            self._BODY_FMT,
+            self.destination_id, self.source_id, self.packet_size,
+            self.command_id, self.command_ack, self.message_number,
+            self.date, self.month, self.year, self.time_of_day,
+            self.reserved0,
+            self.command_id_repeat,
+            self.message_body,
+        )
+        assert len(body) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE - 1
+        return body + struct.pack("<B", crc8(body))
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "QCCHeaderRx":
-        assert len(raw) == QCC_HEADER_SIZE
-        msg_id, mode, command_data, chk = struct.unpack("<BB55sB", raw)
-        obj = cls(msg_id, mode, command_data)
-        obj.checksum_ok = crc8(raw[:57]) == chk
+        assert len(raw) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+        (
+            destination_id, source_id, packet_size,
+            command_id, command_ack, message_number,
+            date, month, year, time_of_day,
+            reserved0,
+            command_id_repeat,
+            message_body,
+            chk,
+        ) = struct.unpack(cls._BODY_FMT + "B", raw)
+
+        obj = cls()
+        obj.destination_id = destination_id
+        obj.source_id = source_id
+        obj.packet_size = packet_size
+        obj.command_id = command_id
+        obj.command_ack = command_ack
+        obj.message_number = message_number
+        obj.date = date
+        obj.month = month
+        obj.year = year
+        obj.reserved0 = reserved0
+        obj.time_of_day = time_of_day
+        obj.command_id_repeat = command_id_repeat
+        obj.message_body = message_body
+        obj.checksum_ok = crc8(raw[:-1]) == chk
         return obj
+
+
+# ---------------------------------------------------------------------------
+# Mode 1/2 (Internal/External Loopback) Message Body sub-commands - per
+# QCC_90Byte_Header_BitTable.docx's SOB/PRT/PPS Command breakdown tables.
+# COMMAND_TYPE lives at message_body[0] (absolute byte 34); the
+# command-specific fields immediately follow it. Each builder returns the
+# full 56-byte Message Body (COMMAND_TYPE + fields, zero-padded) ready to
+# pass into QCCHeaderRx(message_body=...) / rc_settings.build_header().
+# ---------------------------------------------------------------------------
+
+TIMING_CMD_SOB = 0x00
+TIMING_CMD_PRT = 0x01
+TIMING_CMD_PPS = 0x02  # valid only when the command's mode is External Loopback
+
+PRT_COUNT_INFINITE = 0xFFFFFFFF
+
+
+def build_sob_message_body(sob_width_us: int) -> bytes:
+    """SOB command (bytes 35-36 = SOB_WIDTH, u16); valid for Internal or External Loopback."""
+    body = bytearray(56)
+    body[0] = TIMING_CMD_SOB
+    struct.pack_into("<H", body, 1, sob_width_us & 0xFFFF)
+    return bytes(body)
+
+
+def build_prt_message_body(prt_count: int, pri_width_us: int, prt_width_us: int) -> bytes:
+    """
+    PRT command (bytes 35-38 = PRT_COUNT u32, 39-42 = PRI_WIDTH_US u32,
+    43-44 = PRT_WIDTH_US u16); valid for Internal or External Loopback.
+    prt_count = PRT_COUNT_INFINITE (0xFFFFFFFF) generates infinite PRTs.
+    """
+    body = bytearray(56)
+    body[0] = TIMING_CMD_PRT
+    struct.pack_into("<I", body, 1, prt_count & 0xFFFFFFFF)
+    struct.pack_into("<I", body, 5, pri_width_us & 0xFFFFFFFF)
+    struct.pack_into("<H", body, 9, prt_width_us & 0xFFFF)
+    return bytes(body)
+
+
+def build_pps_message_body(pps_width_us: int) -> bytes:
+    """PPS command (bytes 35-36 = PPS_WIDTH, u16); valid only for External Loopback."""
+    body = bytearray(56)
+    body[0] = TIMING_CMD_PPS
+    struct.pack_into("<H", body, 1, pps_width_us & 0xFFFF)
+    return bytes(body)
+
+
+def build_timing_command_frame(header: bytes) -> bytes:
+    """
+    Full 2970-byte frame for an SOB/PRT/PPS timing command. header must
+    already be a 90-byte QCCHeaderRx encoding the chosen Loopback mode and
+    Message Body (see build_*_message_body above) - the QTRM data block is
+    zero-filled since these commands don't touch any individual QTRM.
+    """
+    assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    out = bytearray(header)
+    out.extend(bytes(QTRM_BLOCK_SIZE))
+    assert len(out) == TOTAL_PACKET_SIZE
+    return bytes(out)
 
 
 # ---------------------------------------------------------------------------

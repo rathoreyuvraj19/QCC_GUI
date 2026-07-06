@@ -2,3 +2,10 @@ __pycache__/
 *.pyc
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+
+# PyInstaller build output / spec, and the RC Settings tab's local runtime
+# save file - all machine-specific/generated, not source.
+build/
+dist/
+*.spec
+rc_settings.json

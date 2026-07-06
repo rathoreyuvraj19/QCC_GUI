@@ -24,6 +24,14 @@ from packet import (
     build_cal_frame, build_soft_reset_frame, build_isolation_frame,
     build_status_frame, parse_status_frame, STATUS_TYPE_DIAGNOSTIC,
     build_dwell_frame, build_memory_write_frame,
+    QCCHeaderRx, QCCHeaderTx, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
+    build_sob_message_body, build_prt_message_body, build_pps_message_body,
+    build_timing_command_frame,
+)
+from rc_settings import (
+    rc_settings, COMMAND_ID_DWELL, COMMAND_ID_LINK_TEST, COMMAND_ID_STATUS,
+    COMMAND_ID_RX_CAL, COMMAND_ID_TX_CAL, COMMAND_ID_ISOLATION,
+    COMMAND_ID_SOFT_RESET, COMMAND_ID_MEMORY_OPERATION,
 )
 from udp_worker import UdpWorker
 from ping_worker import PingWorker
@@ -35,6 +43,8 @@ from isolation_tab import IsolationTab
 from soft_reset_tab import SoftResetTab
 from dwell_tab import DwellTab
 from memory_tab import MemoryTab
+from timing_tab import TimingTab
+from rc_settings_tab import RCSettingsTab
 
 # Plain local gate, not real security - just requires a deliberate action
 # before this NVM-write-capable tab can be opened, per Yuvraj's explicit ask.
@@ -57,7 +67,8 @@ class MainWindow(QMainWindow):
         self.worker: UdpWorker | None = None
         # None | "dwell" | "memory_write" | "memory_write_all" | "link_test" |
         # "individual_link_test" | "rx_cal" | "tx_cal" | "isolation_all" |
-        # "isolation_individual" | "status_all" | "status_individual"
+        # "isolation_individual" | "status_all" | "status_individual" |
+        # "timing_sob" | "timing_prt" | "timing_pps"
         self._awaiting_kind = None
         self._individual_link_qtrm = None
         self._rx_cal_target = None
@@ -129,6 +140,15 @@ class MainWindow(QMainWindow):
         self.memory_tab.write_all_requested.connect(self._on_memory_write_all)
         self._memory_tab_index = self.tabs.addTab(self.memory_tab, "Memory Operation")
 
+        self.timing_tab = TimingTab()
+        self.timing_tab.sob_send_requested.connect(self._on_timing_sob_send)
+        self.timing_tab.prt_send_requested.connect(self._on_timing_prt_send)
+        self.timing_tab.pps_send_requested.connect(self._on_timing_pps_send)
+        self.tabs.addTab(self.timing_tab, "Timing Generation")
+
+        self.rc_settings_tab = RCSettingsTab()
+        self.tabs.addTab(self.rc_settings_tab, "RC Settings")
+
         # Status tab's matrix resets to idle whenever the current tab
         # changes (to it or away from it) - a previous query's results
         # don't apply to whatever gets selected/sent next, so they
@@ -146,6 +166,12 @@ class MainWindow(QMainWindow):
 
     def _on_tab_changed(self, index):
         self.status_tab.reset_to_idle()
+        self.rx_cal_tab.reset_to_idle()
+        self.tx_cal_tab.reset_to_idle()
+        self.timing_tab.reset_to_idle()
+
+        if index == self.tabs.indexOf(self.rc_settings_tab):
+            self.rc_settings_tab.refresh_message_number()
 
         # Prompts every time this tab is entered (not just once per session)
         # - per Yuvraj's explicit ask, since it can write to real hardware's
@@ -448,6 +474,24 @@ class MainWindow(QMainWindow):
         qtrm_index, self._individual_status_qtrm = self._individual_status_qtrm, None
         self.status_tab.show_individual_no_response(qtrm_index)
 
+    def _on_timing_sob_timeout(self):
+        if self._awaiting_kind != "timing_sob":
+            return
+        self._awaiting_kind = None
+        self.timing_tab.show_sob_no_response()
+
+    def _on_timing_prt_timeout(self):
+        if self._awaiting_kind != "timing_prt":
+            return
+        self._awaiting_kind = None
+        self.timing_tab.show_prt_no_response()
+
+    def _on_timing_pps_timeout(self):
+        if self._awaiting_kind != "timing_pps":
+            return
+        self._awaiting_kind = None
+        self.timing_tab.show_pps_no_response()
+
     def _check_not_busy(self, silent: bool = False) -> bool:
         """
         Only one command may be in flight at a time (single request/response
@@ -471,7 +515,7 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        frame = build_dwell_frame(self.dwell_tab.get_channels())
+        frame = build_dwell_frame(self.dwell_tab.get_channels(), header=rc_settings.build_header(COMMAND_ID_DWELL))
 
         self._awaiting_kind = "dwell"
         self.dwell_tab.mark_pending()
@@ -485,7 +529,10 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        frame = build_memory_write_frame(data_type, payload, target_qtrm_index=qtrm_index)
+        frame = build_memory_write_frame(
+            data_type, payload, target_qtrm_index=qtrm_index,
+            header=rc_settings.build_header(COMMAND_ID_MEMORY_OPERATION),
+        )
 
         self._awaiting_kind = "memory_write"
         self._memory_write_target = qtrm_index
@@ -500,7 +547,10 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        frame = build_memory_write_frame(data_type, payload, target_qtrm_index=None)
+        frame = build_memory_write_frame(
+            data_type, payload, target_qtrm_index=None,
+            header=rc_settings.build_header(COMMAND_ID_MEMORY_OPERATION),
+        )
 
         self._awaiting_kind = "memory_write_all"
         self.memory_tab.mark_all_pending()
@@ -531,7 +581,7 @@ class MainWindow(QMainWindow):
         elif not self._check_not_busy():
             return
 
-        frame = build_link_test_frame()
+        frame = build_link_test_frame(header=rc_settings.build_header(COMMAND_ID_LINK_TEST))
 
         self._awaiting_kind = "link_test"
         self.link_test_tab.mark_pending()
@@ -545,7 +595,7 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        frame = build_individual_link_frame(qtrm_index)
+        frame = build_individual_link_frame(qtrm_index, header=rc_settings.build_header(COMMAND_ID_LINK_TEST))
 
         self._awaiting_kind = "individual_link_test"
         self._individual_link_qtrm = qtrm_index
@@ -563,6 +613,7 @@ class MainWindow(QMainWindow):
         frame = build_cal_frame(
             False, qtrm_index, channel, phase, atten,
             tx_isolation_for_others=tx_isolation_for_others,
+            header=rc_settings.build_header(COMMAND_ID_RX_CAL),
         )
 
         self._awaiting_kind = "rx_cal"
@@ -581,6 +632,7 @@ class MainWindow(QMainWindow):
         frame = build_cal_frame(
             True, qtrm_index, channel, phase, atten,
             tx_isolation_for_others=tx_isolation_for_others,
+            header=rc_settings.build_header(COMMAND_ID_TX_CAL),
         )
 
         self._awaiting_kind = "tx_cal"
@@ -596,7 +648,10 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        frame = build_isolation_frame(tx_isolation, target_qtrm_index=None)
+        frame = build_isolation_frame(
+            tx_isolation, target_qtrm_index=None,
+            header=rc_settings.build_header(COMMAND_ID_ISOLATION),
+        )
 
         self._awaiting_kind = "isolation_all"
         self.isolation_tab.mark_all_pending()
@@ -610,7 +665,10 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        frame = build_isolation_frame(tx_isolation, target_qtrm_index=qtrm_index)
+        frame = build_isolation_frame(
+            tx_isolation, target_qtrm_index=qtrm_index,
+            header=rc_settings.build_header(COMMAND_ID_ISOLATION),
+        )
 
         self._awaiting_kind = "isolation_individual"
         self._individual_isolation_qtrm = qtrm_index
@@ -628,6 +686,7 @@ class MainWindow(QMainWindow):
         frame = build_status_frame(
             status_type, target_qtrm_index=None,
             sub_status_type=sub_status_type, beam_register_address=beam_register_address,
+            header=rc_settings.build_header(COMMAND_ID_STATUS),
         )
 
         self._awaiting_kind = "status_all"
@@ -648,6 +707,7 @@ class MainWindow(QMainWindow):
         frame = build_status_frame(
             status_type, target_qtrm_index=qtrm_index,
             sub_status_type=sub_status_type, beam_register_address=beam_register_address,
+            header=rc_settings.build_header(COMMAND_ID_STATUS),
         )
 
         self._awaiting_kind = "status_individual"
@@ -663,14 +723,67 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
         # Soft Reset gets no response - fire and forget, no timing/timeout tracking.
-        frame = build_soft_reset_frame(target_qtrm_index=None)
+        frame = build_soft_reset_frame(target_qtrm_index=None, header=rc_settings.build_header(COMMAND_ID_SOFT_RESET))
         self.worker.send_frame(frame)
 
     def _on_reset_one_clicked(self, qtrm_index):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
-        frame = build_soft_reset_frame(target_qtrm_index=qtrm_index)
+        frame = build_soft_reset_frame(
+            target_qtrm_index=qtrm_index, header=rc_settings.build_header(COMMAND_ID_SOFT_RESET),
+        )
+        self.worker.send_frame(frame)
+
+    def _on_timing_sob_send(self, external_loopback: bool, sob_width_us: int):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        command_id = QCCHeaderRx.MODE_EXTERNAL_LOOPBACK if external_loopback else QCCHeaderRx.MODE_INTERNAL_LOOPBACK
+        header = rc_settings.build_header(command_id, message_body=build_sob_message_body(sob_width_us))
+        frame = build_timing_command_frame(header)
+
+        self._awaiting_kind = "timing_sob"
+        self.timing_tab.mark_sob_pending()
+        self._begin_wait(self._on_timing_sob_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_timing_prt_send(self, external_loopback: bool, prt_count: int, pri_width_us: int, prt_width_us: int):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        command_id = QCCHeaderRx.MODE_EXTERNAL_LOOPBACK if external_loopback else QCCHeaderRx.MODE_INTERNAL_LOOPBACK
+        message_body = build_prt_message_body(prt_count, pri_width_us, prt_width_us)
+        header = rc_settings.build_header(command_id, message_body=message_body)
+        frame = build_timing_command_frame(header)
+
+        self._awaiting_kind = "timing_prt"
+        self.timing_tab.mark_prt_pending()
+        self._begin_wait(self._on_timing_prt_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_timing_pps_send(self, pps_width_us: int):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        # PPS is External Loopback only, per the IDD - no loopback choice here.
+        header = rc_settings.build_header(
+            QCCHeaderRx.MODE_EXTERNAL_LOOPBACK, message_body=build_pps_message_body(pps_width_us),
+        )
+        frame = build_timing_command_frame(header)
+
+        self._awaiting_kind = "timing_pps"
+        self.timing_tab.mark_pps_pending()
+        self._begin_wait(self._on_timing_pps_timeout)
         self.worker.send_frame(frame)
 
     # Which tab's HeaderPanel gets fed the raw 90-byte header for each
@@ -682,6 +795,7 @@ class MainWindow(QMainWindow):
         "rx_cal": "rx_cal_tab", "tx_cal": "tx_cal_tab",
         "isolation_all": "isolation_tab", "isolation_individual": "isolation_tab",
         "status_all": "status_tab", "status_individual": "status_tab",
+        "timing_sob": "timing_tab", "timing_prt": "timing_tab", "timing_pps": "timing_tab",
     }
 
     def _update_header_panel(self, kind, raw: bytes):
@@ -823,6 +937,25 @@ class MainWindow(QMainWindow):
                 QMessageBox.warning(self, "Parse error", str(e))
                 return
             self.status_tab.show_individual_result(qtrm_index, results[qtrm_index])
+            return
+
+        if kind in ("timing_sob", "timing_prt", "timing_pps"):
+            # These commands have no per-QTRM result to parse - the only
+            # thing to check is that a response came back at all with a
+            # valid header checksum (already shown in the header panel above).
+            header = QCCHeaderTx.from_bytes(raw[0:FIXED_HEADER_SIZE + QCC_HEADER_SIZE])
+            if kind == "timing_sob":
+                if elapsed_us is not None:
+                    self.timing_tab.show_sob_response_time(elapsed_us)
+                self.timing_tab.show_sob_result(header.checksum_ok)
+            elif kind == "timing_prt":
+                if elapsed_us is not None:
+                    self.timing_tab.show_prt_response_time(elapsed_us)
+                self.timing_tab.show_prt_result(header.checksum_ok)
+            else:
+                if elapsed_us is not None:
+                    self.timing_tab.show_pps_response_time(elapsed_us)
+                self.timing_tab.show_pps_result(header.checksum_ok)
             return
 
         # kind is None here - a stray/unsolicited frame with nothing in

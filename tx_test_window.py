@@ -36,6 +36,12 @@ _MODE_NAMES = {
     QCCHeaderRx.MODE_REMOTE_PROGRAMMING: "Remote Programming",
 }
 
+_COMMAND_FIELDS = [
+    "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE", "COMMAND_ID", "COMMAND_ACK",
+    "MESSAGE_NUMBER", "DATE", "MONTH", "YEAR", "TIME_OF_DAY",
+    "COMMAND_ID_REPEAT", "CHECKSUM",
+]
+
 
 def _hex_full(data: bytes) -> str:
     """Every byte, space-separated, capitalized (e.g. 'AA 00 02 ...') - no truncation."""
@@ -84,14 +90,14 @@ class TxTestWindow(QMainWindow):
         outer = QVBoxLayout(box)
 
         row1 = QHBoxLayout()
-        self.msg_id_label = self._add_field(row1, "MSG_ID")
-        self.mode_label = self._add_field(row1, "MODE")
-        self.checksum_label = self._add_field(row1, "CHECKSUM")
+        self.field_labels = {}
+        for name in _COMMAND_FIELDS:
+            self.field_labels[name] = self._add_field(row1, name)
         row1.addStretch(1)
         outer.addLayout(row1)
 
-        self.fixed_header_label = self._add_full_width_field(outer, "Fixed Header (hex)")
-        self.command_data_label = self._add_full_width_field(outer, "COMMAND_DATA (hex)")
+        self.header_hex_label = self._add_full_width_field(outer, f"Full Header ({FIXED_HEADER_SIZE + QCC_HEADER_SIZE} bytes, hex)")
+        self.message_body_label = self._add_full_width_field(outer, "MESSAGE_BODY (56 bytes, hex)")
 
         return box
 
@@ -142,15 +148,24 @@ class TxTestWindow(QMainWindow):
         self.count_label.setText(f"Frames sent: {self._frame_count}")
         self.status_label.setText("Frame sent")
 
-        fixed_header = raw[0:FIXED_HEADER_SIZE]
-        qcc_raw = raw[FIXED_HEADER_SIZE:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
-        qcc_header = QCCHeaderRx.from_bytes(qcc_raw)
+        header_raw = raw[0:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
+        h = QCCHeaderRx.from_bytes(header_raw)
 
-        self.msg_id_label.setText(str(qcc_header.msg_id))
-        self.mode_label.setText(_MODE_NAMES.get(qcc_header.mode, str(qcc_header.mode)))
-        self.checksum_label.setText("OK" if qcc_header.checksum_ok else "FAIL")
-        self.fixed_header_label.setText(_hex_full(fixed_header))
-        self.command_data_label.setText(_hex_full(qcc_header.command_data))
+        self.field_labels["DESTINATION_ID"].setText(str(h.destination_id))
+        self.field_labels["SOURCE_ID"].setText(str(h.source_id))
+        self.field_labels["PACKET_SIZE"].setText(str(h.packet_size))
+        self.field_labels["COMMAND_ID"].setText(_MODE_NAMES.get(h.command_id, str(h.command_id)))
+        self.field_labels["COMMAND_ACK"].setText(str(h.command_ack))
+        self.field_labels["MESSAGE_NUMBER"].setText(str(h.message_number))
+        self.field_labels["DATE"].setText(str(h.date))
+        self.field_labels["MONTH"].setText(str(h.month))
+        self.field_labels["YEAR"].setText(str(h.year))
+        self.field_labels["TIME_OF_DAY"].setText(str(h.time_of_day))
+        self.field_labels["COMMAND_ID_REPEAT"].setText(str(h.command_id_repeat))
+        self.field_labels["CHECKSUM"].setText("OK" if h.checksum_ok else "FAIL")
+
+        self.header_hex_label.setText(_hex_full(header_raw))
+        self.message_body_label.setText(_hex_full(h.message_body))
 
         base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
         slots = [raw[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE] for i in range(NUM_QTRM)]

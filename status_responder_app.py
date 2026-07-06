@@ -343,7 +343,9 @@ class ByteGrid(QWidget):
     changing the underlying byte values at all.
     """
 
-    def __init__(self, num_bytes: int, wrap_cols: int = 16, parent=None):
+    bytes_changed = Signal()
+
+    def __init__(self, num_bytes: int, wrap_cols: int = 16, start_index: int = 1, parent=None):
         super().__init__(parent)
         self._hex_mode = True
         self._hex_validator = QRegularExpressionValidator(QRegularExpression(_HEX_VALIDATOR_PATTERN))
@@ -352,7 +354,8 @@ class ByteGrid(QWidget):
         grid = QGridLayout(self)
         grid.setSpacing(3)
         for i in range(num_bytes):
-            index_label = QLabel(str(i))
+            label_index = start_index + i
+            index_label = QLabel(str(label_index))
             index_label.setAlignment(Qt.AlignCenter)
             index_label.setStyleSheet("font-size: 7pt; color: rgba(238, 238, 238, 0.5);")
 
@@ -361,11 +364,12 @@ class ByteGrid(QWidget):
             cell.setFixedWidth(30)
             cell.setAlignment(Qt.AlignCenter)
             cell.setValidator(self._hex_validator)
-            cell.setToolTip(f"Byte {i}")
+            cell.setToolTip(f"Byte {label_index}")
             # The app's global QLineEdit style pads 8px/12px, meant for
             # normal-width fields - on a 30px-wide cell that leaves almost
             # no room for the digits themselves, making them invisible.
             cell.setStyleSheet("padding: 2px;")
+            cell.textChanged.connect(self.bytes_changed)
 
             cell_col = QVBoxLayout()
             cell_col.setSpacing(0)
@@ -383,8 +387,16 @@ class ByteGrid(QWidget):
         return bytes(int(cell.text(), base) if cell.text() else 0 for cell in self._cells)
 
     def set_bytes(self, data: bytes):
+        # Signals blocked: this is a programmatic bulk rewrite, not a user
+        # edit, and letting bytes_changed fire mid-loop lets a consumer
+        # read a torn state (some cells already in the new base/value,
+        # others not yet) - this is exactly what caused a ValueError
+        # overflow when switching hex/decimal mode while a worker was
+        # listening (see status_responder_app.py commit history).
         for cell, b in zip(self._cells, data):
+            cell.blockSignals(True)
             cell.setText(f"{b:02X}" if self._hex_mode else str(b))
+            cell.blockSignals(False)
 
     def set_hex_mode(self, hex_mode: bool):
         if hex_mode == self._hex_mode:
@@ -392,9 +404,11 @@ class ByteGrid(QWidget):
         current = self.get_bytes()  # read using the OLD mode before switching
         self._hex_mode = hex_mode
         for cell in self._cells:
+            cell.blockSignals(True)
             cell.setValidator(self._hex_validator if hex_mode else self._dec_validator)
             cell.setMaxLength(2 if hex_mode else 3)
             cell.setFixedWidth(30 if hex_mode else 36)
+            cell.blockSignals(False)
         self.set_bytes(current)  # rewrite using the NEW mode
 
 
@@ -431,14 +445,17 @@ class StatusResponderWindow(QMainWindow):
         layout.addLayout(top_row)
 
         layout.addWidget(QLabel(f"Fixed Header ({FIXED_HEADER_SIZE} bytes):"))
-        self.fixed_header_grid = ByteGrid(FIXED_HEADER_SIZE)
+        self.fixed_header_grid = ByteGrid(FIXED_HEADER_SIZE, start_index=1)
         self.fixed_header_grid.set_bytes(_MOCK_FIXED_HEADER)
         layout.addWidget(self.fixed_header_grid)
 
         layout.addWidget(QLabel(f"QCC Header ({QCC_HEADER_SIZE} bytes):"))
-        self.qcc_header_grid = ByteGrid(QCC_HEADER_SIZE)
+        self.qcc_header_grid = ByteGrid(QCC_HEADER_SIZE, start_index=FIXED_HEADER_SIZE + 1)
         self.qcc_header_grid.set_bytes(_MOCK_QCC_HEADER)
         layout.addWidget(self.qcc_header_grid)
+
+        self.fixed_header_grid.bytes_changed.connect(self._on_header_bytes_changed)
+        self.qcc_header_grid.bytes_changed.connect(self._on_header_bytes_changed)
 
         reset_row = QHBoxLayout()
         reset_row.addStretch(1)
@@ -456,6 +473,14 @@ class StatusResponderWindow(QMainWindow):
     def _on_reset_header_clicked(self):
         self.fixed_header_grid.set_bytes(_MOCK_FIXED_HEADER)
         self.qcc_header_grid.set_bytes(_MOCK_QCC_HEADER)
+
+    def _on_header_bytes_changed(self):
+        # Push edits straight into the already-running worker (if any) so
+        # they take effect on the very next reply, instead of only being
+        # picked up the next time listening is (re)started.
+        if self.worker is not None:
+            self.worker.fixed_header = self.fixed_header_grid.get_bytes()
+            self.worker.qcc_header = self.qcc_header_grid.get_bytes()
 
     def _build_listen_group(self):
         box = QGroupBox("Listener")

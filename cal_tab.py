@@ -45,32 +45,43 @@ _CARD_MAX_WIDTH = 540
 
 _TITLE_MAP = {"RX Cal": "RX Calibration", "TX Cal": "TX Calibration"}
 
-# Send-button states: idle (a distinct purple, shared across every command
-# tab's send button so they all read consistently), grey while waiting on
-# the targeted QTRM's Link-type response, green if it replied, red if the
-# 1s timeout elapsed without one.
+# Send button: a distinct purple, shared across every command tab's send
+# button so they all read consistently - always this color, never changes,
+# so its hover/pressed effect always works (matches how Dwell/Memory
+# Operation's send buttons behave - they never recolor either; only a
+# separate indicator below shows pending/success/failure).
 _SEND_COLOR = "#7C3AED"
 _SEND_HOVER_COLOR = "#6D28D9"
 _SEND_PRESSED_COLOR = "#5B21B6"
+
+_SEND_BTN_STYLE = (
+    f"QPushButton {{ background-color: {_SEND_COLOR}; color: {_TEXT}; border: none;"
+    "border-radius: 12px; font-size: 14px; font-weight: 600; }"
+    f"QPushButton:hover {{ background-color: {_SEND_HOVER_COLOR}; }}"
+    f"QPushButton:pressed {{ background-color: {_SEND_PRESSED_COLOR}; }}"
+)
+
+# Status indicator pill states - grey while waiting on the targeted QTRM's
+# Link-type response, green if it replied, red if the 1s timeout elapsed
+# without one. Idle (nothing sent yet/tab just switched to) is a quiet
+# outlined/transparent look so it doesn't read as an active state.
+_IDLE_TEXT_COLOR = "rgba(238, 238, 238, 0.45)"
 _PENDING_COLOR = "rgb(160, 165, 172)"
 _LINKED_COLOR = "rgb(146, 208, 165)"
 _NOT_LINKED_COLOR = "rgb(240, 149, 149)"
 _STATE_TEXT_COLOR = "#1f2328"
 
 
-def _send_button_style(bg_color: str = None) -> str:
+def _indicator_style(bg_color: str = None) -> str:
     if bg_color is None:
         return (
-            f"QPushButton {{ background-color: {_SEND_COLOR}; color: {_TEXT}; border: none;"
-            "border-radius: 12px; font-size: 14px; font-weight: 600; }"
-            f"QPushButton:hover {{ background-color: {_SEND_HOVER_COLOR}; }}"
-            f"QPushButton:pressed {{ background-color: {_SEND_PRESSED_COLOR}; }}"
+            f"QLabel {{ background: transparent; color: {_IDLE_TEXT_COLOR};"
+            f"border: 1px solid {_BORDER}; border-radius: 14px;"
+            "font-size: 12px; font-weight: 600; padding: 6px; }"
         )
     return (
-        f"QPushButton {{ background-color: {bg_color}; color: {_STATE_TEXT_COLOR}; border: none;"
-        "border-radius: 12px; font-size: 14px; font-weight: 600; }"
-        f"QPushButton:hover {{ background-color: {bg_color}; }}"
-        f"QPushButton:pressed {{ background-color: {bg_color}; }}"
+        f"QLabel {{ background-color: {bg_color}; color: {_STATE_TEXT_COLOR}; border: none;"
+        "border-radius: 14px; font-size: 12px; font-weight: 600; padding: 6px; }"
     )
 
 
@@ -159,12 +170,18 @@ class CalTab(QWidget):
         self.isolation_switch = SegmentedControl("Rx Isolation", "Tx Isolation")
         form.addWidget(self.isolation_switch)
 
-        # -- send button + response time --------------------------------------
+        # -- send button + status indicator + response time --------------------
         self.send_btn = QPushButton(f"Send {big_title}")
         self.send_btn.setFixedHeight(46)
-        self.send_btn.setStyleSheet(_send_button_style())
+        self.send_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.send_btn.clicked.connect(self._on_send_clicked)
         form.addWidget(self.send_btn)
+
+        self.status_indicator = QLabel("Not sent yet")
+        self.status_indicator.setAlignment(Qt.AlignCenter)
+        self.status_indicator.setFixedHeight(28)
+        self.status_indicator.setStyleSheet(_indicator_style())
+        form.addWidget(self.status_indicator)
 
         self.response_time_label = QLabel("")
         self.response_time_label.setAlignment(Qt.AlignCenter)
@@ -195,16 +212,28 @@ class CalTab(QWidget):
             self.isolation_switch.isChecked(),
         )
 
+    def reset_to_idle(self):
+        # Without this, the indicator is left showing whatever
+        # pending/linked/not-linked state its last send ended in, forever,
+        # even after switching tabs away and back - nothing else ever
+        # restores the idle look.
+        self.response_time_label.setText("")
+        self.status_indicator.setText("Not sent yet")
+        self.status_indicator.setStyleSheet(_indicator_style())
+
     def mark_pending(self):
         self.response_time_label.setText("Sending...")
-        self.send_btn.setStyleSheet(_send_button_style(_PENDING_COLOR))
+        self.status_indicator.setText("Sending...")
+        self.status_indicator.setStyleSheet(_indicator_style(_PENDING_COLOR))
 
     def show_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
 
     def show_result(self, linked: bool):
-        self.send_btn.setStyleSheet(_send_button_style(_LINKED_COLOR if linked else _NOT_LINKED_COLOR))
+        self.status_indicator.setText("Linked" if linked else "Not Linked")
+        self.status_indicator.setStyleSheet(_indicator_style(_LINKED_COLOR if linked else _NOT_LINKED_COLOR))
 
     def show_no_response(self):
         self.response_time_label.setText("No response")
-        self.send_btn.setStyleSheet(_send_button_style(_NOT_LINKED_COLOR))
+        self.status_indicator.setText("No Response")
+        self.status_indicator.setStyleSheet(_indicator_style(_NOT_LINKED_COLOR))

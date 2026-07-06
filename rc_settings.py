@@ -23,7 +23,9 @@ Yuvraj): Dwell/Link Test/Status/RX Cal/TX Cal/Isolation all send Normal
 Reset (4). Memory Operation sends Remote Programming (5). Timing
 Generation (SOB/PRT/PPS) sends Internal Loopback (1) or External Loopback
 (2), whichever the operator picks per-send - no single fixed COMMAND_ID_*
-constant for it, unlike every other tab above.
+constant for it, unlike every other tab above. The shared HeaderPanel's
+"Query QCC Status" button (present on every tab) sends Status/Response
+Only (3).
 """
 
 import json
@@ -51,6 +53,11 @@ COMMAND_ID_TX_CAL = QCCHeaderRx.MODE_NORMAL
 COMMAND_ID_ISOLATION = QCCHeaderRx.MODE_NORMAL
 COMMAND_ID_SOFT_RESET = QCCHeaderRx.MODE_QCC_RESET
 COMMAND_ID_MEMORY_OPERATION = QCCHeaderRx.MODE_REMOTE_PROGRAMMING
+# The HeaderPanel's "Query QCC Status" button (Mode 3 - "QCC simply returns
+# its current response packet, no action taken", per the doc) - distinct
+# from COMMAND_ID_STATUS above, which is the per-QTRM Status tab's Normal
+# (0) mode command.
+COMMAND_ID_QCC_STATUS = QCCHeaderRx.MODE_STATUS_ONLY
 
 
 class RCSettings:

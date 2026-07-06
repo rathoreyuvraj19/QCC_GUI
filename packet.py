@@ -594,7 +594,7 @@ def build_memory_write_frame(data_type: int, payload: bytes, target_qtrm_index: 
 # EXCEPT Mode 1/2 (Internal/External Loopback)'s SOB/PRT/PPS sub-commands,
 # which the Timing Generation tab does build for real (see
 # build_sob_message_body/build_prt_message_body/build_pps_message_body and
-# build_timing_command_frame below).
+# build_header_only_frame below).
 # ---------------------------------------------------------------------------
 
 
@@ -742,12 +742,15 @@ def build_pps_message_body(pps_width_us: int) -> bytes:
     return bytes(body)
 
 
-def build_timing_command_frame(header: bytes) -> bytes:
+def build_header_only_frame(header: bytes) -> bytes:
     """
-    Full 2970-byte frame for an SOB/PRT/PPS timing command. header must
-    already be a 90-byte QCCHeaderRx encoding the chosen Loopback mode and
-    Message Body (see build_*_message_body above) - the QTRM data block is
-    zero-filled since these commands don't touch any individual QTRM.
+    Full 2970-byte frame for a command that's entirely described by its
+    90-byte header, with the QTRM data block simply zero-filled since it
+    doesn't touch any individual QTRM - the SOB/PRT/PPS timing commands
+    (header encodes the chosen Loopback mode and Message Body, see
+    build_*_message_body above) and the QCC Status/Response Only command
+    (Mode 3 - "QCC simply returns its current response packet, no action
+    taken", per the doc) both fit this shape.
     """
     assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     out = bytearray(header)

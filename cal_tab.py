@@ -23,7 +23,11 @@ from PySide6.QtWidgets import (
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from header_panel import HeaderPanel
+from command_style import PENDING_COLOR as _PENDING_COLOR
+from command_style import SUCCESS_COLOR as _LINKED_COLOR
+from command_style import FAILURE_COLOR as _NOT_LINKED_COLOR
+from command_style import indicator_style as _indicator_style
+from command_style import send_button_style
 from segmented_control import SegmentedControl
 from spin_field import SpinField
 
@@ -49,40 +53,10 @@ _TITLE_MAP = {"RX Cal": "RX Calibration", "TX Cal": "TX Calibration"}
 # button so they all read consistently - always this color, never changes,
 # so its hover/pressed effect always works (matches how Dwell/Memory
 # Operation's send buttons behave - they never recolor either; only a
-# separate indicator below shows pending/success/failure).
-_SEND_COLOR = "#7C3AED"
-_SEND_HOVER_COLOR = "#6D28D9"
-_SEND_PRESSED_COLOR = "#5B21B6"
-
-_SEND_BTN_STYLE = (
-    f"QPushButton {{ background-color: {_SEND_COLOR}; color: {_TEXT}; border: none;"
-    "border-radius: 12px; font-size: 14px; font-weight: 600; }"
-    f"QPushButton:hover {{ background-color: {_SEND_HOVER_COLOR}; }}"
-    f"QPushButton:pressed {{ background-color: {_SEND_PRESSED_COLOR}; }}"
-)
-
-# Status indicator pill states - grey while waiting on the targeted QTRM's
-# Link-type response, green if it replied, red if the 1s timeout elapsed
-# without one. Idle (nothing sent yet/tab just switched to) is a quiet
-# outlined/transparent look so it doesn't read as an active state.
-_IDLE_TEXT_COLOR = "rgba(238, 238, 238, 0.45)"
-_PENDING_COLOR = "rgb(160, 165, 172)"
-_LINKED_COLOR = "rgb(146, 208, 165)"
-_NOT_LINKED_COLOR = "rgb(240, 149, 149)"
-_STATE_TEXT_COLOR = "#1f2328"
-
-
-def _indicator_style(bg_color: str = None) -> str:
-    if bg_color is None:
-        return (
-            f"QLabel {{ background: transparent; color: {_IDLE_TEXT_COLOR};"
-            f"border: 1px solid {_BORDER}; border-radius: 14px;"
-            "font-size: 12px; font-weight: 600; padding: 6px; }"
-        )
-    return (
-        f"QLabel {{ background-color: {bg_color}; color: {_STATE_TEXT_COLOR}; border: none;"
-        "border-radius: 14px; font-size: 12px; font-weight: 600; padding: 6px; }"
-    )
+# separate indicator below shows pending/success/failure). Colors/QSS now
+# come from command_style.py, the single source of truth every command
+# tab shares.
+_SEND_BTN_STYLE = send_button_style(radius=12, font_size_px=14)
 
 
 def _section_header(text: str) -> QLabel:
@@ -194,13 +168,9 @@ class CalTab(QWidget):
         scroll.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
         scroll.setWidget(card)
 
-        # Dedicated right-side space for the raw 90-byte header of whatever
-        # frame this tab most recently received - outside the scroll area so
-        # it's always visible regardless of scroll position.
-        self.header_panel = HeaderPanel()
-
-        outer.addWidget(scroll, 1)
-        outer.addWidget(self.header_panel)
+        # HeaderPanel is now a single global full-height sidebar owned by
+        # main_window.py, not embedded per-tab - see its module docstring.
+        outer.addWidget(scroll)
 
     def _on_send_clicked(self):
         qtrm_index = self.qtrm_spin.value()

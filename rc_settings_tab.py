@@ -75,6 +75,11 @@ class NamedByteGrid(QWidget):
             index_label = QLabel(str(label_index))
             index_label.setAlignment(Qt.AlignCenter)
             index_label.setStyleSheet("font-size: 7pt; color: rgba(238, 238, 238, 0.5);")
+            # Without a fixed width matching name_edit/cell, this label
+            # stretched to fill the whole (much wider) grid column once
+            # embedded in a QFormLayout row - its centered text then drifted
+            # away from the narrower name/value boxes above and below it.
+            index_label.setFixedWidth(84)
 
             cell = QLineEdit("00")
             cell.setMaxLength(2)
@@ -155,8 +160,23 @@ class RCSettingsTab(QWidget):
     # -- UI construction ---------------------------------------------------
 
     def _build_editable_group(self):
-        box = QGroupBox("Editable Header Fields (bytes 1-32)")
-        form = QFormLayout(box)
+        # Qt's QGroupBox::title subcontrol often ignores font-weight/size
+        # set via stylesheet (the style engine renders it from the
+        # widget's actual font, not the QSS text properties) - a real
+        # QLabel as the heading, styled normally, is the reliable way to
+        # get a bold/larger section title instead of the flat native one.
+        box = QGroupBox("")
+        box.setStyleSheet("QGroupBox { padding-top: 14px; }")
+        outer = QVBoxLayout(box)
+        title_label = QLabel("EDITABLE HEADER FIELDS (BYTES 1-32)")
+        title_label.setStyleSheet(
+            "color: #00adb5; font-size: 13pt; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
+        )
+        outer.addWidget(title_label)
+
+        form_widget = QWidget()
+        form = QFormLayout(form_widget)
+        outer.addWidget(form_widget)
 
         self.destination_id_spin = SpinField(0, 255, rc_settings.destination_id)
         self.destination_id_spin.spin.valueChanged.connect(self._on_fields_changed)
@@ -181,8 +201,18 @@ class RCSettingsTab(QWidget):
         return box
 
     def _build_auto_group(self):
-        box = QGroupBox("Automatic Header Fields (not editable here)")
-        form = QFormLayout(box)
+        box = QGroupBox("")
+        box.setStyleSheet("QGroupBox { padding-top: 14px; }")
+        outer = QVBoxLayout(box)
+        title_label = QLabel("AUTOMATIC HEADER FIELDS (NOT EDITABLE HERE)")
+        title_label.setStyleSheet(
+            "color: #00adb5; font-size: 13pt; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
+        )
+        outer.addWidget(title_label)
+
+        form_widget = QWidget()
+        form = QFormLayout(form_widget)
+        outer.addWidget(form_widget)
 
         self.packet_size_label = QLabel(f"{TOTAL_PACKET_SIZE} (fixed frame size)")
         self.packet_size_label.setStyleSheet(_AUTO_STYLE)

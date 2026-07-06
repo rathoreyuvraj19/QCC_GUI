@@ -17,15 +17,18 @@ is shown generically, since its meaning depends on which command occupies
 that slot.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow, QTableView,
-    QVBoxLayout, QWidget,
+    QHBoxLayout, QHeaderView, QLabel, QMainWindow,
+    QTableView, QVBoxLayout, QWidget,
 )
 
 from packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QTRM_SLOT_SIZE, NUM_QTRM, QCCHeaderRx
 from qtrm_filter import FilterBar, QtrmFilterProxyModel
+from raw_byte_grid import build_raw_byte_grid
 from raw_slot_model import RawSlotTableModel
 from segmented_control import SegmentedControl
+from titled_group import collapsible_group_box, titled_group_box
 
 _MODE_NAMES = {
     QCCHeaderRx.MODE_NORMAL: "Normal",
@@ -41,11 +44,6 @@ _COMMAND_FIELDS = [
     "MESSAGE_NUMBER", "DATE", "MONTH", "YEAR", "TIME_OF_DAY",
     "COMMAND_ID_REPEAT", "CHECKSUM",
 ]
-
-
-def _hex_full(data: bytes) -> str:
-    """Every byte, space-separated, capitalized (e.g. 'AA 00 02 ...') - no truncation."""
-    return " ".join(f"{b:02X}" for b in data) or "-"
 
 
 class TxTestWindow(QMainWindow):
@@ -71,8 +69,9 @@ class TxTestWindow(QMainWindow):
     # -- UI construction ---------------------------------------------------
 
     def _build_status_group(self):
-        box = QGroupBox("Status")
-        row = QHBoxLayout(box)
+        box, outer = collapsible_group_box("Status")
+        row = QHBoxLayout()
+        outer.addLayout(row)
         self.status_label = QLabel("No frames sent yet")
         self.count_label = QLabel("Frames sent: 0")
         row.addWidget(self.status_label)
@@ -86,8 +85,7 @@ class TxTestWindow(QMainWindow):
         return box
 
     def _build_header_group(self):
-        box = QGroupBox("Last Sent Header (Host -> QCC)")
-        outer = QVBoxLayout(box)
+        box, outer = titled_group_box("Last Sent Header (Host -> QCC)")
 
         row1 = QHBoxLayout()
         self.field_labels = {}
@@ -96,8 +94,10 @@ class TxTestWindow(QMainWindow):
         row1.addStretch(1)
         outer.addLayout(row1)
 
-        self.header_hex_label = self._add_full_width_field(outer, f"Full Header ({FIXED_HEADER_SIZE + QCC_HEADER_SIZE} bytes, hex)")
-        self.message_body_label = self._add_full_width_field(outer, "MESSAGE_BODY (56 bytes, hex)")
+        total_size = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+        outer.addWidget(QLabel(f"Full Header ({total_size} bytes) - each byte, indexed:"))
+        byte_grid, self.header_byte_labels = build_raw_byte_grid(total_size)
+        outer.addWidget(byte_grid)
 
         return box
 
@@ -107,23 +107,12 @@ class TxTestWindow(QMainWindow):
         col.addWidget(QLabel(title))
         value = QLabel("-")
         value.setStyleSheet("color: #00adb5; font-weight: 600;")
+        value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        value.setCursor(Qt.IBeamCursor)
         col.addWidget(value)
         wrapper = QWidget()
         wrapper.setLayout(col)
         row_layout.addWidget(wrapper, stretch)
-        return value
-
-    @staticmethod
-    def _add_full_width_field(outer_layout: QVBoxLayout, title: str) -> QLabel:
-        # Own row, full width, word-wrapped - so the complete byte sequence
-        # (32 bytes for the Fixed Header, 55 for COMMAND_DATA) is visible at
-        # once instead of being truncated next to the small MSG_ID/MODE/
-        # CHECKSUM fields.
-        outer_layout.addWidget(QLabel(title))
-        value = QLabel("-")
-        value.setWordWrap(True)
-        value.setStyleSheet("color: #00adb5; font-weight: 600;")
-        outer_layout.addWidget(value)
         return value
 
     def _build_filter_bar(self):
@@ -164,8 +153,8 @@ class TxTestWindow(QMainWindow):
         self.field_labels["COMMAND_ID_REPEAT"].setText(str(h.command_id_repeat))
         self.field_labels["CHECKSUM"].setText("OK" if h.checksum_ok else "FAIL")
 
-        self.header_hex_label.setText(_hex_full(header_raw))
-        self.message_body_label.setText(_hex_full(h.message_body))
+        for i, b in enumerate(header_raw):
+            self.header_byte_labels[i].setText(f"{b:02X}")
 
         base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
         slots = [raw[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE] for i in range(NUM_QTRM)]

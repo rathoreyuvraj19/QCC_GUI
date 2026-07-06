@@ -7,15 +7,15 @@ MODE 1 / 2" tables. Unlike every other command tab (which targets individual
 QTRMs via the 2880-byte QTRM data block), these three commands live entirely
 in the 90-byte header's Message Body (byte 34 = COMMAND_TYPE selecting
 SOB/PRT/PPS, bytes 35-89 = that command's fields) - the QTRM data block is
-unused, per build_timing_command_frame in packet.py.
+unused, per build_header_only_frame in packet.py.
 
 Page is split into three vertical partitions side by side (SOB | PRT |
 PPS), one per timing signal, each with its own settings and its own
 dedicated Send button - SOB and PRT can run in either Internal or External
 Loopback (a segmented control per section); PPS is External Loopback only,
-per the doc, so it has no such switch. A single shared HeaderPanel on the
-right shows whichever command's response arrived most recently, same as
-every other tab.
+per the doc, so it has no such switch. main_window.py's single global
+HeaderPanel sidebar shows whichever command's response arrived most
+recently, same as every other tab.
 """
 
 from PySide6.QtCore import Qt, Signal
@@ -24,7 +24,11 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from header_panel import HeaderPanel
+from command_style import PENDING_COLOR as _PENDING_COLOR
+from command_style import SUCCESS_COLOR as _OK_COLOR
+from command_style import FAILURE_COLOR as _FAIL_COLOR
+from command_style import indicator_style as _indicator_style_base
+from command_style import send_button_style
 from packet import PRT_COUNT_INFINITE
 from segmented_control import SegmentedControl
 from spin_field import SpinField
@@ -40,35 +44,13 @@ _BORDER = "#4a515a"
 # sentinel is handled separately via the Infinite checkbox instead.
 _U32_SPIN_MAX = 2_147_483_647
 
-_SEND_COLOR = "#7C3AED"
-_SEND_HOVER_COLOR = "#6D28D9"
-_SEND_PRESSED_COLOR = "#5B21B6"
-
-_SEND_BTN_STYLE = (
-    f"QPushButton {{ background-color: {_SEND_COLOR}; color: {_TEXT}; border: none;"
-    "border-radius: 12px; font-size: 14px; font-weight: 600; padding: 10px; }"
-    f"QPushButton:hover {{ background-color: {_SEND_HOVER_COLOR}; }}"
-    f"QPushButton:pressed {{ background-color: {_SEND_PRESSED_COLOR}; }}"
-)
-
-_IDLE_TEXT_COLOR = "rgba(238, 238, 238, 0.45)"
-_PENDING_COLOR = "rgb(160, 165, 172)"
-_OK_COLOR = "rgb(146, 208, 165)"
-_FAIL_COLOR = "rgb(240, 149, 149)"
-_STATE_TEXT_COLOR = "#1f2328"
+# Colors/QSS from command_style.py, the single source of truth every
+# command tab shares - this file only picks its own radius/padding.
+_SEND_BTN_STYLE = send_button_style(radius=12, font_size_px=14, padding="10px")
 
 
 def _indicator_style(bg_color: str = None) -> str:
-    if bg_color is None:
-        return (
-            f"QLabel {{ background: transparent; color: {_IDLE_TEXT_COLOR};"
-            f"border: 1px solid {_BORDER}; border-radius: 12px;"
-            "font-size: 12px; font-weight: 600; padding: 5px; }"
-        )
-    return (
-        f"QLabel {{ background-color: {bg_color}; color: {_STATE_TEXT_COLOR}; border: none;"
-        "border-radius: 12px; font-size: 12px; font-weight: 600; padding: 5px; }"
-    )
+    return _indicator_style_base(bg_color, radius=12, border_color=_BORDER)
 
 
 _COLUMN_MIN_WIDTH = 300
@@ -95,7 +77,9 @@ def _section_box(title: str) -> tuple:
     box.setMinimumWidth(_COLUMN_MIN_WIDTH)
 
     outer = QVBoxLayout(box)
-    outer.setContentsMargins(14, 6, 14, 10)
+    # Standard 18px inner padding on all sides, uniform across all 3
+    # section columns (was asymmetric before: 14/6/14/10).
+    outer.setContentsMargins(18, 18, 18, 18)
     outer.setSpacing(10)
 
     heading = QLabel(title)
@@ -158,16 +142,11 @@ class TimingTab(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(content)
 
-        # Dedicated right-side space for the raw 90-byte header of whatever
-        # frame this tab most recently received - outside the scroll area so
-        # it's always visible regardless of scroll position, same as every
-        # other command tab.
-        self.header_panel = HeaderPanel()
-
+        # HeaderPanel is now a single global full-height sidebar owned by
+        # main_window.py, not embedded per-tab.
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll, 1)
-        outer.addWidget(self.header_panel)
+        outer.addWidget(scroll)
 
     # -- section builders ---------------------------------------------------
 
@@ -185,6 +164,15 @@ class TimingTab(QWidget):
         _field_row(grid, 0, "SOB Width (µs)", self.sob_width_spin)
         form.addLayout(grid)
 
+        # Stretch BEFORE the button block (not after) - this pushes the
+        # Send button + its status/response labels down to the bottom of
+        # the column, so all 3 sections' buttons land at the same Y
+        # position regardless of how many fields are above them (SOB/PPS
+        # have 1 field, PRT has 4) - every column shares the same total
+        # height (Expanding size policy, same QHBoxLayout row), so the
+        # stretch absorbs exactly the difference.
+        form.addStretch(1)
+
         self.sob_send_btn = QPushButton("Send SOB Command")
         self.sob_send_btn.setFixedHeight(38)
         self.sob_send_btn.setStyleSheet(_SEND_BTN_STYLE)
@@ -200,7 +188,6 @@ class TimingTab(QWidget):
         self.sob_response_time_label.setAlignment(Qt.AlignCenter)
         self.sob_response_time_label.setStyleSheet(f"color: {_MUTED}; font-size: 11px; background: transparent;")
         form.addWidget(self.sob_response_time_label)
-        form.addStretch(1)
 
         return box
 
@@ -226,6 +213,8 @@ class TimingTab(QWidget):
         _field_row(grid, 3, "PRT Width (µs)", self.prt_width_spin)
         form.addLayout(grid)
 
+        form.addStretch(1)
+
         self.prt_send_btn = QPushButton("Send PRT Command")
         self.prt_send_btn.setFixedHeight(38)
         self.prt_send_btn.setStyleSheet(_SEND_BTN_STYLE)
@@ -241,7 +230,6 @@ class TimingTab(QWidget):
         self.prt_response_time_label.setAlignment(Qt.AlignCenter)
         self.prt_response_time_label.setStyleSheet(f"color: {_MUTED}; font-size: 11px; background: transparent;")
         form.addWidget(self.prt_response_time_label)
-        form.addStretch(1)
 
         return box
 
@@ -260,6 +248,8 @@ class TimingTab(QWidget):
         _field_row(grid, 0, "PPS Width (µs)", self.pps_width_spin)
         form.addLayout(grid)
 
+        form.addStretch(1)
+
         self.pps_send_btn = QPushButton("Send PPS Command")
         self.pps_send_btn.setFixedHeight(38)
         self.pps_send_btn.setStyleSheet(_SEND_BTN_STYLE)
@@ -275,7 +265,6 @@ class TimingTab(QWidget):
         self.pps_response_time_label.setAlignment(Qt.AlignCenter)
         self.pps_response_time_label.setStyleSheet(f"color: {_MUTED}; font-size: 11px; background: transparent;")
         form.addWidget(self.pps_response_time_label)
-        form.addStretch(1)
 
         return box
 

@@ -18,6 +18,11 @@ or received." Since there's now no independent listener, there's no port
 conflict possible - both windows show exactly what the main app itself
 sent/received, nothing else.
 
+Header display mirrors tx_test_window.py exactly: a small row of the core
+routing/command fields, then the full 90-byte header as raw indexed bytes
+(via raw_byte_grid.py) rather than every decoded sensor/counter field -
+"instead of analyzed data i just want to see raw bytes just like TX".
+
 Raw byte view (via raw_slot_model.RawSlotTableModel) - no per-command
 semantic decoding of the QTRM slot bytes past the four fields fixed at
 the same position in every slot (Header, Packet Size ID, Command Type,
@@ -26,25 +31,23 @@ generically, since its meaning depends on which command occupies that
 slot.
 """
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QGridLayout, QGroupBox, QHBoxLayout, QHeaderView, QLabel, QMainWindow,
+    QHBoxLayout, QHeaderView, QLabel, QMainWindow,
     QTableView, QVBoxLayout, QWidget,
 )
 
 from packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QTRM_SLOT_SIZE, NUM_QTRM, QCCHeaderTx
 from qtrm_filter import FilterBar, QtrmFilterProxyModel
+from raw_byte_grid import build_raw_byte_grid
 from raw_slot_model import RawSlotTableModel
 from segmented_control import SegmentedControl
+from titled_group import collapsible_group_box, titled_group_box
 
 _RESPONSE_FIELDS = [
     "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE", "COMMAND_ID", "COMMAND_ACK",
     "MESSAGE_NUMBER", "DATE", "MONTH", "YEAR", "TIME_OF_DAY",
-    "COMMAND_ID_REPEAT", "FPGA_TEMPERATURE", "BOARD_TEMPERATURE", "BOARD_HUMIDITY",
-    "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
-    "OUTPUT_PRT_COUNT", "OUTPUT_SOB_COUNT",
-    "INPUT_SOB_WIDTH_US", "OUTPUT_SOB_WIDTH_US",
-    "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US", "INPUT_PPS_WIDTH_US",
-    "PPS_COUNTER", "CHIP_ID", "CHECKSUM",
+    "COMMAND_ID_REPEAT", "CHECKSUM",
 ]
 
 
@@ -71,8 +74,9 @@ class RxTestWindow(QMainWindow):
     # -- UI construction ---------------------------------------------------
 
     def _build_status_group(self):
-        box = QGroupBox("Status")
-        row = QHBoxLayout(box)
+        box, outer = collapsible_group_box("Status")
+        row = QHBoxLayout()
+        outer.addLayout(row)
         self.status_label = QLabel("No frames received yet")
         self.count_label = QLabel("Frames received: 0")
         row.addWidget(self.status_label)
@@ -86,21 +90,35 @@ class RxTestWindow(QMainWindow):
         return box
 
     def _build_header_group(self):
-        box = QGroupBox("Last Received Header (QCC -> Host)")
-        grid = QGridLayout(box)
+        box, outer = titled_group_box("Last Received Header (QCC -> Host)")
+
+        row1 = QHBoxLayout()
         self.resp_labels = {}
-        wrap_cols = 5
-        for i, name in enumerate(_RESPONSE_FIELDS):
-            col = QVBoxLayout()
-            col.addWidget(QLabel(name))
-            value = QLabel("-")
-            value.setStyleSheet("color: #00adb5; font-weight: 600;")
-            self.resp_labels[name] = value
-            col.addWidget(value)
-            cell = QWidget()
-            cell.setLayout(col)
-            grid.addWidget(cell, i // wrap_cols, i % wrap_cols)
+        for name in _RESPONSE_FIELDS:
+            self.resp_labels[name] = self._add_field(row1, name)
+        row1.addStretch(1)
+        outer.addLayout(row1)
+
+        total_size = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+        outer.addWidget(QLabel(f"Full Header ({total_size} bytes) - each byte, indexed:"))
+        byte_grid, self.header_byte_labels = build_raw_byte_grid(total_size)
+        outer.addWidget(byte_grid)
+
         return box
+
+    @staticmethod
+    def _add_field(row_layout: QHBoxLayout, title: str) -> QLabel:
+        col = QVBoxLayout()
+        col.addWidget(QLabel(title))
+        value = QLabel("-")
+        value.setStyleSheet("color: #00adb5; font-weight: 600;")
+        value.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        value.setCursor(Qt.IBeamCursor)
+        col.addWidget(value)
+        wrapper = QWidget()
+        wrapper.setLayout(col)
+        row_layout.addWidget(wrapper)
+        return value
 
     def _build_filter_bar(self):
         self.filter_bar = FilterBar(self.proxy_model, self.model)
@@ -138,22 +156,10 @@ class RxTestWindow(QMainWindow):
         self.resp_labels["YEAR"].setText(str(h.year))
         self.resp_labels["TIME_OF_DAY"].setText(str(h.time_of_day))
         self.resp_labels["COMMAND_ID_REPEAT"].setText(str(h.command_id_repeat))
-        self.resp_labels["FPGA_TEMPERATURE"].setText(str(h.fpga_temperature))
-        self.resp_labels["BOARD_TEMPERATURE"].setText(str(h.board_temperature))
-        self.resp_labels["BOARD_HUMIDITY"].setText(str(h.board_humidity))
-        self.resp_labels["INPUT_SOB_COUNT"].setText(str(h.input_sob_count))
-        self.resp_labels["INPUT_PRT_COUNT"].setText(str(h.input_prt_count))
-        self.resp_labels["INPUT_PPS_COUNT"].setText(str(h.input_pps_count))
-        self.resp_labels["OUTPUT_PRT_COUNT"].setText(str(h.output_prt_count))
-        self.resp_labels["OUTPUT_SOB_COUNT"].setText(str(h.output_sob_count))
-        self.resp_labels["INPUT_SOB_WIDTH_US"].setText(str(h.input_sob_width_us))
-        self.resp_labels["OUTPUT_SOB_WIDTH_US"].setText(str(h.output_sob_width_us))
-        self.resp_labels["INPUT_PRT_WIDTH_US"].setText(str(h.input_prt_width_us))
-        self.resp_labels["OUTPUT_PRT_WIDTH_US"].setText(str(h.output_prt_width_us))
-        self.resp_labels["INPUT_PPS_WIDTH_US"].setText(str(h.input_pps_width_us))
-        self.resp_labels["PPS_COUNTER"].setText(str(h.pps_counter))
-        self.resp_labels["CHIP_ID"].setText(f"0x{h.chip_id:08X}")
         self.resp_labels["CHECKSUM"].setText("OK" if h.checksum_ok else "FAIL")
+
+        for i, b in enumerate(header_raw):
+            self.header_byte_labels[i].setText(f"{b:02X}")
 
         base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
         slots = [raw[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE] for i in range(NUM_QTRM)]

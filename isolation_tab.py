@@ -25,11 +25,14 @@ from PySide6.QtWidgets import (
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from header_panel import HeaderPanel
+from command_style import PENDING_COLOR as _PENDING_COLOR
+from command_style import SUCCESS_COLOR as _LINKED_COLOR
+from command_style import FAILURE_COLOR as _NOT_LINKED_COLOR
+from command_style import matrix_button_style as _matrix_button_style
+from command_style import send_button_style
 from qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_to_bottom
 from segmented_control import SegmentedControl
 
-_BUTTON_BASE = "padding: 2px 4px; font-size: 8pt; font-weight: 500;"
 _BUTTON_MIN_WIDTH = 46
 _BUTTON_MIN_HEIGHT = 24
 
@@ -41,49 +44,13 @@ _CP_BOX_STYLE = (
     "QGroupBox::title { subcontrol-origin: margin; left: 2px; padding: 0 2px; }"
 )
 
-# Matrix button states match Link Test's LED palette exactly (light
-# grey/idle, darker grey/pending, green/linked, red/not-linked) - each of
-# these 96 buttons is a per-QTRM status indicator, same role as one of Link
-# Test's LEDs, so it should look like one. This is distinct from "Send
-# All", which stays a fixed purple always (matching every other command
-# tab's send button) since it represents an action, not a single QTRM's
-# status.
-_IDLE_COLOR = "rgb(222, 224, 227)"
-_IDLE_HOVER_COLOR = "rgb(200, 203, 208)"
-_IDLE_PRESSED_COLOR = "rgb(180, 184, 190)"
-_PENDING_COLOR = "rgb(160, 165, 172)"
-_LINKED_COLOR = "rgb(146, 208, 165)"
-_NOT_LINKED_COLOR = "rgb(240, 149, 149)"
-_STATE_TEXT_COLOR = "#1f2328"
-
-# Send button color - shared across every command tab's primary send button
-# so they all read consistently, distinct from the app's default teal.
-_SEND_BTN_STYLE = (
-    "QPushButton { background-color: #7C3AED; color: #eeeeee; border: none;"
-    "border-radius: 16px; padding: 11px 24px; font-weight: 600; }"
-    "QPushButton:hover { background-color: #6D28D9; }"
-    "QPushButton:pressed { background-color: #5B21B6; }"
-)
-
-
-def _matrix_button_style(bg_color: str = None) -> str:
-    # Full "QPushButton { ... }" selector form (not the flat property-only
-    # form) - QSS pseudo-states like :hover/:pressed only apply inside a
-    # selector block, otherwise the button looks flat/unresponsive on click
-    # even though it's still functionally clickable either way. Idle gets
-    # real hover/pressed shading since it's meant to be clicked; the
-    # pending/linked/not-linked states stay flat - they're status snapshots.
-    if bg_color is None:
-        return (
-            f"QPushButton {{ {_BUTTON_BASE} background-color: {_IDLE_COLOR}; color: {_STATE_TEXT_COLOR}; }}"
-            f"QPushButton:hover {{ background-color: {_IDLE_HOVER_COLOR}; }}"
-            f"QPushButton:pressed {{ background-color: {_IDLE_PRESSED_COLOR}; }}"
-        )
-    return (
-        f"QPushButton {{ {_BUTTON_BASE} background-color: {bg_color}; color: {_STATE_TEXT_COLOR}; }}"
-        f"QPushButton:hover {{ background-color: {bg_color}; }}"
-        f"QPushButton:pressed {{ background-color: {bg_color}; }}"
-    )
+# Matrix button colors/QSS from command_style.py (single source of truth
+# every command tab shares) - matches Link Test's LED palette exactly,
+# since each of these 96 buttons is a per-QTRM status indicator, same role
+# as one of Link Test's LEDs. Distinct from "Send All", which stays a
+# fixed purple always (matching every other command tab's send button)
+# since it represents an action, not a single QTRM's status.
+_SEND_BTN_STYLE = send_button_style()
 
 
 class IsolationTab(QWidget):
@@ -150,15 +117,11 @@ class IsolationTab(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(content)
 
-        # Dedicated right-side space for the raw 90-byte header of whatever
-        # frame this tab most recently received - outside the scroll area so
-        # it's always visible regardless of scroll position.
-        self.header_panel = HeaderPanel()
-
+        # HeaderPanel is now a single global full-height sidebar owned by
+        # main_window.py, not embedded per-tab - see its module docstring.
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll, 1)
-        outer.addWidget(self.header_panel)
+        outer.addWidget(scroll)
 
     def _on_send_all_clicked(self):
         self.send_all_requested.emit(self.mode_switch.isChecked())

@@ -1,42 +1,87 @@
 """
 header_panel.py
 
-Small, reusable "dedicated space" showing whatever frame a tab most
-recently received back - decoded QCC Header fields (per
+A single global "Last Received Header" sidebar, owned and instantiated
+once by main_window.py - decoded QCC Header fields (per
 QCC_90Byte_Header_BitTable.docx, 2026-07-05: the full 90-byte response
 header, since every response flowing back to the main GUI is QCC -> RC
 direction) plus the raw hex of the whole 90-byte header (kept alongside
 the decoded fields for byte-level verification, e.g. spotting an
-unexpected non-zero reserved byte). Meant to sit in a fixed-width column
-on the right of a tab's main content, not inside its scroll area, so it's
-always visible regardless of scroll position.
+unexpected non-zero reserved byte).
+
+Positioned as a fixed-width right column spanning the FULL window height,
+next to a left column holding the Connection bar + Tabs (not embedded
+inside any individual tab's own layout, and not one instance per tab) -
+so it shows whichever frame was most recently received from ANY tab, a
+global "last received," not per-tab memory.
+
+Also carries a "Query QCC Status" button - QCC Status (Mode 3,
+COMMAND_ID_QCC_STATUS in rc_settings.py) is a non-operational command:
+QCC just returns its current header with the latest sensor/counter values
+and a zero-filled body, no action taken. Lets the operator manually
+refresh this panel's numbers on demand from any tab, independent of
+whatever command that tab actually sends. main_window.py wires
+query_status_requested to actually building/sending that frame.
 
 Wrapped in its own QScrollArea (same reasoning as every tab's main
-content, see main_window.py's window-fit history) - 26 decoded fields
+content, see main_window.py's window-fit history) - the decoded fields
 plus the raw-hex block have real natural height, and this panel sits
-outside each tab's own scroll area, so without this its full height would
+outside the tabs' own scroll areas, so without this its full height would
 add directly to the whole window's minimum size.
 """
 
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
-    QFormLayout, QGroupBox, QLabel, QScrollArea, QVBoxLayout, QWidget,
+    QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
+    QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QCCHeaderTx
 
-_PANEL_WIDTH = 260
+_PANEL_WIDTH = 340
 _HEADER_TOTAL_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
 
-_RESPONSE_FIELDS = [
-    "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE", "COMMAND_ID", "COMMAND_ACK",
-    "MESSAGE_NUMBER", "DATE", "MONTH", "YEAR", "TIME_OF_DAY",
-    "COMMAND_ID_REPEAT", "FPGA_TEMPERATURE", "BOARD_TEMPERATURE", "BOARD_HUMIDITY",
-    "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
-    "OUTPUT_PRT_COUNT", "OUTPUT_SOB_COUNT",
-    "INPUT_SOB_WIDTH_US", "OUTPUT_SOB_WIDTH_US",
-    "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US", "INPUT_PPS_WIDTH_US",
-    "PPS_COUNTER", "CHIP_ID", "CHECKSUM",
+_ACCENT = "#00adb5"
+_ACCENT_HOVER = "#1fc2ca"
+_ACCENT_PRESSED = "#00858c"
+_CARD_BG = "#31363d"
+_BORDER = "#42484f"
+_LABEL_COLOR = "rgba(238, 238, 238, 0.55)"
+_VALUE_COLOR = "#eeeeee"
+# Roughly the width of one label:value form row - section dividers are
+# capped to this instead of stretching the full card width, so they don't
+# visually extend further right than the content rows they separate.
+_CONTENT_COL_WIDTH = 260
+
+# (section title, [field names]) - grouped so related values read together
+# instead of one long undifferentiated list of 26 rows.
+_FIELD_SECTIONS = [
+    ("Routing / Command", [
+        "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE",
+        "COMMAND_ID", "COMMAND_ACK", "COMMAND_ID_REPEAT",
+        "MESSAGE_NUMBER", "CHECKSUM",
+    ]),
+    ("Timestamp", ["DATE", "MONTH", "YEAR", "TIME_OF_DAY"]),
+    ("Board Health", ["FPGA_TEMPERATURE", "BOARD_TEMPERATURE", "BOARD_HUMIDITY"]),
+    ("SOB / PRT / PPS Counters", [
+        "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
+        "OUTPUT_PRT_COUNT", "OUTPUT_SOB_COUNT",
+    ]),
+    ("Pulse Widths (µs)", [
+        "INPUT_SOB_WIDTH_US", "OUTPUT_SOB_WIDTH_US",
+        "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US", "INPUT_PPS_WIDTH_US",
+    ]),
+    ("Misc", ["PPS_COUNTER", "CHIP_ID"]),
 ]
+
+_QUERY_BTN_STYLE = (
+    f"QPushButton {{ background-color: transparent; color: {_ACCENT};"
+    f"border: 1px solid {_ACCENT}; border-radius: 8px; padding: 5px 8px; font-weight: 600; }}"
+    f"QPushButton:hover {{ background-color: rgba(0, 173, 181, 0.15); }}"
+    f"QPushButton:pressed {{ background-color: rgba(0, 173, 181, 0.3); }}"
+    f"QPushButton:disabled {{ color: rgba(238, 238, 238, 0.35); border-color: rgba(238, 238, 238, 0.2); }}"
+)
 
 
 def _hex_full(data: bytes) -> str:
@@ -44,33 +89,118 @@ def _hex_full(data: bytes) -> str:
 
 
 class HeaderPanel(QWidget):
-    """Call show_frame(raw_2970_byte_frame) whenever a response arrives for the owning tab."""
+    """
+    Single global instance owned by main_window.py, shown as a fixed-width
+    sidebar spanning the full window height (beside both the Connection
+    bar and the Tabs, not nested inside any one tab's own layout) - shows
+    whichever frame was most recently received from ANY tab, not a
+    per-tab memory. Call show_frame(raw_2970_byte_frame) whenever a
+    response arrives.
+    """
+
+    query_status_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        # Fixed width, not a stretch-based floor - this sidebar's width
+        # stays constant regardless of window size; only its height
+        # stretches (to fill the whole window, top to bottom).
         self.setFixedWidth(_PANEL_WIDTH)
 
-        box = QGroupBox("Last Received Header")
+        # No native title text - Qt's QGroupBox::title subcontrol often
+        # ignores font-weight/size set via stylesheet (the style engine
+        # renders it from the widget's actual font, not the QSS text
+        # properties), so a real QLabel is used instead for a reliably
+        # bold/larger heading. The app-wide QGroupBox chrome (theme.py) is
+        # also generously padded by design for normal-content boxes, but
+        # this panel is information-dense (26+ fields) and was overflowing
+        # into an internal scroll in a normal-height window - a tighter
+        # override here (not a global theme.py change, which would affect
+        # every other box in the app) claws back real vertical room.
+        box = QGroupBox("")
+        box.setObjectName("HeaderPanelBox")
+        box.setStyleSheet("#HeaderPanelBox { margin-top: 2px; padding: 8px 10px 6px 10px; }")
         layout = QVBoxLayout(box)
+        layout.setSpacing(6)
 
-        layout.addWidget(QLabel("QCC Header (decoded):"))
-        form = QFormLayout()
-        form.setHorizontalSpacing(10)
-        form.setVerticalSpacing(4)
+        title_label = QLabel("LAST RECEIVED HEADER")
+        title_label.setStyleSheet(
+            "color: #00adb5; font-size: 13pt; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
+        )
+        layout.addWidget(title_label)
+
+        query_row = QHBoxLayout()
+        self.query_btn = QPushButton("Query QCC Status")
+        self.query_btn.setStyleSheet(_QUERY_BTN_STYLE)
+        self.query_btn.setToolTip(
+            "Sends a non-operational QCC Status command - QCC just replies with\n"
+            "its current header (latest sensor/counter values), no action taken."
+        )
+        self.query_btn.clicked.connect(self.query_status_requested)
+        # Normal button size, not stretched to the panel's full width - a
+        # stretched single-word pill reads as a section header, not a
+        # clickable action.
+        query_row.addWidget(self.query_btn)
+        query_row.addStretch(1)
+        layout.addLayout(query_row)
+
+        self.query_status_label = QLabel("")
+        self.query_status_label.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 8pt;")
+        layout.addWidget(self.query_status_label)
+
+        card = QFrame()
+        card.setStyleSheet(
+            f"QFrame {{ background-color: {_CARD_BG}; border: 1px solid {_BORDER}; border-radius: 10px; }}"
+        )
+        card_layout = QVBoxLayout(card)
+        card_layout.setContentsMargins(10, 6, 10, 6)
+        card_layout.setSpacing(3)
+
+        # Widest field name across the WHOLE panel (not just one section) -
+        # every section's label column is fixed to this same width, so
+        # every value column lines up at the same x position throughout.
+        label_font = QLabel().font()
+        label_font.setPointSize(8)
+        metrics = QFontMetrics(label_font)
+        longest_name = max((n for _, names in _FIELD_SECTIONS for n in names), key=len)
+        self._label_col_width = metrics.horizontalAdvance(longest_name) + 4
+
         self.field_labels = {}
-        for name in _RESPONSE_FIELDS:
-            name_label = QLabel(name)
-            name_label.setStyleSheet("font-size: 8pt; color: rgba(238, 238, 238, 0.6);")
-            value_label = QLabel("-")
-            value_label.setStyleSheet("color: #00adb5; font-weight: 600; font-size: 9pt;")
-            self.field_labels[name] = value_label
-            form.addRow(name_label, value_label)
-        layout.addLayout(form)
+        for i, (section_title, names) in enumerate(_FIELD_SECTIONS):
+            if i > 0:
+                # Capped to roughly the same width as a label:value row
+                # (not stretched full card width) so the divider doesn't
+                # visually extend further right than the content it's
+                # separating - wrapped with a trailing stretch, same
+                # "hug left" pattern as the grid rows below.
+                divider = QFrame()
+                divider.setFrameShape(QFrame.HLine)
+                divider.setStyleSheet(f"background-color: {_BORDER}; max-height: 1px; border: none;")
+                divider.setFixedWidth(_CONTENT_COL_WIDTH)
+                div_wrap = QHBoxLayout()
+                div_wrap.addWidget(divider)
+                div_wrap.addStretch(1)
+                card_layout.addLayout(div_wrap)
+
+            section_label = QLabel(section_title.upper())
+            section_label.setStyleSheet(
+                f"color: {_ACCENT}; font-size: 8pt; font-weight: 700; letter-spacing: 0.5px;"
+                "margin-top: 4px;"
+            )
+            card_layout.addWidget(section_label)
+
+            card_layout.addLayout(self._build_form_section(names))
+
+        layout.addWidget(card)
 
         layout.addWidget(QLabel(f"Full Header ({_HEADER_TOTAL_SIZE} bytes, hex):"))
         self.header_hex_label = QLabel("-")
         self.header_hex_label.setWordWrap(True)
-        self.header_hex_label.setStyleSheet("color: #00adb5; font-weight: 600;")
+        self.header_hex_label.setStyleSheet(
+            f"color: {_ACCENT}; font-weight: 600; font-family: Consolas, monospace; font-size: 8pt;"
+        )
+        self.header_hex_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self.header_hex_label.setCursor(Qt.IBeamCursor)
         layout.addWidget(self.header_hex_label)
 
         layout.addStretch(1)
@@ -78,11 +208,49 @@ class HeaderPanel(QWidget):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QScrollArea.NoFrame)
+        scroll.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         scroll.setWidget(box)
 
+        # Fixed horizontally (width set above via setFixedWidth), only
+        # stretches vertically to fill the sidebar's full column height.
+        self.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
+
+    def _make_value_label(self, name: str) -> QLabel:
+        value_label = QLabel("-")
+        value_label.setStyleSheet(
+            f"color: {_VALUE_COLOR}; font-weight: 600; font-size: 9pt; font-family: Consolas, monospace;"
+            "background: transparent; border: none;"
+        )
+        # Selectable/copyable via mouse - lets an operator copy a single
+        # value (e.g. CHIP_ID) without retyping it by hand.
+        value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        value_label.setCursor(Qt.IBeamCursor)
+        self.field_labels[name] = value_label
+        return value_label
+
+    def _build_form_section(self, names) -> QFormLayout:
+        """
+        Left-aligned label:value rows - every section's name_label is
+        fixed to the same width (the widest field name across the WHOLE
+        panel, not just this section), so the value column lines up at
+        the same x position across every section instead of each
+        section's values starting wherever its own longest label happens
+        to end.
+        """
+        form = QFormLayout()
+        form.setLabelAlignment(Qt.AlignLeft)
+        form.setFormAlignment(Qt.AlignLeft | Qt.AlignTop)
+        form.setHorizontalSpacing(10)
+        form.setVerticalSpacing(2)
+        for name in names:
+            name_label = QLabel(name)
+            name_label.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 8pt;")
+            name_label.setFixedWidth(self._label_col_width)
+            form.addRow(name_label, self._make_value_label(name))
+        return form
 
     def show_frame(self, raw: bytes):
         header_raw = raw[0:_HEADER_TOTAL_SIZE]
@@ -114,11 +282,35 @@ class HeaderPanel(QWidget):
         self.field_labels["INPUT_PPS_WIDTH_US"].setText(str(h.input_pps_width_us))
         self.field_labels["PPS_COUNTER"].setText(str(h.pps_counter))
         self.field_labels["CHIP_ID"].setText(f"0x{h.chip_id:08X}")
-        self.field_labels["CHECKSUM"].setText("OK" if h.checksum_ok else "FAIL")
+        checksum_label = self.field_labels["CHECKSUM"]
+        checksum_label.setText("OK" if h.checksum_ok else "FAIL")
+        checksum_label.setStyleSheet(
+            "color: rgb(146, 208, 165); font-weight: 600; font-size: 9pt; font-family: Consolas, monospace;"
+            "background: transparent; border: none;"
+            if h.checksum_ok else
+            "color: rgb(240, 149, 149); font-weight: 600; font-size: 9pt; font-family: Consolas, monospace;"
+            "background: transparent; border: none;"
+        )
 
         self.header_hex_label.setText(_hex_full(header_raw))
+        self.query_btn.setEnabled(True)
+        self.query_status_label.setText("")
+
+    def mark_query_pending(self):
+        self.query_btn.setEnabled(False)
+        self.query_status_label.setText("Querying...")
+
+    def mark_query_no_response(self):
+        self.query_btn.setEnabled(True)
+        self.query_status_label.setText("No response")
 
     def clear(self):
-        for label in self.field_labels.values():
+        for name, label in self.field_labels.items():
             label.setText("-")
+            if name == "CHECKSUM":
+                label.setStyleSheet(
+                    f"color: {_VALUE_COLOR}; font-weight: 600; font-size: 9pt; font-family: Consolas, monospace;"
+                    "background: transparent; border: none;"
+                )
         self.header_hex_label.setText("-")
+        self.query_status_label.setText("")

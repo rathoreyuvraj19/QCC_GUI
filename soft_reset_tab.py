@@ -22,40 +22,20 @@ from PySide6.QtWidgets import (
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from header_panel import HeaderPanel
+from command_style import matrix_button_style, send_button_style
 from qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_to_bottom
 
 # Matches Link Test's LED / Isolation's matrix button idle color exactly -
 # these 96 buttons are per-QTRM identifiers just like those, so they should
 # look the same. "Reset All" gets the shared purple send-button color
 # instead (see _SEND_BTN_STYLE) - it's an action button, not a per-QTRM
-# status indicator.
-_IDLE_COLOR = "rgb(222, 224, 227)"
-_IDLE_HOVER_COLOR = "rgb(200, 203, 208)"
-_IDLE_PRESSED_COLOR = "rgb(180, 184, 190)"
-_TEXT_COLOR = "#1f2328"
-# Needs the full "QPushButton { ... }" selector form (not the flat
-# property-only form) - QSS pseudo-states like :hover/:pressed are only
-# recognized inside a selector block, so without this the buttons looked
-# flat/unresponsive on click even though they were still functionally
-# clickable the whole time.
-_BUTTON_STYLE = (
-    f"QPushButton {{ padding: 2px 4px; font-size: 8pt; font-weight: 500;"
-    f"background-color: {_IDLE_COLOR}; color: {_TEXT_COLOR}; }}"
-    f"QPushButton:hover {{ background-color: {_IDLE_HOVER_COLOR}; }}"
-    f"QPushButton:pressed {{ background-color: {_IDLE_PRESSED_COLOR}; }}"
-)
+# status indicator. Colors/QSS now come from command_style.py, the single
+# source of truth every command tab shares.
+_BUTTON_STYLE = matrix_button_style()
 _BUTTON_MIN_WIDTH = 46
 _BUTTON_MIN_HEIGHT = 24
 
-# Send button color - shared across every command tab's primary send button
-# so they all read consistently, distinct from the app's default teal.
-_SEND_BTN_STYLE = (
-    "QPushButton { background-color: #7C3AED; color: #eeeeee; border: none;"
-    "border-radius: 16px; padding: 11px 24px; font-weight: 600; }"
-    "QPushButton:hover { background-color: #6D28D9; }"
-    "QPushButton:pressed { background-color: #5B21B6; }"
-)
+_SEND_BTN_STYLE = send_button_style()
 
 # See link_test_tab.py's _CP_BOX_STYLE for why this override exists - no
 # drawn box/border, just the "CP{n}" title text above each group so the
@@ -127,16 +107,13 @@ class SoftResetTab(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(content)
 
-        # Dedicated right-side space for the raw 90-byte header of whatever
-        # frame this tab most recently received. Soft Reset never gets a
-        # response (fire-and-forget), so this stays at its placeholder "-"
-        # here - kept anyway for consistency with every other tab.
-        self.header_panel = HeaderPanel()
-
+        # HeaderPanel is now a single global full-height sidebar owned by
+        # main_window.py, not embedded per-tab - see its module docstring.
+        # Soft Reset never gets a response (fire-and-forget), so it stays
+        # at its placeholder "-" whenever this tab is active.
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll, 1)
-        outer.addWidget(self.header_panel)
+        outer.addWidget(scroll)
 
     def _make_reset_one_handler(self, qtrm_index: int):
         def handler():

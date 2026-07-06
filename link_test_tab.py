@@ -24,16 +24,20 @@ from PySide6.QtWidgets import (
     QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from header_panel import HeaderPanel
+from command_style import IDLE_MATRIX_RGB, PENDING_RGB, SUCCESS_RGB, FAILURE_RGB
+from command_style import send_button_style
 from qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_to_bottom
 from spin_field import DoubleSpinField
 
 REVEAL_DELAY_MS = 1000
 
-_IDLE_COLOR = QColor(222, 224, 227)
-_PENDING_COLOR = QColor(160, 165, 172)
-_LINKED_COLOR = QColor(146, 208, 165)
-_NOT_LINKED_COLOR = QColor(240, 149, 149)
+# LedMatrix needs real QColor instances (not QSS strings) - same RGB
+# triples as command_style.py's shared palette, just converted here since
+# this is the one consumer that paints them directly rather than via QSS.
+_IDLE_COLOR = QColor(*IDLE_MATRIX_RGB)
+_PENDING_COLOR = QColor(*PENDING_RGB)
+_LINKED_COLOR = QColor(*SUCCESS_RGB)
+_NOT_LINKED_COLOR = QColor(*FAILURE_RGB)
 _TEXT_COLOR = "#1f2328"
 
 # No drawn box/border/background - just the "CP{n}" title text sits above
@@ -47,14 +51,9 @@ _CP_BOX_STYLE = (
 _LED_MIN_WIDTH = 46
 _LED_MIN_HEIGHT = 24
 
-# Send button color - shared across every command tab's primary send button
-# so they all read consistently, distinct from the app's default teal.
-_SEND_BTN_STYLE = (
-    "QPushButton { background-color: #7C3AED; color: #eeeeee; border: none;"
-    "border-radius: 16px; padding: 11px 24px; font-weight: 600; }"
-    "QPushButton:hover { background-color: #6D28D9; }"
-    "QPushButton:pressed { background-color: #5B21B6; }"
-)
+# Send button color/QSS from command_style.py, the single source of truth
+# every command tab shares.
+_SEND_BTN_STYLE = send_button_style()
 
 
 class _Led(QLabel):
@@ -173,6 +172,8 @@ class LinkTestTab(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
 
         top_row = QHBoxLayout()
         self.send_btn = QPushButton("Send Link Test")
@@ -205,15 +206,11 @@ class LinkTestTab(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(content)
 
-        # Dedicated right-side space for the raw 90-byte header of whatever
-        # frame this tab most recently received - outside the scroll area so
-        # it's always visible regardless of scroll position.
-        self.header_panel = HeaderPanel()
-
+        # HeaderPanel is now a single global full-height sidebar owned by
+        # main_window.py, not embedded per-tab - see its module docstring.
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll, 1)
-        outer.addWidget(self.header_panel)
+        outer.addWidget(scroll)
 
     # -- full-array test (send button, with optional auto-resend) ---------
 

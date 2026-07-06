@@ -32,7 +32,7 @@ import sys
 from PySide6.QtCore import QRegularExpression, Qt, QThread, Signal
 from PySide6.QtGui import QRegularExpressionValidator
 from PySide6.QtWidgets import (
-    QApplication, QGridLayout, QGroupBox, QHBoxLayout, QLabel, QLineEdit,
+    QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
@@ -52,6 +52,7 @@ _NO_REPLY_COMMAND_TYPES = (CMD_RESERVED, CMD_SOFT_RESET)
 from segmented_control import SegmentedControl
 from spin_field import SpinField
 from theme import STYLESHEET
+from titled_group import titled_group_box
 
 _STATUS_TYPE_NAMES = {
     STATUS_TYPE_ACK: "ACK",
@@ -345,19 +346,25 @@ class ByteGrid(QWidget):
 
     bytes_changed = Signal()
 
-    def __init__(self, num_bytes: int, wrap_cols: int = 16, start_index: int = 1, parent=None):
+    def __init__(self, num_bytes: int, wrap_cols: int = 14, start_index: int = 1, parent=None):
         super().__init__(parent)
         self._hex_mode = True
         self._hex_validator = QRegularExpressionValidator(QRegularExpression(_HEX_VALIDATOR_PATTERN))
         self._dec_validator = QRegularExpressionValidator(QRegularExpression(_DEC_VALIDATOR_PATTERN))
         self._cells = []
         grid = QGridLayout(self)
-        grid.setSpacing(3)
+        grid.setHorizontalSpacing(8)
+        grid.setVerticalSpacing(4)
         for i in range(num_bytes):
             label_index = start_index + i
             index_label = QLabel(str(label_index))
-            index_label.setAlignment(Qt.AlignCenter)
-            index_label.setStyleSheet("font-size: 7pt; color: rgba(238, 238, 238, 0.5);")
+            index_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            # Fixed width - without this, the index number stretches to
+            # fill however wide the grid column ends up being and its
+            # centered text drifts away from the (narrower, fixed-width)
+            # cell it's meant to label.
+            index_label.setFixedWidth(22)
+            index_label.setStyleSheet("font-size: 9pt; font-weight: 600; color: rgba(238, 238, 238, 0.65);")
 
             cell = QLineEdit("00")
             cell.setMaxLength(2)
@@ -371,13 +378,16 @@ class ByteGrid(QWidget):
             cell.setStyleSheet("padding: 2px;")
             cell.textChanged.connect(self.bytes_changed)
 
-            cell_col = QVBoxLayout()
-            cell_col.setSpacing(0)
-            cell_col.setContentsMargins(0, 0, 0, 0)
-            cell_col.addWidget(index_label)
-            cell_col.addWidget(cell)
+            # Index and cell side by side (not stacked) - grouped as one
+            # visual unit, index reads clearly at a larger size instead of
+            # a tiny muted number floating above the box.
+            cell_row = QHBoxLayout()
+            cell_row.setSpacing(4)
+            cell_row.setContentsMargins(0, 0, 0, 0)
+            cell_row.addWidget(index_label)
+            cell_row.addWidget(cell)
             cell_widget = QWidget()
-            cell_widget.setLayout(cell_col)
+            cell_widget.setLayout(cell_row)
 
             self._cells.append(cell)
             grid.addWidget(cell_widget, i // wrap_cols, i % wrap_cols)
@@ -432,8 +442,7 @@ class StatusResponderWindow(QMainWindow):
         root.addWidget(self._build_log_group(), 1)
 
     def _build_response_header_group(self):
-        box = QGroupBox("Response Header (90 bytes) - edit any byte individually")
-        layout = QVBoxLayout(box)
+        box, layout = titled_group_box("Response Header (90 bytes) - edit any byte individually")
 
         top_row = QHBoxLayout()
         top_row.addWidget(QLabel("Byte entry:"))
@@ -483,35 +492,45 @@ class StatusResponderWindow(QMainWindow):
             self.worker.qcc_header = self.qcc_header_grid.get_bytes()
 
     def _build_listen_group(self):
-        box = QGroupBox("Listener")
-        row = QHBoxLayout(box)
+        box, outer = titled_group_box("Listener")
+        row = QHBoxLayout()
+        outer.addLayout(row)
 
         self.port_spin = SpinField(1, 65535, 5000, field_width=64)
+        self.port_spin.spin.valueChanged.connect(self._update_endpoint_label)
         self.listen_btn = QPushButton("Start Responding")
         self.listen_btn.clicked.connect(self._on_listen_clicked)
         self.status_label = QLabel("Stopped")
         self.count_label = QLabel("Frames processed: 0")
 
-        # Shown so whoever's using this tool knows what to type into the
-        # main GUI's "QCC IP" field - it always binds "0.0.0.0" (every
-        # local interface), but since this only makes sense for testing on
-        # the same machine as the main GUI, 127.0.0.1 (loopback) is the
-        # address that actually reaches it.
-        ip_label = QLabel("Listen IP: 127.0.0.1 (use this as QCC IP in the main GUI)")
-        ip_label.setStyleSheet("color: #00adb5; font-weight: 600;")
+        # Shown so whoever's using this tool knows exactly what to type
+        # into the main GUI's Connection bar - combines the fixed loopback
+        # IP with the actual current port in one place (it always binds
+        # "0.0.0.0"/every local interface, but since this only makes sense
+        # for testing on the same machine as the main GUI, 127.0.0.1/the
+        # port shown here is what actually reaches it) - updates live as
+        # Listen Port changes, so it never goes stale.
+        self.endpoint_label = QLabel()
+        self.endpoint_label.setStyleSheet("color: #00adb5; font-weight: 600;")
+        self._update_endpoint_label()
 
         row.addWidget(QLabel("Listen Port:"))
         row.addWidget(self.port_spin)
         row.addWidget(self.listen_btn)
         row.addWidget(self.status_label)
-        row.addWidget(ip_label)
+        row.addWidget(self.endpoint_label)
         row.addStretch(1)
         row.addWidget(self.count_label)
         return box
 
+    def _update_endpoint_label(self, *_args):
+        port = self.port_spin.value()
+        self.endpoint_label.setText(
+            f"Responding at 127.0.0.1:{port} (use this as QCC IP + QCC Port in the main GUI)"
+        )
+
     def _build_log_group(self):
-        box = QGroupBox("Activity Log")
-        layout = QVBoxLayout(box)
+        box, layout = titled_group_box("Activity Log")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
         layout.addWidget(self.log_view)
@@ -547,6 +566,21 @@ class StatusResponderWindow(QMainWindow):
         self.worker = None
         self.listen_btn.setText("Start Responding")
         self.status_label.setText("Stopped")
+
+    def set_listen_port(self, port: int):
+        """
+        Update the Listen Port field, and if currently listening, restart
+        the worker on the new port immediately - lets the main GUI keep
+        this responder's port in sync with its own QCC Port field (see
+        main_window.py's _on_qcc_port_changed) without the user having to
+        stop/retype/restart by hand every time they change it.
+        """
+        if self.port_spin.value() == port:
+            return
+        self.port_spin.setValue(port)
+        if self.worker is not None:
+            self.stop_listening()
+            self.start_listening()
 
     def _on_error(self, msg: str):
         self.log_view.appendPlainText(f"[error] {msg}")

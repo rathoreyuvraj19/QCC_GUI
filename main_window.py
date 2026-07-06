@@ -13,6 +13,7 @@ the QCC/QTRM side yet.
 import time
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel,
@@ -26,13 +27,14 @@ from packet import (
     build_dwell_frame, build_memory_write_frame,
     QCCHeaderRx, QCCHeaderTx, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
     build_sob_message_body, build_prt_message_body, build_pps_message_body,
-    build_timing_command_frame,
+    build_header_only_frame,
 )
 from rc_settings import (
     rc_settings, COMMAND_ID_DWELL, COMMAND_ID_LINK_TEST, COMMAND_ID_STATUS,
     COMMAND_ID_RX_CAL, COMMAND_ID_TX_CAL, COMMAND_ID_ISOLATION,
-    COMMAND_ID_SOFT_RESET, COMMAND_ID_MEMORY_OPERATION,
+    COMMAND_ID_SOFT_RESET, COMMAND_ID_MEMORY_OPERATION, COMMAND_ID_QCC_STATUS,
 )
+from connection_settings import connection_settings
 from udp_worker import UdpWorker
 from ping_worker import PingWorker
 from header_panel import HeaderPanel
@@ -57,12 +59,52 @@ from status_responder_app import StatusResponderWindow
 
 RESPONSE_TIMEOUT_MS = 1000
 
+# Ping button colors - full QPushButton{...} selector-block form (not the
+# flat "background-color: x;" property-only form) since QSS :hover/:pressed
+# pseudo-states are only recognized inside a selector block - the flat form
+# used previously meant the button never had any hover/pressed feedback at
+# all, in any state. Every state gets its own (subtle) hover/pressed shade so
+# the button always looks responsive, not just while idle.
+_PING_IDLE_STYLE = (
+    "QPushButton { background-color: #4a515a; color: #eeeeee; border: none;"
+    "border-radius: 8px; padding: 6px 14px; }"
+    "QPushButton:hover { background-color: #565f6a; }"
+    "QPushButton:pressed { background-color: #3d434b; }"
+)
+_PING_PENDING_STYLE = (
+    "QPushButton { background-color: rgb(160, 165, 172); color: #1f2328; border: none;"
+    "border-radius: 8px; padding: 6px 14px; }"
+    "QPushButton:hover { background-color: rgb(150, 155, 162); }"
+    "QPushButton:pressed { background-color: rgb(140, 145, 152); }"
+)
+_PING_SUCCESS_STYLE = (
+    "QPushButton { background-color: rgb(146, 208, 165); color: #1f2328; border: none;"
+    "border-radius: 8px; padding: 6px 14px; }"
+    "QPushButton:hover { background-color: rgb(130, 195, 150); }"
+    "QPushButton:pressed { background-color: rgb(115, 180, 135); }"
+)
+_PING_FAILURE_STYLE = (
+    "QPushButton { background-color: rgb(240, 149, 149); color: #1f2328; border: none;"
+    "border-radius: 8px; padding: 6px 14px; }"
+    "QPushButton:hover { background-color: rgb(230, 130, 130); }"
+    "QPushButton:pressed { background-color: rgb(220, 115, 115); }"
+)
+# Local/LAN pings often resolve in well under this, too fast to visually
+# register the pending state as a distinct "something happened" flash -
+# floor it so re-clicking always shows a visible grey pulse before the
+# result color lands.
+_PING_MIN_PENDING_MS = 350
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("QCC / 96x QTRM Control")
-        self.resize(1400, 700)
+        # Tall enough that the Header panel's ~26 decoded fields fit
+        # without its internal scrollbar kicking in on a typical 1080p
+        # screen (see header_panel.py's compacted spacing) - 700 was too
+        # short and forced scrolling even after that compaction.
+        self.resize(1400, 900)
 
         self.worker: UdpWorker | None = None
         # None | "dwell" | "memory_write" | "memory_write_all" | "link_test" |
@@ -80,6 +122,7 @@ class MainWindow(QMainWindow):
         self._memory_write_target = None
         self._last_unlocked_tab_index = 0
         self._ping_worker: PingWorker | None = None
+        self._ping_pending_since: float | None = None
         self._send_time = None
         self._pending_timer = None
         self._rx_test_window: RxTestWindow | None = None
@@ -95,9 +138,22 @@ class MainWindow(QMainWindow):
     # -- UI construction ------------------------------------------------
 
     def _build_ui(self):
+        self._build_menu_bar()
+
         central = QWidget()
         self.setCentralWidget(central)
-        root = QVBoxLayout(central)
+        # Primary horizontal split: a left column (Connection bar + Tabs,
+        # expands to fill all remaining width) and a right column (a
+        # single global HeaderPanel, fixed width, spanning the complete
+        # window height from top to bottom) - not nested inside any one
+        # tab's own layout, so it stays visible and full-height regardless
+        # of which tab is active or how tall that tab's own content is.
+        columns = QHBoxLayout(central)
+        columns.setContentsMargins(0, 0, 0, 0)
+        columns.setSpacing(0)
+
+        left_column = QWidget()
+        root = QVBoxLayout(left_column)
 
         root.addWidget(self._build_connection_group())
 
@@ -164,11 +220,45 @@ class MainWindow(QMainWindow):
         footer.setStyleSheet("color: #9a9aa0; font-size: 8pt; padding: 2px 6px;")
         root.addWidget(footer)
 
+        # The single global HeaderPanel - its "Query QCC Status" button
+        # isn't tied to any one tab anymore, so it's wired here just once.
+        self.header_panel = HeaderPanel()
+        self.header_panel.query_status_requested.connect(self._on_query_qcc_status)
+
+        columns.addWidget(left_column, 1)
+        columns.addWidget(self.header_panel)
+
+    def _build_menu_bar(self):
+        # These 3 windows used to be buttons crammed into the Connection
+        # bar - either squeezed into one wide row (forcing the window's
+        # minimum width past the actual screen width) or stacked into their
+        # own tall column (forcing the whole Connection group taller than
+        # its actual content, leaving a big dead gap around the compact
+        # fields row). A menu bar is the standard place for auxiliary
+        # windows in engineering tools like this one, and takes no layout
+        # space of its own.
+        tools_menu = self.menuBar().addMenu("&Tools")
+
+        rx_action = QAction("Open RX Test Window", self)
+        rx_action.triggered.connect(self._on_open_rx_test_clicked)
+        tools_menu.addAction(rx_action)
+
+        tx_action = QAction("Open TX Test Window", self)
+        tx_action.triggered.connect(self._on_open_tx_test_clicked)
+        tools_menu.addAction(tx_action)
+
+        tools_menu.addSeparator()
+
+        responder_action = QAction("Open Status Responder", self)
+        responder_action.triggered.connect(self._on_open_responder_clicked)
+        tools_menu.addAction(responder_action)
+
     def _on_tab_changed(self, index):
         self.status_tab.reset_to_idle()
         self.rx_cal_tab.reset_to_idle()
         self.tx_cal_tab.reset_to_idle()
         self.timing_tab.reset_to_idle()
+        self.memory_tab.reset_to_idle()
 
         if index == self.tabs.indexOf(self.rc_settings_tab):
             self.rc_settings_tab.refresh_message_number()
@@ -189,15 +279,22 @@ class MainWindow(QMainWindow):
         self._last_unlocked_tab_index = index
 
     def _build_connection_group(self):
-        box = QGroupBox("Connection")
+        # Qt's QGroupBox::title subcontrol often ignores font-weight/size
+        # set via stylesheet (the style engine renders it from the
+        # widget's actual font, not the QSS text properties) - a real
+        # QLabel as the heading, styled normally, is the reliable way to
+        # get a bold/larger section title instead of the flat native one.
+        box = QGroupBox("")
+        box.setStyleSheet("QGroupBox { padding-top: 14px; }")
 
-        self.local_port_edit = SpinField(1, 65535, 5001, field_width=64)
+        self.local_port_edit = SpinField(1, 65535, connection_settings.local_port, field_width=64)
         self.local_port_edit.spin.valueChanged.connect(self._on_connection_field_changed)
 
-        self.qcc_ip_edit = QLineEdit("192.168.1.10")
+        self.qcc_ip_edit = QLineEdit(connection_settings.qcc_ip)
         self.qcc_ip_edit.textChanged.connect(self._on_connection_field_changed)
-        self.qcc_port_edit = SpinField(1, 65535, 5000, field_width=64)
+        self.qcc_port_edit = SpinField(1, 65535, connection_settings.qcc_port, field_width=64)
         self.qcc_port_edit.spin.valueChanged.connect(self._on_connection_field_changed)
+        self.qcc_port_edit.spin.valueChanged.connect(self._on_qcc_port_changed)
 
         self.connect_btn = QPushButton("Connect")
         self.connect_btn.clicked.connect(self._on_connect_clicked)
@@ -205,19 +302,13 @@ class MainWindow(QMainWindow):
         self.conn_status_label = QLabel("Disconnected")
 
         self.ping_btn = QPushButton("Ping Test")
+        self.ping_btn.setStyleSheet(_PING_IDLE_STYLE)
         self.ping_btn.clicked.connect(self._on_ping_clicked)
         self.ping_result_label = QLabel("")
 
-        self.rx_test_btn = QPushButton("Open RX Test Window")
-        self.rx_test_btn.clicked.connect(self._on_open_rx_test_clicked)
+        self.qcc_ip_edit.setMinimumWidth(120)
 
-        self.tx_test_btn = QPushButton("Open TX Test Window")
-        self.tx_test_btn.clicked.connect(self._on_open_tx_test_clicked)
-
-        self.responder_btn = QPushButton("Open Status Responder")
-        self.responder_btn.clicked.connect(self._on_open_responder_clicked)
-
-        row = QHBoxLayout(box)
+        row = QHBoxLayout()
         row.addWidget(QLabel("Local Port:"))
         row.addWidget(self.local_port_edit)
         row.addWidget(QLabel("QCC IP:"))
@@ -229,9 +320,34 @@ class MainWindow(QMainWindow):
         row.addWidget(self.ping_btn)
         row.addWidget(self.ping_result_label)
         row.addStretch(1)
-        row.addWidget(self.rx_test_btn)
-        row.addWidget(self.tx_test_btn)
-        row.addWidget(self.responder_btn)
+
+        # Its own row, not crammed into the row above - that row already
+        # has several fixed-size buttons plus a QLineEdit with no minimum
+        # width, so adding a wide banner widget directly into it stole
+        # space from the QLineEdit and squeezed it down to a couple of
+        # characters the moment the banner became visible.
+        self.responder_warning_label = QLabel("⚠ Status Responder is open (mock QTRM, not real hardware)")
+        self.responder_warning_label.setStyleSheet(
+            "color: #1f2328; background-color: rgb(240, 200, 120);"
+            "border-radius: 8px; padding: 4px 10px; font-weight: 600;"
+        )
+        self.responder_warning_label.setVisible(False)
+        warning_row = QHBoxLayout()
+        warning_row.addWidget(self.responder_warning_label)
+        warning_row.addStretch(1)
+
+        # No side column competing for height anymore (the 3 window
+        # buttons live in the Tools menu now, see _build_menu_bar) - this
+        # box's natural height now just matches its actual two rows of
+        # content, no forced extra space.
+        outer = QVBoxLayout(box)
+        title_label = QLabel("CONNECTION")
+        title_label.setStyleSheet(
+            "color: #00adb5; font-size: 13pt; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
+        )
+        outer.addWidget(title_label)
+        outer.addLayout(row)
+        outer.addLayout(warning_row)
         return box
 
     # -- connection handling ---------------------------------------------
@@ -243,17 +359,26 @@ class MainWindow(QMainWindow):
             return
 
         self.ping_btn.setEnabled(False)
-        self.ping_btn.setStyleSheet("background-color: rgb(160, 165, 172);")
+        self.ping_btn.setStyleSheet(_PING_PENDING_STYLE)
         self.ping_result_label.setText("Pinging...")
+        self._ping_pending_since = time.monotonic()
 
         self._ping_worker = PingWorker(host)
         self._ping_worker.result.connect(self._on_ping_result)
         self._ping_worker.start()
 
     def _on_ping_result(self, success: bool, latency_text: str):
+        # Local/LAN pings can resolve faster than the pending grey state is
+        # visible for - delay applying the result just enough that every
+        # ping shows a real pending -> result transition, not an instant
+        # jump that looks like nothing happened.
+        elapsed_ms = (time.monotonic() - self._ping_pending_since) * 1000
+        remaining_ms = max(0, _PING_MIN_PENDING_MS - elapsed_ms)
+        QTimer.singleShot(int(remaining_ms), lambda: self._apply_ping_result(success, latency_text))
+
+    def _apply_ping_result(self, success: bool, latency_text: str):
         self.ping_btn.setEnabled(True)
-        color = "rgb(146, 208, 165)" if success else "rgb(240, 149, 149)"
-        self.ping_btn.setStyleSheet(f"background-color: {color};")
+        self.ping_btn.setStyleSheet(_PING_SUCCESS_STYLE if success else _PING_FAILURE_STYLE)
         self.ping_result_label.setText(latency_text)
 
     def _disconnect(self, status_text: str = "Disconnected"):
@@ -277,6 +402,27 @@ class MainWindow(QMainWindow):
         # sending/listening against stale settings.
         if self.worker is not None:
             self._disconnect("Disconnected (connection settings changed)")
+
+        # Persist immediately (same "no explicit Save button" pattern as
+        # RC Settings) so these three fields remember their last value
+        # across restarts. Skipped while QCC IP is the temporary
+        # "127.0.0.1" auto-fill for an open Status Responder - that's not
+        # a real setting the user typed, and gets correctly re-persisted
+        # once _on_responder_window_closed restores the real value and
+        # fires this same handler again.
+        if not self._qcc_ip_overridden_for_responder:
+            connection_settings.local_port = self.local_port_edit.value()
+            connection_settings.qcc_ip = self.qcc_ip_edit.text().strip()
+            connection_settings.qcc_port = self.qcc_port_edit.value()
+            connection_settings.save()
+
+    def _on_qcc_port_changed(self, port: int):
+        # The Status Responder has to listen on whatever port this GUI
+        # actually sends to (QCC Port) - if it's currently open, keep its
+        # Listen Port following this field live instead of silently going
+        # stale and dropping every request the moment QCC Port changes.
+        if self._responder_window is not None:
+            self._responder_window.set_listen_port(port)
 
     def _on_connect_clicked(self):
         if self.worker is not None:
@@ -354,6 +500,12 @@ class MainWindow(QMainWindow):
             self._responder_window = StatusResponderWindow()
             self._responder_window.closed.connect(self._on_responder_window_closed)
 
+        # Match whatever QCC Port this GUI is currently configured to send
+        # to, so the responder is listening in the right place from the
+        # moment it opens - not just whenever the field happens to change
+        # afterward (see _on_qcc_port_changed).
+        self._responder_window.set_listen_port(self.qcc_port_edit.value())
+
         # Listening by default as soon as the window is opened, rather
         # than making the user click "Start Responding" every time -
         # start_listening() is a no-op if it's already running (e.g.
@@ -369,17 +521,29 @@ class MainWindow(QMainWindow):
         # overwrite the remembered IP with "127.0.0.1" itself.
         if not self._qcc_ip_overridden_for_responder:
             self._qcc_ip_before_responder = self.qcc_ip_edit.text()
-            self.qcc_ip_edit.setText("127.0.0.1")
+            # Set True before setText, not after - setText fires
+            # textChanged (-> _on_connection_field_changed) synchronously,
+            # and that handler needs the flag already True to know not to
+            # persist "127.0.0.1" as if it were a real, user-typed setting.
             self._qcc_ip_overridden_for_responder = True
+            self.qcc_ip_edit.setText("127.0.0.1")
 
         self._responder_window.show()
         self._responder_window.raise_()
         self._responder_window.activateWindow()
 
+        self.responder_warning_label.setVisible(True)
+
     def _on_responder_window_closed(self):
+        self.responder_warning_label.setVisible(False)
+
         if self._qcc_ip_overridden_for_responder:
-            self.qcc_ip_edit.setText(self._qcc_ip_before_responder or "")
+            # Flip False before setText, not after - the restored text is
+            # the real value and should be persisted by
+            # _on_connection_field_changed's textChanged handler, which
+            # only does so once this flag reads False.
             self._qcc_ip_overridden_for_responder = False
+            self.qcc_ip_edit.setText(self._qcc_ip_before_responder or "")
 
     # -- response timing / timeout ----------------------------------------
 
@@ -507,6 +671,31 @@ class MainWindow(QMainWindow):
         return True
 
     # -- send / receive ---------------------------------------------------
+
+    def _on_query_qcc_status(self):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        # QCC Status (Mode 3) is non-operational - QCC just returns its
+        # current header with the latest sensor/counter values, body
+        # zero-filled, no action taken - so it's just a header-only frame
+        # with an empty message body, same shape as the timing commands.
+        header = rc_settings.build_header(COMMAND_ID_QCC_STATUS)
+        frame = build_header_only_frame(header)
+
+        self._awaiting_kind = "qcc_status"
+        self.header_panel.mark_query_pending()
+        self._begin_wait(self._on_qcc_status_timeout)
+        self.worker.send_frame(frame)
+
+    def _on_qcc_status_timeout(self):
+        if self._awaiting_kind != "qcc_status":
+            return
+        self._awaiting_kind = None
+        self.header_panel.mark_query_no_response()
 
     def _on_dwell_send(self):
         if self.worker is None:
@@ -744,7 +933,7 @@ class MainWindow(QMainWindow):
 
         command_id = QCCHeaderRx.MODE_EXTERNAL_LOOPBACK if external_loopback else QCCHeaderRx.MODE_INTERNAL_LOOPBACK
         header = rc_settings.build_header(command_id, message_body=build_sob_message_body(sob_width_us))
-        frame = build_timing_command_frame(header)
+        frame = build_header_only_frame(header)
 
         self._awaiting_kind = "timing_sob"
         self.timing_tab.mark_sob_pending()
@@ -761,7 +950,7 @@ class MainWindow(QMainWindow):
         command_id = QCCHeaderRx.MODE_EXTERNAL_LOOPBACK if external_loopback else QCCHeaderRx.MODE_INTERNAL_LOOPBACK
         message_body = build_prt_message_body(prt_count, pri_width_us, prt_width_us)
         header = rc_settings.build_header(command_id, message_body=message_body)
-        frame = build_timing_command_frame(header)
+        frame = build_header_only_frame(header)
 
         self._awaiting_kind = "timing_prt"
         self.timing_tab.mark_prt_pending()
@@ -779,29 +968,12 @@ class MainWindow(QMainWindow):
         header = rc_settings.build_header(
             QCCHeaderRx.MODE_EXTERNAL_LOOPBACK, message_body=build_pps_message_body(pps_width_us),
         )
-        frame = build_timing_command_frame(header)
+        frame = build_header_only_frame(header)
 
         self._awaiting_kind = "timing_pps"
         self.timing_tab.mark_pps_pending()
         self._begin_wait(self._on_timing_pps_timeout)
         self.worker.send_frame(frame)
-
-    # Which tab's HeaderPanel gets fed the raw 90-byte header for each
-    # _awaiting_kind. A kind with no entry (e.g. None, for a stray/unsolicited
-    # frame with nothing in flight) has no tab to update, so is skipped.
-    _HEADER_PANEL_TAB_BY_KIND = {
-        "dwell": "dwell_tab", "memory_write": "memory_tab", "memory_write_all": "memory_tab",
-        "link_test": "link_test_tab", "individual_link_test": "link_test_tab",
-        "rx_cal": "rx_cal_tab", "tx_cal": "tx_cal_tab",
-        "isolation_all": "isolation_tab", "isolation_individual": "isolation_tab",
-        "status_all": "status_tab", "status_individual": "status_tab",
-        "timing_sob": "timing_tab", "timing_prt": "timing_tab", "timing_pps": "timing_tab",
-    }
-
-    def _update_header_panel(self, kind, raw: bytes):
-        tab_attr = self._HEADER_PANEL_TAB_BY_KIND.get(kind)
-        if tab_attr is not None:
-            getattr(self, tab_attr).header_panel.show_frame(raw)
 
     def _on_frame_received(self, raw: bytes):
         self._last_received_frame = raw
@@ -810,7 +982,13 @@ class MainWindow(QMainWindow):
 
         elapsed_us = self._end_wait()
         kind, self._awaiting_kind = self._awaiting_kind, None
-        self._update_header_panel(kind, raw)
+        # One global HeaderPanel now (not one per tab) - it always shows
+        # whatever frame was most recently received, regardless of which
+        # tab/command it came from.
+        self.header_panel.show_frame(raw)
+
+        if kind == "qcc_status":
+            return
 
         if kind == "link_test":
             try:

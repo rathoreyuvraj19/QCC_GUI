@@ -40,27 +40,18 @@ from PySide6.QtWidgets import (
     QTableView, QToolTip, QVBoxLayout, QWidget,
 )
 
-from header_panel import HeaderPanel
+from command_style import send_button_style
 from link_test_tab import LedMatrix, _NOT_LINKED_COLOR, _PENDING_COLOR
 from packet import NUM_QTRM, QTRMChannel
 
 PHASE_MAX = 63    # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
 ATTEN_MAX = 63    # 6-bit attenuation (frame_type.vhd: No_of_Attenuator_bits = 6)
 
-# Send button color - shared across every command tab's primary send button
-# so they all read consistently, distinct from the app's default teal (used
-# by Import/Save right next to it) and from the green/red/grey status
-# colors used elsewhere.
-_SEND_COLOR = "#7C3AED"
-_SEND_HOVER_COLOR = "#6D28D9"
-_SEND_PRESSED_COLOR = "#5B21B6"
-
-_SEND_BTN_STYLE = (
-    f"QPushButton {{ background-color: {_SEND_COLOR}; color: #ffffff; border: none;"
-    "border-radius: 16px; padding: 11px 24px; font-weight: 700; }"
-    f"QPushButton:hover {{ background-color: {_SEND_HOVER_COLOR}; }}"
-    f"QPushButton:pressed {{ background-color: {_SEND_PRESSED_COLOR}; }}"
-)
+# Send button color/QSS from command_style.py, the single source of truth
+# every command tab shares - distinct from the app's default teal (used by
+# Import/Save right next to it) and from the green/red/grey status colors
+# used elsewhere.
+_SEND_BTN_STYLE = send_button_style()
 
 # Control is a 2-bit field: bit1 = Tx enable, bit0 = Rx enable. Default is
 # both on (matches every other command tab's "on" idle state).
@@ -425,6 +416,8 @@ class DwellTab(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
 
         top_row = QHBoxLayout()
         self.import_btn = QPushButton("Import from CSV...")
@@ -499,12 +492,11 @@ class DwellTab(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(content)
 
-        self.header_panel = HeaderPanel()
-
+        # HeaderPanel is now a single global full-height sidebar owned by
+        # main_window.py, not embedded per-tab - see its module docstring.
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll, 1)
-        outer.addWidget(self.header_panel)
+        outer.addWidget(scroll)
 
     def _on_invalid_data(self, message: str):
         # Non-modal, positioned right at the cell that was just edited,

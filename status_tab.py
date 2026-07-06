@@ -39,7 +39,7 @@ from PySide6.QtWidgets import (
     QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from header_panel import HeaderPanel
+from command_style import send_button_style
 from link_test_tab import LedMatrix, _IDLE_COLOR, _LINKED_COLOR, _NOT_LINKED_COLOR, _PENDING_COLOR
 from packet import (
     STATUS_TYPE_ACK, STATUS_TYPE_HEALTH, STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
@@ -151,14 +151,9 @@ _FILTER_BTN_STYLE_ON = (
     "QPushButton:hover { background-color: #1fc2ca; }"
 )
 
-# Send button color - shared across every command tab's primary send button
-# so they all read consistently, distinct from the app's default teal.
-_SEND_BTN_STYLE = (
-    "QPushButton { background-color: #7C3AED; color: #eeeeee; border: none;"
-    "border-radius: 16px; padding: 11px 24px; font-weight: 600; }"
-    "QPushButton:hover { background-color: #6D28D9; }"
-    "QPushButton:pressed { background-color: #5B21B6; }"
-)
+# Send button color/QSS from command_style.py, the single source of truth
+# every command tab shares.
+_SEND_BTN_STYLE = send_button_style()
 
 
 class StatusTab(QWidget):
@@ -181,6 +176,8 @@ class StatusTab(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
 
         layout.addWidget(self._build_selector_group())
 
@@ -218,15 +215,11 @@ class StatusTab(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(content)
 
-        # Dedicated right-side space for the raw 90-byte header of whatever
-        # frame this tab most recently received - outside the scroll area so
-        # it's always visible regardless of scroll position.
-        self.header_panel = HeaderPanel()
-
+        # HeaderPanel is now a single global full-height sidebar owned by
+        # main_window.py, not embedded per-tab - see its module docstring.
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll, 1)
-        outer.addWidget(self.header_panel)
+        outer.addWidget(scroll)
 
         self._on_status_type_changed()  # set initial control visibility + filter checkboxes
 
@@ -239,8 +232,22 @@ class StatusTab(QWidget):
     # matrix and Details panel below the visible window.
 
     def _build_selector_group(self):
-        box = QGroupBox("Status Type")
-        row = QHBoxLayout(box)
+        # Qt's QGroupBox::title subcontrol often ignores font-weight/size
+        # set via stylesheet (the style engine renders it from the
+        # widget's actual font, not the QSS text properties) - a real
+        # QLabel as the heading, styled normally, is the reliable way to
+        # get a bold/larger section title instead of the flat native one.
+        box = QGroupBox("")
+        box.setStyleSheet("QGroupBox { padding-top: 14px; }")
+        outer = QVBoxLayout(box)
+        title_label = QLabel("STATUS TYPE")
+        title_label.setStyleSheet(
+            "color: #00adb5; font-size: 13pt; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
+        )
+        outer.addWidget(title_label)
+
+        row = QHBoxLayout()
+        outer.addLayout(row)
 
         row.addWidget(QLabel("Status Type:"))
         self.status_type_combo = QComboBox()

@@ -21,34 +21,27 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from header_panel import HeaderPanel
+from command_style import PENDING_COLOR as _PENDING_COLOR
+from command_style import SUCCESS_COLOR as _ACKED_COLOR
+from command_style import FAILURE_COLOR as _NOT_ACKED_COLOR
+from command_style import WRITE_COLOR, WRITE_HOVER_COLOR, WRITE_PRESSED_COLOR
+from command_style import indicator_style as _indicator_style
+from command_style import send_button_style
 from packet import MEM_DATA_TYPE_MANUFACTURING, MEM_DATA_TYPE_TRM_CONFIGURATION
 from segmented_control import SegmentedControl
 from spin_field import SpinField
 
-_WRITE_COLOR = "#d64545"
-_WRITE_HOVER_COLOR = "#e15b5b"
-_WRITE_PRESSED_COLOR = "#b83a3a"
-_PENDING_COLOR = "rgb(160, 165, 172)"
-_ACKED_COLOR = "rgb(146, 208, 165)"
-_NOT_ACKED_COLOR = "rgb(240, 149, 149)"
-_STATE_TEXT_COLOR = "#1f2328"
-
-
-def _send_button_style(bg_color: str = None) -> str:
-    if bg_color is None:
-        return (
-            f"QPushButton {{ background-color: {_WRITE_COLOR}; color: #ffffff; border: none;"
-            "border-radius: 12px; font-size: 14px; font-weight: 600; padding: 10px; }"
-            f"QPushButton:hover {{ background-color: {_WRITE_HOVER_COLOR}; }}"
-            f"QPushButton:pressed {{ background-color: {_WRITE_PRESSED_COLOR}; }}"
-        )
-    return (
-        f"QPushButton {{ background-color: {bg_color}; color: {_STATE_TEXT_COLOR}; border: none;"
-        "border-radius: 12px; font-size: 14px; font-weight: 600; padding: 10px; }"
-        f"QPushButton:hover {{ background-color: {bg_color}; }}"
-        f"QPushButton:pressed {{ background-color: {bg_color}; }}"
-    )
+# Deliberately red, not the shared purple every other command tab's send
+# button uses - this writes permanently to real hardware's flash memory,
+# so it should never look like "just another send". The button itself
+# never recolors to reflect a result (that's what the separate status
+# indicators below it are for) - matches every other command tab fixed
+# after this file used to recolor the button directly and get stuck
+# green/red forever with no working hover effect.
+_WRITE_BTN_STYLE = send_button_style(
+    color=WRITE_COLOR, hover=WRITE_HOVER_COLOR, pressed=WRITE_PRESSED_COLOR,
+    radius=12, font_size_px=14, padding="10px",
+)
 
 
 class MemoryTab(QWidget):
@@ -62,6 +55,8 @@ class MemoryTab(QWidget):
 
         content = QWidget()
         layout = QVBoxLayout(content)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(14)
 
         warning = QLabel(
             "This writes permanently to the target QTRM's non-volatile flash memory."
@@ -91,15 +86,24 @@ class MemoryTab(QWidget):
 
         send_row = QHBoxLayout()
         self.send_btn = QPushButton("Write to NVM")
-        self.send_btn.setStyleSheet(_send_button_style())
+        self.send_btn.setStyleSheet(_WRITE_BTN_STYLE)
         self.send_btn.clicked.connect(self._on_send_clicked)
         send_row.addWidget(self.send_btn)
 
         self.write_all_btn = QPushButton("Write to All 96 QTRMs")
-        self.write_all_btn.setStyleSheet(_send_button_style())
+        self.write_all_btn.setStyleSheet(_WRITE_BTN_STYLE)
         self.write_all_btn.clicked.connect(self._on_write_all_clicked)
         self.write_all_btn.setVisible(False)
         send_row.addWidget(self.write_all_btn)
+
+        self.send_indicator = QLabel("Not sent yet")
+        self.send_indicator.setStyleSheet(_indicator_style())
+        send_row.addWidget(self.send_indicator)
+
+        self.write_all_indicator = QLabel("Not sent yet")
+        self.write_all_indicator.setStyleSheet(_indicator_style())
+        self.write_all_indicator.setVisible(False)
+        send_row.addWidget(self.write_all_indicator)
 
         self.status_label = QLabel("Not yet sent")
         self.response_time_label = QLabel("")
@@ -114,12 +118,11 @@ class MemoryTab(QWidget):
         scroll.setFrameShape(QScrollArea.NoFrame)
         scroll.setWidget(content)
 
-        self.header_panel = HeaderPanel()
-
+        # HeaderPanel is now a single global full-height sidebar owned by
+        # main_window.py, not embedded per-tab - see its module docstring.
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
-        outer.addWidget(scroll, 1)
-        outer.addWidget(self.header_panel)
+        outer.addWidget(scroll)
 
     def _build_mfg_group(self):
         box = QGroupBox("Manufacturing Data")
@@ -145,6 +148,7 @@ class MemoryTab(QWidget):
         self.mfg_box.setVisible(not is_trm_config)
         self.trm_config_box.setVisible(is_trm_config)
         self.write_all_btn.setVisible(is_trm_config)
+        self.write_all_indicator.setVisible(is_trm_config)
         self.send_btn.setText("Write to Selected QTRM" if is_trm_config else "Write to NVM")
 
     def _current_data_type(self) -> int:
@@ -203,15 +207,26 @@ class MemoryTab(QWidget):
         self.send_btn.setEnabled(enabled)
         self.write_all_btn.setEnabled(enabled)
 
+    def reset_to_idle(self):
+        # Without this, an indicator is left showing whatever
+        # pending/acked/not-acked state its last send ended in, forever,
+        # even after switching tabs away and back.
+        self.send_indicator.setText("Not sent yet")
+        self.send_indicator.setStyleSheet(_indicator_style())
+        self.write_all_indicator.setText("Not sent yet")
+        self.write_all_indicator.setStyleSheet(_indicator_style())
+
     def mark_pending(self):
         self.status_label.setText("Sent - waiting for response...")
         self.response_time_label.setText("")
         self._set_buttons_enabled(False)
-        self.send_btn.setStyleSheet(_send_button_style(_PENDING_COLOR))
+        self.send_indicator.setText("Sending...")
+        self.send_indicator.setStyleSheet(_indicator_style(_PENDING_COLOR))
 
     def show_result(self, qtrm_index: int, acked: bool):
         self._set_buttons_enabled(True)
-        self.send_btn.setStyleSheet(_send_button_style(_ACKED_COLOR if acked else _NOT_ACKED_COLOR))
+        self.send_indicator.setText("Acknowledged" if acked else "Not Acknowledged")
+        self.send_indicator.setStyleSheet(_indicator_style(_ACKED_COLOR if acked else _NOT_ACKED_COLOR))
         self.status_label.setText(
             f"QTRM-{qtrm_index}: {'Acknowledged' if acked else 'Not acknowledged'}"
         )
@@ -221,7 +236,8 @@ class MemoryTab(QWidget):
 
     def show_no_response(self, qtrm_index: int):
         self._set_buttons_enabled(True)
-        self.send_btn.setStyleSheet(_send_button_style(_NOT_ACKED_COLOR))
+        self.send_indicator.setText("No Response")
+        self.send_indicator.setStyleSheet(_indicator_style(_NOT_ACKED_COLOR))
         self.status_label.setText(f"QTRM-{qtrm_index}: No response")
         self.response_time_label.setText("")
 
@@ -229,17 +245,20 @@ class MemoryTab(QWidget):
         self.status_label.setText("Sent to all 96 - waiting for response...")
         self.response_time_label.setText("")
         self._set_buttons_enabled(False)
-        self.write_all_btn.setStyleSheet(_send_button_style(_PENDING_COLOR))
+        self.write_all_indicator.setText("Sending...")
+        self.write_all_indicator.setStyleSheet(_indicator_style(_PENDING_COLOR))
 
     def show_all_results(self, acked_flags):
         self._set_buttons_enabled(True)
         acked_count = sum(1 for v in acked_flags if v)
         all_acked = acked_count == len(acked_flags)
-        self.write_all_btn.setStyleSheet(_send_button_style(_ACKED_COLOR if all_acked else _NOT_ACKED_COLOR))
+        self.write_all_indicator.setText(f"{acked_count}/{len(acked_flags)} Acknowledged")
+        self.write_all_indicator.setStyleSheet(_indicator_style(_ACKED_COLOR if all_acked else _NOT_ACKED_COLOR))
         self.status_label.setText(f"{acked_count}/{len(acked_flags)} QTRMs acknowledged")
 
     def show_all_no_response(self):
         self._set_buttons_enabled(True)
-        self.write_all_btn.setStyleSheet(_send_button_style(_NOT_ACKED_COLOR))
+        self.write_all_indicator.setText("No Response")
+        self.write_all_indicator.setStyleSheet(_indicator_style(_NOT_ACKED_COLOR))
         self.status_label.setText("No response")
         self.response_time_label.setText("")

@@ -35,6 +35,46 @@ QMainWindow {{
     background-color: {_BG};
 }}
 
+QMenuBar {{
+    background-color: {_BG};
+    color: {_TEXT};
+    border-bottom: 1px solid {_BORDER};
+    padding: 2px 4px;
+}}
+QMenuBar::item {{
+    background: transparent;
+    padding: 6px 12px;
+    border-radius: 8px;
+}}
+QMenuBar::item:selected {{
+    background-color: {_CARD};
+    color: {_ACCENT};
+}}
+QMenuBar::item:pressed {{
+    background-color: {_ACCENT};
+    color: {_TEXT};
+}}
+QMenu {{
+    background-color: {_CARD};
+    color: {_TEXT};
+    border: 1px solid {_BORDER};
+    border-radius: 10px;
+    padding: 6px;
+}}
+QMenu::item {{
+    padding: 8px 24px 8px 16px;
+    border-radius: 6px;
+}}
+QMenu::item:selected {{
+    background-color: {_ACCENT};
+    color: {_TEXT};
+}}
+QMenu::separator {{
+    height: 1px;
+    background-color: {_BORDER};
+    margin: 6px 8px;
+}}
+
 QGroupBox {{
     background-color: {_CARD};
     border: 1px solid {_BORDER};
@@ -46,8 +86,11 @@ QGroupBox {{
 QGroupBox::title {{
     subcontrol-origin: margin;
     left: 16px;
-    padding: 0 8px;
+    padding: 2px 10px 8px 2px;
     color: {_ACCENT};
+    font-size: 12pt;
+    font-weight: 700;
+    letter-spacing: 0.4px;
 }}
 
 QPushButton {{

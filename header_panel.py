@@ -47,7 +47,7 @@ _ACCENT_HOVER = "#1fc2ca"
 _ACCENT_PRESSED = "#00858c"
 _CARD_BG = "#31363d"
 _BORDER = "#42484f"
-_LABEL_COLOR = "rgba(238, 238, 238, 0.55)"
+_LABEL_COLOR = "rgba(238, 238, 238, 0.78)"
 _VALUE_COLOR = "#eeeeee"
 # Roughly the width of one label:value form row - section dividers are
 # capped to this instead of stretching the full card width, so they don't

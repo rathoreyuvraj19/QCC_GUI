@@ -17,7 +17,7 @@ own confirmation dialog naming exactly what will be overwritten.
 
 from PySide6.QtCore import Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QFormLayout, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
+    QCheckBox, QFormLayout, QHBoxLayout, QLabel, QMessageBox,
     QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
@@ -30,6 +30,7 @@ from command_style import send_button_style
 from packet import MEM_DATA_TYPE_MANUFACTURING, MEM_DATA_TYPE_TRM_CONFIGURATION
 from segmented_control import SegmentedControl
 from spin_field import SpinField
+from titled_group import titled_group_box
 
 # Deliberately red, not the shared purple every other command tab's send
 # button uses - this writes permanently to real hardware's flash memory,
@@ -65,12 +66,13 @@ class MemoryTab(QWidget):
         warning.setWordWrap(True)
         layout.addWidget(warning)
 
-        target_box = QGroupBox("Target")
-        target_row = QHBoxLayout(target_box)
+        target_box, target_outer = titled_group_box("Target")
+        target_row = QHBoxLayout()
         target_row.addWidget(QLabel("QTRM:"))
         self.qtrm_spin = SpinField(0, 95, 0, field_width=76)
         target_row.addWidget(self.qtrm_spin)
         target_row.addStretch(1)
+        target_outer.addLayout(target_row)
         layout.addWidget(target_box)
 
         self.data_type_switch = SegmentedControl("Manufacturing", "TRM Configuration")
@@ -125,23 +127,25 @@ class MemoryTab(QWidget):
         outer.addWidget(scroll)
 
     def _build_mfg_group(self):
-        box = QGroupBox("Manufacturing Data")
-        form = QFormLayout(box)
+        box, outer = titled_group_box("Manufacturing Data")
+        form = QFormLayout()
         self.agency_id_spin = SpinField(0, 15, 0, field_width=64)
         self.fw_version_spin = SpinField(0, 15, 0, field_width=64)
         self.serial_number_spin = SpinField(0, 65535, 0, field_width=80)
         form.addRow("Mfg. Agency ID (0-15):", self.agency_id_spin)
         form.addRow("Firmware Version (0-15):", self.fw_version_spin)
         form.addRow("Serial Number:", self.serial_number_spin)
+        outer.addLayout(form)
         return box
 
     def _build_trm_config_group(self):
-        box = QGroupBox("TRM Configuration")
-        form = QFormLayout(box)
+        box, outer = titled_group_box("TRM Configuration")
+        form = QFormLayout()
         self.temp_cutoff_en_check = QCheckBox("Temp Cutoff Enable")
         self.temp_cutoff_spin = SpinField(0, 255, 0, field_width=64)
         form.addRow(self.temp_cutoff_en_check)
         form.addRow("Temp Cutoff (deg C, 0-255):", self.temp_cutoff_spin)
+        outer.addLayout(form)
         return box
 
     def _on_data_type_toggled(self, is_trm_config: bool):

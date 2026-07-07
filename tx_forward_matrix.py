@@ -8,12 +8,13 @@ x"0" & r_channel_TX_RF_logic), the lower 4 bits of the decoded
 "tx_forward_rf_status" byte are one flag per TX channel of a QTRM:
 bit 3 = CH1, bit 2 = CH2, bit 1 = CH3, bit 0 = CH4.
 
-Shown as a shrunk per-QTRM response indicator (communication status -
-responded/no response/pending, independent of channel state) with 4 small
-channel LEDs directly below it (green = channel active, red = channel
-inactive, grey = unknown because no response was received for that QTRM).
-Same 6 Cold-Plate-group layout as link_test_tab.py's LedMatrix, via the
-same qtrm_layout.py helpers, so the two visually line up when toggled.
+Shown as a per-QTRM response indicator (communication status -
+responded/no response/pending, independent of channel state), same fixed
+box size/font as link_test_tab.py's LedMatrix cells, with 4 small channel
+LEDs directly below it (green = channel active, red = channel inactive,
+grey = unknown because no response was received for that QTRM). Same 6
+Cold-Plate-group layout as LedMatrix too, via the same qtrm_layout.py
+helpers, so the two visually line up when toggled.
 """
 
 from PySide6.QtCore import Qt, Signal
@@ -32,15 +33,15 @@ _CP_BOX_STYLE = (
 
 _TEXT_COLOR = "#1f2328"
 
-# Response-indicator cell (shrunk vs. LedMatrix's _Led, to leave room for
-# the 4 channel LEDs below it) - radius kept well under half of
-# _RESP_MIN_HEIGHT, per this codebase's established QSS gotcha: Qt's QSS
-# engine doesn't clamp border-radius to half the box size like CSS does,
-# a radius too close to (or over) half the height/width renders square
-# instead of rounded (verified via render tests elsewhere in this app).
+# Response-indicator cell - same fixed footprint as link_test_tab.py's
+# _Led / command_style.py's matrix_button_style (46x24, 10px radius) so
+# every per-QTRM box in the app reads as the same size regardless of tab;
+# the 4 channel LEDs sit in the extra room below it rather than shrinking
+# this box down to make room, per Yuvraj's ask ("keep the box size fixed,
+# use the space via font size" - not by shrinking the box itself).
 _RESP_MIN_WIDTH = 46
-_RESP_MIN_HEIGHT = 16
-_RESP_RADIUS = 5
+_RESP_MIN_HEIGHT = 24
+_RESP_RADIUS = 10
 
 # Small square channel LEDs (CH1-CH4) under each response cell.
 _CH_LED_SIZE = 12
@@ -59,7 +60,7 @@ def _resp_style(rgb) -> str:
     return (
         f"border: 1px solid rgba(0, 0, 0, 60); border-radius: {_RESP_RADIUS}px;"
         f"background-color: {rgb_css(rgb)}; color: {_TEXT_COLOR};"
-        "font-size: 7pt; font-weight: 600; padding: 1px 2px;"
+        "font-size: 8pt; font-weight: 500; padding: 2px 4px;"
     )
 
 
@@ -71,7 +72,7 @@ def _ch_led_style(rgb) -> str:
 
 
 class _TxForwardCell(QWidget):
-    """One QTRM's shrunk response indicator + its 4 CH1-CH4 channel LEDs."""
+    """One QTRM's response indicator (LedMatrix-sized) + its 4 CH1-CH4 channel LEDs."""
 
     clicked = Signal(int)
 

@@ -30,7 +30,7 @@ outside the tabs' own scroll areas, so without this its full height would
 add directly to the whole window's minimum size.
 """
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
@@ -54,11 +54,11 @@ _VALUE_COLOR = "#eeeeee"
 # visually extend further right than the content rows they separate.
 _CONTENT_COL_WIDTH = 260
 
-# Brief glow on any field whose value just changed from the previous frame -
-# padding/radius stay identical between normal and glow so the glow doesn't
-# nudge the row's layout, only background-color changes.
+# Any field whose value changed from the previous frame stays highlighted
+# (not a brief flash) until the user clears it via the "Clear Highlights"
+# button - padding/radius stay identical between normal and highlighted so
+# toggling doesn't nudge the row's layout, only background-color changes.
 _GLOW_BG = "rgba(0, 173, 181, 0.35)"
-_GLOW_DURATION_MS = 700
 _VALUE_BASE_CSS = (
     f"color: {_VALUE_COLOR}; font-weight: 600; font-size: 9pt;"
     "font-family: Consolas, monospace; border: none; border-radius: 4px; padding: 1px 3px;"
@@ -131,10 +131,11 @@ class HeaderPanel(QWidget):
         # stretches (to fill the whole window, top to bottom).
         self.setFixedWidth(_PANEL_WIDTH)
 
-        # Generation counter per field name so an in-flight glow's revert
-        # timer doesn't clobber a newer glow that started before the first
-        # one finished (e.g. two frames arriving inside _GLOW_DURATION_MS).
-        self._flash_gen = {}
+        # name -> normal style to revert to when cleared. A field appears
+        # here as soon as its value changes at least once and stays until
+        # clear_highlights() is called - highlights persist across further
+        # show_frame() calls instead of auto-fading, per Yuvraj's ask.
+        self._highlighted = {}
 
         # No native title text - Qt's QGroupBox::title subcontrol often
         # ignores font-weight/size set via stylesheet (the style engine
@@ -170,6 +171,17 @@ class HeaderPanel(QWidget):
         # stretched single-word pill reads as a section header, not a
         # clickable action.
         query_row.addWidget(self.query_btn)
+
+        self.clear_highlights_btn = QPushButton("Clear Highlights")
+        self.clear_highlights_btn.setStyleSheet(_QUERY_BTN_STYLE)
+        self.clear_highlights_btn.setToolTip(
+            "Reverts every field currently highlighted (changed since the\n"
+            "last clear) back to its normal look - new changes will\n"
+            "highlight again."
+        )
+        self.clear_highlights_btn.clicked.connect(self.clear_highlights)
+        query_row.addWidget(self.clear_highlights_btn)
+
         query_row.addStretch(1)
         layout.addLayout(query_row)
 
@@ -278,29 +290,27 @@ class HeaderPanel(QWidget):
             form.addRow(name_label, self._make_value_label(name))
         return form
 
-    def _flash(self, name: str, normal_style: str, glow_style: str):
+    def _highlight(self, name: str, normal_style: str, glow_style: str):
         """
-        Briefly glows one field's value cell, then reverts - the generation
-        counter guards against a stale revert (scheduled by an earlier
-        change) firing after a newer change already re-glowed the same
-        cell, which would otherwise cut the newer glow short.
+        Marks one field's value cell as changed - stays highlighted (no
+        auto-revert) until clear_highlights() is called. Storing the
+        field's own normal_style (rather than a single shared one) is what
+        lets clear_highlights() restore CHECKSUM to whichever of the
+        OK/FAIL styles is actually current, not a generic value style.
         """
-        label = self.field_labels[name]
-        label.setStyleSheet(glow_style)
-        gen = self._flash_gen.get(name, 0) + 1
-        self._flash_gen[name] = gen
+        self.field_labels[name].setStyleSheet(glow_style)
+        self._highlighted[name] = normal_style
 
-        def _revert():
-            if self._flash_gen.get(name) == gen:
-                label.setStyleSheet(normal_style)
-
-        QTimer.singleShot(_GLOW_DURATION_MS, _revert)
+    def clear_highlights(self):
+        for name, normal_style in self._highlighted.items():
+            self.field_labels[name].setStyleSheet(normal_style)
+        self._highlighted.clear()
 
     def _set_field(self, name: str, text: str):
         label = self.field_labels[name]
         if label.text() != text:
             label.setText(text)
-            self._flash(name, _VALUE_NORMAL_STYLE, _VALUE_GLOW_STYLE)
+            self._highlight(name, _VALUE_NORMAL_STYLE, _VALUE_GLOW_STYLE)
 
     def show_frame(self, raw: bytes):
         header_raw = raw[0:_HEADER_TOTAL_SIZE]
@@ -339,7 +349,7 @@ class HeaderPanel(QWidget):
         glow_style = _CHECKSUM_OK_GLOW_STYLE if h.checksum_ok else _CHECKSUM_FAIL_GLOW_STYLE
         if checksum_label.text() != new_checksum_text:
             checksum_label.setText(new_checksum_text)
-            self._flash("CHECKSUM", normal_style, glow_style)
+            self._highlight("CHECKSUM", normal_style, glow_style)
 
         self.header_hex_label.setText(_hex_full(header_raw))
         self.query_btn.setEnabled(True)
@@ -354,12 +364,12 @@ class HeaderPanel(QWidget):
         self.query_status_label.setText("No response")
 
     def clear(self):
+        self.clear_highlights()
         for name, label in self.field_labels.items():
             label.setText("-")
             if name == "CHECKSUM":
-                label.setStyleSheet(
-                    f"color: {_VALUE_COLOR}; font-weight: 600; font-size: 9pt; font-family: Consolas, monospace;"
-                    "background: transparent; border: none;"
-                )
+                label.setStyleSheet(_CHECKSUM_OK_NORMAL_STYLE)
+            else:
+                label.setStyleSheet(_VALUE_NORMAL_STYLE)
         self.header_hex_label.setText("-")
         self.query_status_label.setText("")

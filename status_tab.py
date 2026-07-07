@@ -33,10 +33,13 @@ one) resets the whole matrix to idle, since a previous query's results
 don't apply to whatever gets selected/sent next.
 """
 
+from openpyxl import Workbook
+
 from PySide6.QtCore import QTimer, Signal
 from PySide6.QtWidgets import (
-    QButtonGroup, QComboBox, QFormLayout, QFrame, QGridLayout, QGroupBox,
-    QHBoxLayout, QLabel, QPushButton, QScrollArea, QVBoxLayout, QWidget,
+    QButtonGroup, QComboBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
+    QGroupBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea,
+    QVBoxLayout, QWidget,
 )
 
 from command_style import send_button_style
@@ -187,6 +190,14 @@ class StatusTab(QWidget):
         top_row.addWidget(QLabel("Resend every (s):"))
         self.resend_spin = DoubleSpinField(0.0, 300.0, 0.0, step=0.1, decimals=1, field_width=64)
         top_row.addWidget(self.resend_spin)
+
+        # Same plain-QPushButton look as dwell_tab.py's Import/Save-to-CSV
+        # buttons (no custom stylesheet - relies on the app-wide default) -
+        # this is a file-export action, a different category from Send All,
+        # so it deliberately doesn't use send_button_style().
+        self.export_btn = QPushButton("Export to Excel...")
+        self.export_btn.clicked.connect(self._on_export_clicked)
+        top_row.addWidget(self.export_btn)
 
         self.summary_label = QLabel("Not yet run")
         self.response_time_label = QLabel("")
@@ -388,6 +399,60 @@ class StatusTab(QWidget):
             led.setText(f"QTRM-{qtrm_index}: {_format_value(decoded[field])}")
         else:
             led.setText(f"QTRM-{qtrm_index}")
+
+    # -- export to Excel -----------------------------------------------------
+
+    def _export_field_list(self):
+        """
+        Which fields to put in the export, in on-screen display order:
+        just the one field currently selected via "Show Field" if one is
+        selected (mirrors what's actually highlighted/visible on the QTRM
+        cells right now), otherwise every filterable field for the current
+        Status Type/Diagnostic Type (i.e. everything the "Show Field" row
+        currently offers) - same order _current_fields() already returns,
+        which is also the order its buttons are laid out in.
+        """
+        selected = self._current_filter_field()
+        if selected is not None:
+            return [selected]
+        return self._current_fields()
+
+    def _on_export_clicked(self):
+        if self._results is None:
+            QMessageBox.warning(
+                self, "Nothing to export",
+                "Run 'Send All' first to gather QTRM data before exporting.",
+            )
+            return
+
+        fields = self._export_field_list()
+        if not fields:
+            QMessageBox.warning(self, "Nothing to export", "The current Status Type has no exportable fields.")
+            return
+
+        path, _ = QFileDialog.getSaveFileName(self, "Export Status Data", "", "Excel Files (*.xlsx)")
+        if not path:
+            return
+        if not path.lower().endswith(".xlsx"):
+            path += ".xlsx"
+
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "Status"
+        ws.append(["QTRM"] + [_FIELD_LABELS.get(f, f.replace("_", " ").title()) for f in fields])
+        for qtrm_index, decoded in enumerate(self._results):
+            if decoded is None:
+                row = [qtrm_index] + ["No Response"] * len(fields)
+            else:
+                row = [qtrm_index] + [_format_value(decoded[f]) if f in decoded else "" for f in fields]
+            ws.append(row)
+
+        try:
+            wb.save(path)
+        except Exception as e:
+            QMessageBox.warning(self, "Export failed", f"Could not write '{path}':\n{e}")
+            return
+        self.response_time_label.setText(f"Exported to {path}")
 
     # -- details panel -------------------------------------------------------
 

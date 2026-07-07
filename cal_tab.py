@@ -84,7 +84,7 @@ class CalTab(QWidget):
         big_title = _TITLE_MAP.get(title, title)
 
         outer = QHBoxLayout(self)
-        outer.setContentsMargins(0, 0, 0, 0)
+        outer.setContentsMargins(24, 24, 24, 24)
 
         card = QFrame()
         card.setObjectName("CalCard")

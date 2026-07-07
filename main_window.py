@@ -96,6 +96,16 @@ _PING_FAILURE_STYLE = (
 # result color lands.
 _PING_MIN_PENDING_MS = 350
 
+# Outlined/neutral toggle for the SOB/PRT quick-send shortcuts row - not
+# the shared accent send_button_style(), since this button doesn't send
+# anything itself, just shows/hides the two that do.
+_QUICK_SEND_TOGGLE_STYLE = (
+    "QPushButton { background-color: transparent; color: #00adb5; border: 1px solid #00adb5;"
+    "border-radius: 8px; padding: 6px 12px; font-weight: 600; }"
+    "QPushButton:hover { background-color: rgba(0, 173, 181, 0.15); }"
+    "QPushButton:pressed { background-color: rgba(0, 173, 181, 0.3); }"
+)
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -324,8 +334,11 @@ class MainWindow(QMainWindow):
         row.addWidget(self.qcc_port_edit)
         row.addWidget(self.connect_btn)
         row.addWidget(self.conn_status_label)
-        row.addWidget(self.ping_btn)
-        row.addWidget(self.ping_result_label)
+        self.quick_send_toggle_btn = QPushButton("Quick Send ▾")
+        self.quick_send_toggle_btn.setStyleSheet(_QUICK_SEND_TOGGLE_STYLE)
+        self.quick_send_toggle_btn.setToolTip("Show/hide the SOB/PRT quick-send shortcuts")
+        self.quick_send_toggle_btn.clicked.connect(self._on_quick_send_toggle_clicked)
+        row.addWidget(self.quick_send_toggle_btn)
         row.addStretch(1)
 
         # Quick-access shortcuts to Timing Generation's SOB/PRT sends,
@@ -336,13 +349,21 @@ class MainWindow(QMainWindow):
         # values and pending/result indicator - not a second independent
         # copy with its own state.
         #
+        # Hidden by default (per Yuvraj's later ask) and toggled via
+        # quick_send_toggle_btn above - wrapped in its own QWidget (not a
+        # bare QHBoxLayout) since only a widget's visibility can be
+        # toggled; a hidden layout with no widget wrapper still reserves
+        # its row's space.
+        #
         # Own row, not packed into the row above - that row already sits
         # right at the edge of fitting a 1920px-wide display once font
         # metrics/DPI scaling vary machine to machine (this is the same
         # class of overflow already fixed once by moving the 3 window-
         # opening buttons into the Tools menu) - two more wide buttons in
         # that single row reintroduces the risk.
-        shortcuts_row = QHBoxLayout()
+        self.shortcuts_container = QWidget()
+        shortcuts_row = QHBoxLayout(self.shortcuts_container)
+        shortcuts_row.setContentsMargins(0, 0, 0, 0)
         shortcuts_row.addWidget(QLabel("Quick send:"))
         self.conn_sob_btn = QPushButton("Send SOB")
         self.conn_sob_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
@@ -352,6 +373,7 @@ class MainWindow(QMainWindow):
         self.conn_prt_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
         shortcuts_row.addWidget(self.conn_prt_btn)
         shortcuts_row.addStretch(1)
+        self.shortcuts_container.setVisible(False)
 
         # Its own row, not crammed into the row above - that row already
         # has several fixed-size buttons plus a QLineEdit with no minimum
@@ -379,9 +401,14 @@ class MainWindow(QMainWindow):
         )
         outer.addWidget(title_label)
         outer.addLayout(row)
-        outer.addLayout(shortcuts_row)
+        outer.addWidget(self.shortcuts_container)
         outer.addLayout(warning_row)
         return box
+
+    def _on_quick_send_toggle_clicked(self):
+        showing = not self.shortcuts_container.isVisible()
+        self.shortcuts_container.setVisible(showing)
+        self.quick_send_toggle_btn.setText("Quick Send ▴" if showing else "Quick Send ▾")
 
     # -- connection handling ---------------------------------------------
 

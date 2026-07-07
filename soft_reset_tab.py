@@ -3,7 +3,10 @@ soft_reset_tab.py
 
 "Soft Reset" - Soft Reset command (Section 9 of the QTRM Message Format IDD).
 
-Fixed command, no configurable delay (not implemented in the QTRM firmware).
+Fixed command, no configurable delay (not implemented in the QTRM firmware,
+per Yuvraj) - the payload byte is a fixed 0x01 (see build_soft_reset_slot
+in packet.py), confirmed against a real-hardware reference frame, not a
+user-adjustable setting.
 No response is expected either, so unlike the other tabs there's no
 response-time tracking here - it's fire-and-forget. "Reset All" sends the
 Soft Reset command to every QTRM. Clicking one button in the matrix resets

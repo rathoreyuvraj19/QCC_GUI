@@ -34,6 +34,7 @@ from rc_settings import (
     COMMAND_ID_RX_CAL, COMMAND_ID_TX_CAL, COMMAND_ID_ISOLATION,
     COMMAND_ID_SOFT_RESET, COMMAND_ID_MEMORY_OPERATION, COMMAND_ID_QCC_STATUS,
 )
+from command_style import send_button_style
 from connection_settings import connection_settings
 from udp_worker import UdpWorker
 from ping_worker import PingWorker
@@ -202,6 +203,13 @@ class MainWindow(QMainWindow):
         self.timing_tab.pps_send_requested.connect(self._on_timing_pps_send)
         self.tabs.addTab(self.timing_tab, "Timing Generation")
 
+        # Connection bar's SOB/PRT shortcuts (built before this tab existed,
+        # see _build_connection_group) just click the real buttons here -
+        # same current field values, same pending/result indicator, not a
+        # separate action.
+        self.conn_sob_btn.clicked.connect(self.timing_tab.sob_send_btn.click)
+        self.conn_prt_btn.clicked.connect(self.timing_tab.prt_send_btn.click)
+
         self.rc_settings_tab = RCSettingsTab()
         self.tabs.addTab(self.rc_settings_tab, "RC Settings")
 
@@ -320,6 +328,21 @@ class MainWindow(QMainWindow):
         row.addWidget(self.ping_btn)
         row.addWidget(self.ping_result_label)
         row.addStretch(1)
+
+        # Quick-access shortcuts to Timing Generation's SOB/PRT sends,
+        # available from every tab (not just Timing Generation itself) -
+        # per Yuvraj's ask. These aren't a separate/duplicate action: they
+        # just click the real buttons on the Timing Generation tab (wired
+        # once that tab exists, see _build_ui), reusing its current field
+        # values and pending/result indicator - not a second independent
+        # copy with its own state.
+        self.conn_sob_btn = QPushButton("Send SOB")
+        self.conn_sob_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
+        row.addWidget(self.conn_sob_btn)
+
+        self.conn_prt_btn = QPushButton("Send PRT")
+        self.conn_prt_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
+        row.addWidget(self.conn_prt_btn)
 
         # Its own row, not crammed into the row above - that row already
         # has several fixed-size buttons plus a QLineEdit with no minimum

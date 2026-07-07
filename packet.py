@@ -444,8 +444,18 @@ def build_cal_frame(tx_cal: bool, target_qtrm_index: int, channel: int, phase: i
 
 
 def build_soft_reset_slot() -> bytes:
-    """30-byte wire slot: Soft Reset command (Section 9), fixed/no delay. No response is expected."""
-    return _build_status_family_slot(CMD_SOFT_RESET, STATUS_TYPE_NONE)
+    """
+    30-byte wire slot: Soft Reset command (Section 9). No response is
+    expected. byte5 (payload[0]) is fixed at 0x01 - confirmed against a
+    real-hardware reference frame (AA 00 20 00 00 01 00 00 00 8B); this
+    used to be sent as 0x00 (assumed "no payload"), which didn't match
+    what real hardware actually expects. The field's exact meaning isn't
+    documented/confirmed yet (possibly a fixed reset-delay-units value the
+    firmware requires even though it's not user-configurable) - Yuvraj to
+    confirm; treat as a required fixed constant until then, not something
+    to make configurable.
+    """
+    return _build_status_family_slot(CMD_SOFT_RESET, STATUS_TYPE_NONE, payload=bytes([0x01]))
 
 
 def build_soft_reset_frame(target_qtrm_index: int = None, header: bytes = None) -> bytes:

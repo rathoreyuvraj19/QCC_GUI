@@ -48,7 +48,6 @@ from packet import (
 from qtrm_layout import NUM_QTRM
 from spin_field import DoubleSpinField, SpinField
 
-REVEAL_DELAY_MS = 1000
 _DETAILS_WRAP_COLS = 5  # matches main_window.py's "Last Response" panel wrap width
 
 _STATUS_TYPES = [
@@ -165,10 +164,8 @@ class StatusTab(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._results = None
-        self._revealed = True
         self._individual_target = None
         self._individual_result = None
-        self._individual_revealed = True
         self._last_mode = None  # "all" | "individual" | None - which cache _on_filter_changed should reuse
         self._auto_resending = False
         self._resend_timer = QTimer(self)
@@ -363,9 +360,9 @@ class StatusTab(QWidget):
         self._on_filter_changed()
 
     def _on_filter_changed(self):
-        if self._last_mode == "individual" and self._individual_revealed and self._individual_target is not None:
+        if self._last_mode == "individual" and self._individual_target is not None:
             self._set_led_text_for_one(self._individual_target, self._individual_result)
-        elif self._last_mode == "all" and self._revealed and self._results is not None:
+        elif self._last_mode == "all" and self._results is not None:
             self._apply_filter_to_leds(self._results)
 
     def _reset_led_texts(self):
@@ -501,10 +498,8 @@ class StatusTab(QWidget):
         rather than showing increasingly stale results.
         """
         self._results = None
-        self._revealed = True
         self._individual_target = None
         self._individual_result = None
-        self._individual_revealed = True
         self._last_mode = None
         self.summary_label.setText("Not yet run")
         self.response_time_label.setText("")
@@ -513,23 +508,27 @@ class StatusTab(QWidget):
         self._clear_details_to_placeholder()
 
     def mark_pending(self):
+        # No artificial reveal delay - LEDs turn green/red the instant a
+        # real response arrives (show_results), or red on an actual
+        # timeout (show_no_response, driven by main_window.py's real
+        # RESPONSE_TIMEOUT_MS wait) - "delay is only there if i dont
+        # recieve a command", per Yuvraj. A fixed cosmetic delay here used
+        # to hold results back for a full second even when the response
+        # had already arrived.
         self.summary_label.setText("Sent - waiting for response...")
         self.response_time_label.setText("")
         self._results = None
-        self._revealed = False
         self._last_mode = "all"
         self.led_matrix.set_all(_PENDING_COLOR)
         self._reset_led_texts()
-        QTimer.singleShot(REVEAL_DELAY_MS, self._reveal)
 
     def show_results(self, results):
         self._results = results
         valid_flags = [r is not None for r in results]
         valid_count = sum(valid_flags)
         self.summary_label.setText(f"{valid_count}/{NUM_QTRM} QTRMs responded")
-        if self._revealed:
-            self.led_matrix.set_results(valid_flags)
-            self._apply_filter_to_leds(results)
+        self.led_matrix.set_results(valid_flags)
+        self._apply_filter_to_leds(results)
 
     def show_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
@@ -537,15 +536,8 @@ class StatusTab(QWidget):
     def show_no_response(self):
         self.summary_label.setText("No response")
         self.response_time_label.setText("")
-
-    def _reveal(self):
-        self._revealed = True
-        if self._results is not None:
-            self.led_matrix.set_results([r is not None for r in self._results])
-            self._apply_filter_to_leds(self._results)
-        else:
-            self.led_matrix.set_all(_NOT_LINKED_COLOR)
-            self._reset_led_texts()
+        self.led_matrix.set_all(_NOT_LINKED_COLOR)
+        self._reset_led_texts()
 
     # -- individual QTRM query (click one LED) ------------------------------
 
@@ -558,17 +550,14 @@ class StatusTab(QWidget):
         self.response_time_label.setText("")
         self._individual_target = qtrm_index
         self._individual_result = None
-        self._individual_revealed = False
         self._last_mode = "individual"
         self.led_matrix.set_all(_PENDING_COLOR)
         self._reset_led_texts()
         self._clear_details_to_placeholder()
-        QTimer.singleShot(REVEAL_DELAY_MS, self._reveal_individual)
 
     def show_individual_result(self, qtrm_index: int, decoded):
         self._individual_result = decoded
-        if self._individual_revealed:
-            self._reveal_individual_now(qtrm_index, decoded)
+        self._reveal_individual_now(qtrm_index, decoded)
 
     def show_individual_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
@@ -576,15 +565,6 @@ class StatusTab(QWidget):
     def show_individual_no_response(self, qtrm_index: int):
         self.summary_label.setText(f"QTRM-{qtrm_index}: No response")
         self.led_matrix.set_one(qtrm_index, _NOT_LINKED_COLOR)
-
-    def _reveal_individual(self):
-        self._individual_revealed = True
-        if self._individual_target is None:
-            return
-        if self._individual_result is not None:
-            self._reveal_individual_now(self._individual_target, self._individual_result)
-        # else: leave it pending grey - the real response (or timeout) hasn't
-        # arrived yet and will update it directly when it does.
 
     def _reveal_individual_now(self, qtrm_index: int, decoded):
         if decoded is None:

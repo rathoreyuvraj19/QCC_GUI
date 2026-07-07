@@ -29,8 +29,6 @@ from command_style import send_button_style
 from qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_to_bottom
 from spin_field import DoubleSpinField
 
-REVEAL_DELAY_MS = 1000
-
 # LedMatrix needs real QColor instances (not QSS strings) - same RGB
 # triples as command_style.py's shared palette, just converted here since
 # this is the one consumer that paints them directly rather than via QSS.
@@ -161,11 +159,6 @@ class LinkTestTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
-        self._link_results = None
-        self._revealed = True
-        self._individual_target = None
-        self._individual_result = None
-        self._individual_revealed = True
         self._auto_resending = False
         self._resend_timer = QTimer(self)
         self._resend_timer.timeout.connect(lambda: self.send_requested.emit(True))
@@ -229,20 +222,21 @@ class LinkTestTab(QWidget):
             self._resend_timer.start(int(interval_s * 1000))
 
     def mark_pending(self):
+        # No artificial reveal delay - LEDs turn green/red the instant a
+        # real response arrives (show_results), or red on an actual
+        # timeout (show_no_response, driven by main_window.py's real
+        # RESPONSE_TIMEOUT_MS wait) - "delay is only there if i dont
+        # recieve a command", per Yuvraj. A fixed cosmetic delay here used
+        # to hold results back for a full second even when the response
+        # had already arrived.
         self.summary_label.setText("Sent - waiting for response...")
         self.response_time_label.setText("")
-        self._link_results = None
-        self._revealed = False
         self.led_matrix.set_all(_PENDING_COLOR)
-        QTimer.singleShot(REVEAL_DELAY_MS, self._reveal)
 
     def show_results(self, linked_flags):
-        self._link_results = linked_flags
         linked_count = sum(1 for v in linked_flags if v)
         self.summary_label.setText(f"{linked_count}/{NUM_QTRM} QTRMs linked")
-        if self._revealed:
-            # Reveal delay already elapsed (late response) - reflect it now.
-            self.led_matrix.set_results(linked_flags)
+        self.led_matrix.set_results(linked_flags)
 
     def show_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
@@ -250,13 +244,7 @@ class LinkTestTab(QWidget):
     def show_no_response(self):
         self.summary_label.setText("No response")
         self.response_time_label.setText("")
-
-    def _reveal(self):
-        self._revealed = True
-        if self._link_results is not None:
-            self.led_matrix.set_results(self._link_results)
-        else:
-            self.led_matrix.set_all(_NOT_LINKED_COLOR)
+        self.led_matrix.set_all(_NOT_LINKED_COLOR)
 
     # -- individual QTRM test (click one LED) ------------------------------
 
@@ -266,18 +254,11 @@ class LinkTestTab(QWidget):
     def mark_individual_pending(self, qtrm_index: int):
         self.summary_label.setText(f"QTRM-{qtrm_index}: waiting for response...")
         self.response_time_label.setText("")
-        self._individual_target = qtrm_index
-        self._individual_result = None
-        self._individual_revealed = False
         self.led_matrix.set_all(_PENDING_COLOR)
-        QTimer.singleShot(REVEAL_DELAY_MS, self._reveal_individual)
 
     def show_individual_result(self, qtrm_index: int, linked: bool):
-        self._individual_result = linked
-        if self._individual_revealed:
-            # Reveal delay already elapsed (late response) - reflect it now.
-            self.led_matrix.set_one(qtrm_index, _LINKED_COLOR if linked else _NOT_LINKED_COLOR)
-            self.summary_label.setText(f"QTRM-{qtrm_index}: {'Linked' if linked else 'Not linked'}")
+        self.led_matrix.set_one(qtrm_index, _LINKED_COLOR if linked else _NOT_LINKED_COLOR)
+        self.summary_label.setText(f"QTRM-{qtrm_index}: {'Linked' if linked else 'Not linked'}")
 
     def show_individual_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
@@ -285,16 +266,3 @@ class LinkTestTab(QWidget):
     def show_individual_no_response(self, qtrm_index: int):
         self.summary_label.setText(f"QTRM-{qtrm_index}: No response")
         self.led_matrix.set_one(qtrm_index, _NOT_LINKED_COLOR)
-
-    def _reveal_individual(self):
-        self._individual_revealed = True
-        if self._individual_target is None:
-            return
-        if self._individual_result is not None:
-            color = _LINKED_COLOR if self._individual_result else _NOT_LINKED_COLOR
-            self.led_matrix.set_one(self._individual_target, color)
-            self.summary_label.setText(
-                f"QTRM-{self._individual_target}: {'Linked' if self._individual_result else 'Not linked'}"
-            )
-        # else: leave it pending grey - the real response (or timeout) hasn't
-        # arrived yet and will update it directly when it does.

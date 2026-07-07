@@ -999,12 +999,19 @@ class MainWindow(QMainWindow):
         self.worker.send_frame(frame)
 
     def _on_frame_received(self, raw: bytes):
+        # Stop the clock FIRST, before any GUI processing - populating the
+        # RX Test Window's byte grid + 96-slot table, and the HeaderPanel's
+        # fields, both take real (non-trivial, especially with the RX Test
+        # Window open) time, and none of that is actual wire/response
+        # latency. Measuring after that processing had been silently
+        # inflating every response time shown to the user.
+        elapsed_us = self._end_wait()
+        kind, self._awaiting_kind = self._awaiting_kind, None
+
         self._last_received_frame = raw
         if self._rx_test_window is not None:
             self._rx_test_window.show_frame(raw)
 
-        elapsed_us = self._end_wait()
-        kind, self._awaiting_kind = self._awaiting_kind, None
         # One global HeaderPanel now (not one per tab) - it always shows
         # whatever frame was most recently received, regardless of which
         # tab/command it came from.

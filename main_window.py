@@ -335,13 +335,23 @@ class MainWindow(QMainWindow):
         # once that tab exists, see _build_ui), reusing its current field
         # values and pending/result indicator - not a second independent
         # copy with its own state.
+        #
+        # Own row, not packed into the row above - that row already sits
+        # right at the edge of fitting a 1920px-wide display once font
+        # metrics/DPI scaling vary machine to machine (this is the same
+        # class of overflow already fixed once by moving the 3 window-
+        # opening buttons into the Tools menu) - two more wide buttons in
+        # that single row reintroduces the risk.
+        shortcuts_row = QHBoxLayout()
+        shortcuts_row.addWidget(QLabel("Quick send:"))
         self.conn_sob_btn = QPushButton("Send SOB")
         self.conn_sob_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
-        row.addWidget(self.conn_sob_btn)
+        shortcuts_row.addWidget(self.conn_sob_btn)
 
         self.conn_prt_btn = QPushButton("Send PRT")
         self.conn_prt_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
-        row.addWidget(self.conn_prt_btn)
+        shortcuts_row.addWidget(self.conn_prt_btn)
+        shortcuts_row.addStretch(1)
 
         # Its own row, not crammed into the row above - that row already
         # has several fixed-size buttons plus a QLineEdit with no minimum
@@ -369,6 +379,7 @@ class MainWindow(QMainWindow):
         )
         outer.addWidget(title_label)
         outer.addLayout(row)
+        outer.addLayout(shortcuts_row)
         outer.addLayout(warning_row)
         return box
 
@@ -1180,5 +1191,14 @@ class MainWindow(QMainWindow):
 
     def closeEvent(self, event):
         if self.worker is not None:
-            self.worker.stop()
+            try:
+                self.worker.stop()
+            except KeyboardInterrupt:
+                # worker.stop() blocks (QThread.wait()) for up to 2s - a
+                # Ctrl+C landing in that window raises here rather than at
+                # the top-level script, and PySide reports it as an error
+                # in the closeEvent override instead of a clean exit.
+                # Swallow it and let the window close normally anyway;
+                # the app is already shutting down either way.
+                pass
         super().closeEvent(event)

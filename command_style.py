@@ -96,12 +96,15 @@ def indicator_style(bg_color: str = None, radius: int = 14, border_color: str = 
 
 
 def matrix_button_style(bg_color: str = None, padding: str = "2px 4px", font_size_pt: int = 8,
-                         radius: int = 8) -> str:
+                         radius: int = 16) -> str:
     """
     Per-QTRM matrix button (Isolation's 96-button grid, Soft Reset's
     QTRM-id buttons): light grey idle with real hover/pressed feedback
     (it's clickable), flat solid color for pending/linked/not-linked
     results (a status snapshot, not meant to invite clicking while shown).
+    Default radius matches link_test_tab.py's _Led exactly (16px) - both
+    are the same kind of per-QTRM indicator, just in different tabs, and
+    should read as the same shape.
     """
     base = f"padding: {padding}; font-size: {font_size_pt}pt; font-weight: 500; border-radius: {radius}px;"
     if bg_color is None:

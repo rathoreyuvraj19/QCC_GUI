@@ -124,7 +124,6 @@ class MainWindow(QMainWindow):
         self._last_unlocked_tab_index = 0
         self._ping_worker: PingWorker | None = None
         self._ping_pending_since: float | None = None
-        self._send_time = None
         self._pending_timer = None
         self._rx_test_window: RxTestWindow | None = None
         self._tx_test_window: TxTestWindow | None = None
@@ -571,8 +570,7 @@ class MainWindow(QMainWindow):
     # -- response timing / timeout ----------------------------------------
 
     def _begin_wait(self, timeout_callback):
-        """Start timing a round trip; timeout_callback fires if nothing comes back."""
-        self._send_time = time.perf_counter()
+        """Start a timeout watchdog; timeout_callback fires if nothing comes back within RESPONSE_TIMEOUT_MS."""
         if self._pending_timer is not None:
             self._pending_timer.stop()
         self._pending_timer = QTimer(self)
@@ -581,15 +579,17 @@ class MainWindow(QMainWindow):
         self._pending_timer.start(RESPONSE_TIMEOUT_MS)
 
     def _end_wait(self):
-        """Stop timing and return elapsed microseconds, or None if nothing was pending."""
-        if self._send_time is None:
-            return None
-        elapsed_us = (time.perf_counter() - self._send_time) * 1_000_000
-        self._send_time = None
+        """
+        Stop the timeout watchdog - that's all this does now. The actual
+        response-time measurement lives in udp_worker.py, captured right
+        at the real socket send/receive calls inside the worker thread, so
+        it's immune to GUI processing time and Qt's cross-thread
+        signal-dispatch latency - both of which polluted the old
+        perf_counter()-in-the-main-thread approach this replaced.
+        """
         if self._pending_timer is not None:
             self._pending_timer.stop()
             self._pending_timer = None
-        return elapsed_us
 
     def _on_dwell_timeout(self):
         if self._awaiting_kind != "dwell":
@@ -789,7 +789,6 @@ class MainWindow(QMainWindow):
             if self._pending_timer is not None:
                 self._pending_timer.stop()
                 self._pending_timer = None
-            self._send_time = None
         elif not self._check_not_busy():
             return
 
@@ -998,14 +997,18 @@ class MainWindow(QMainWindow):
         self._begin_wait(self._on_timing_pps_timeout)
         self.worker.send_frame(frame)
 
-    def _on_frame_received(self, raw: bytes):
-        # Stop the clock FIRST, before any GUI processing - populating the
-        # RX Test Window's byte grid + 96-slot table, and the HeaderPanel's
-        # fields, both take real (non-trivial, especially with the RX Test
-        # Window open) time, and none of that is actual wire/response
-        # latency. Measuring after that processing had been silently
-        # inflating every response time shown to the user.
-        elapsed_us = self._end_wait()
+    def _on_frame_received(self, raw: bytes, elapsed_us: float):
+        # elapsed_us comes straight from udp_worker.py, timestamped right
+        # at the actual sendto()/recvfrom() calls inside the worker thread -
+        # not measured here, so it excludes both GUI processing time (RX
+        # Test Window/HeaderPanel updates below) AND the Qt cross-thread
+        # signal-dispatch latency between the worker thread emitting
+        # frame_received and this slot actually running on the main thread.
+        # -1.0 means the worker had no prior send to time against (e.g. a
+        # stray/unsolicited frame) - treat that the same as "unknown".
+        if elapsed_us < 0:
+            elapsed_us = None
+        self._end_wait()  # stop the timeout watchdog only, see its docstring
         kind, self._awaiting_kind = self._awaiting_kind, None
 
         self._last_received_frame = raw

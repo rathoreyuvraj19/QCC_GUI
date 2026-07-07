@@ -5,7 +5,7 @@ Background UDP send/receive so the GUI thread never blocks on socket I/O.
 
 Usage:
     worker = UdpWorker(local_port=50000, qcc_ip="192.168.1.50", qcc_port=50001)
-    worker.frame_received.connect(on_frame_received)   # bytes
+    worker.frame_received.connect(on_frame_received)   # (bytes, elapsed_us: float)
     worker.frame_sent.connect(on_frame_sent)           # bytes - fires on every successful sendto
     worker.error.connect(on_error)                     # str
     worker.start()
@@ -16,6 +16,7 @@ Usage:
 """
 
 import socket
+import time
 
 from PySide6.QtCore import QThread, Signal
 
@@ -23,7 +24,13 @@ from packet import TOTAL_PACKET_SIZE
 
 
 class UdpWorker(QThread):
-    frame_received = Signal(bytes)
+    # (raw frame, elapsed microseconds since the most recent send_frame()
+    # call, or -1.0 if there wasn't one to time against - e.g. a stray/
+    # unsolicited frame). Timestamped right at the actual socket calls,
+    # inside this worker thread - not by whichever GUI code eventually
+    # handles the signal - so it reflects real wire time, not GUI
+    # processing time or Qt's cross-thread signal-dispatch latency.
+    frame_received = Signal(bytes, float)
     frame_sent = Signal(bytes)
     error = Signal(str)
     status = Signal(str)
@@ -35,6 +42,7 @@ class UdpWorker(QThread):
         self.qcc_port = qcc_port
         self._sock = None
         self._running = False
+        self._last_send_time = None
 
     def run(self):
         try:
@@ -52,6 +60,7 @@ class UdpWorker(QThread):
         while self._running:
             try:
                 data, addr = self._sock.recvfrom(65536)
+                recv_time = time.perf_counter()
             except socket.timeout:
                 continue
             except OSError as e:
@@ -65,7 +74,12 @@ class UdpWorker(QThread):
                 )
                 continue
 
-            self.frame_received.emit(data)
+            if self._last_send_time is not None:
+                elapsed_us = (recv_time - self._last_send_time) * 1_000_000
+                self._last_send_time = None  # consumed - a later stray frame shouldn't reuse it
+            else:
+                elapsed_us = -1.0
+            self.frame_received.emit(data, elapsed_us)
 
         if self._sock:
             self._sock.close()
@@ -79,9 +93,11 @@ class UdpWorker(QThread):
             self.error.emit("Cannot send - socket not open yet")
             return
         try:
+            self._last_send_time = time.perf_counter()
             self._sock.sendto(frame, (self.qcc_ip, self.qcc_port))
             self.frame_sent.emit(frame)
         except OSError as e:
+            self._last_send_time = None
             self.error.emit(f"Failed to send frame: {e}")
 
     def stop(self):

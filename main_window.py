@@ -467,7 +467,12 @@ class MainWindow(QMainWindow):
     def _on_connect_status(self, msg: str):
         self.conn_status_label.setText(msg)
         if msg.startswith("Listening"):
-            self.connect_btn.setStyleSheet("background-color: rgb(146, 208, 165);")
+            # Reusing the Ping button's success style - same green, and
+            # (unlike the old flat "background-color: x;" form this
+            # replaced) a real QPushButton{...} selector block, so it
+            # keeps rounded corners and working hover/pressed feedback
+            # instead of rendering as a flat, square, dead-looking button.
+            self.connect_btn.setStyleSheet(_PING_SUCCESS_STYLE)
 
     def _on_worker_error(self, msg: str):
         # Only a bind failure at connect-time means the connection itself
@@ -477,7 +482,7 @@ class MainWindow(QMainWindow):
         # otherwise-healthy connection and shouldn't disconnect the UI state.
         if msg.startswith("Failed to bind"):
             self.connect_btn.setText("Connect")
-            self.connect_btn.setStyleSheet("background-color: rgb(240, 149, 149);")
+            self.connect_btn.setStyleSheet(_PING_FAILURE_STYLE)
             self.worker = None
         QMessageBox.warning(self, "UDP Error", msg)
 

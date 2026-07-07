@@ -30,7 +30,7 @@ outside the tabs' own scroll areas, so without this its full height would
 add directly to the whole window's minimum size.
 """
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
@@ -53,6 +53,30 @@ _VALUE_COLOR = "#eeeeee"
 # capped to this instead of stretching the full card width, so they don't
 # visually extend further right than the content rows they separate.
 _CONTENT_COL_WIDTH = 260
+
+# Brief glow on any field whose value just changed from the previous frame -
+# padding/radius stay identical between normal and glow so the glow doesn't
+# nudge the row's layout, only background-color changes.
+_GLOW_BG = "rgba(0, 173, 181, 0.35)"
+_GLOW_DURATION_MS = 700
+_VALUE_BASE_CSS = (
+    f"color: {_VALUE_COLOR}; font-weight: 600; font-size: 9pt;"
+    "font-family: Consolas, monospace; border: none; border-radius: 4px; padding: 1px 3px;"
+)
+_VALUE_NORMAL_STYLE = _VALUE_BASE_CSS + " background: transparent;"
+_VALUE_GLOW_STYLE = _VALUE_BASE_CSS + f" background-color: {_GLOW_BG};"
+_CHECKSUM_OK_BASE_CSS = (
+    "color: rgb(146, 208, 165); font-weight: 600; font-size: 9pt;"
+    "font-family: Consolas, monospace; border: none; border-radius: 4px; padding: 1px 3px;"
+)
+_CHECKSUM_FAIL_BASE_CSS = (
+    "color: rgb(240, 149, 149); font-weight: 600; font-size: 9pt;"
+    "font-family: Consolas, monospace; border: none; border-radius: 4px; padding: 1px 3px;"
+)
+_CHECKSUM_OK_NORMAL_STYLE = _CHECKSUM_OK_BASE_CSS + " background: transparent;"
+_CHECKSUM_OK_GLOW_STYLE = _CHECKSUM_OK_BASE_CSS + f" background-color: {_GLOW_BG};"
+_CHECKSUM_FAIL_NORMAL_STYLE = _CHECKSUM_FAIL_BASE_CSS + " background: transparent;"
+_CHECKSUM_FAIL_GLOW_STYLE = _CHECKSUM_FAIL_BASE_CSS + f" background-color: {_GLOW_BG};"
 
 # (section title, [field names]) - grouped so related values read together
 # instead of one long undifferentiated list of 26 rows.
@@ -106,6 +130,11 @@ class HeaderPanel(QWidget):
         # stays constant regardless of window size; only its height
         # stretches (to fill the whole window, top to bottom).
         self.setFixedWidth(_PANEL_WIDTH)
+
+        # Generation counter per field name so an in-flight glow's revert
+        # timer doesn't clobber a newer glow that started before the first
+        # one finished (e.g. two frames arriving inside _GLOW_DURATION_MS).
+        self._flash_gen = {}
 
         # No native title text - Qt's QGroupBox::title subcontrol often
         # ignores font-weight/size set via stylesheet (the style engine
@@ -220,10 +249,7 @@ class HeaderPanel(QWidget):
 
     def _make_value_label(self, name: str) -> QLabel:
         value_label = QLabel("-")
-        value_label.setStyleSheet(
-            f"color: {_VALUE_COLOR}; font-weight: 600; font-size: 9pt; font-family: Consolas, monospace;"
-            "background: transparent; border: none;"
-        )
+        value_label.setStyleSheet(_VALUE_NORMAL_STYLE)
         # Selectable/copyable via mouse - lets an operator copy a single
         # value (e.g. CHIP_ID) without retyping it by hand.
         value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
@@ -252,45 +278,68 @@ class HeaderPanel(QWidget):
             form.addRow(name_label, self._make_value_label(name))
         return form
 
+    def _flash(self, name: str, normal_style: str, glow_style: str):
+        """
+        Briefly glows one field's value cell, then reverts - the generation
+        counter guards against a stale revert (scheduled by an earlier
+        change) firing after a newer change already re-glowed the same
+        cell, which would otherwise cut the newer glow short.
+        """
+        label = self.field_labels[name]
+        label.setStyleSheet(glow_style)
+        gen = self._flash_gen.get(name, 0) + 1
+        self._flash_gen[name] = gen
+
+        def _revert():
+            if self._flash_gen.get(name) == gen:
+                label.setStyleSheet(normal_style)
+
+        QTimer.singleShot(_GLOW_DURATION_MS, _revert)
+
+    def _set_field(self, name: str, text: str):
+        label = self.field_labels[name]
+        if label.text() != text:
+            label.setText(text)
+            self._flash(name, _VALUE_NORMAL_STYLE, _VALUE_GLOW_STYLE)
+
     def show_frame(self, raw: bytes):
         header_raw = raw[0:_HEADER_TOTAL_SIZE]
         h = QCCHeaderTx.from_bytes(header_raw)
 
-        self.field_labels["DESTINATION_ID"].setText(str(h.destination_id))
-        self.field_labels["SOURCE_ID"].setText(str(h.source_id))
-        self.field_labels["PACKET_SIZE"].setText(str(h.packet_size))
-        self.field_labels["COMMAND_ID"].setText(str(h.command_id))
-        self.field_labels["COMMAND_ACK"].setText(str(h.command_ack))
-        self.field_labels["MESSAGE_NUMBER"].setText(str(h.message_number))
-        self.field_labels["DATE"].setText(str(h.date))
-        self.field_labels["MONTH"].setText(str(h.month))
-        self.field_labels["YEAR"].setText(str(h.year))
-        self.field_labels["TIME_OF_DAY"].setText(str(h.time_of_day))
-        self.field_labels["COMMAND_ID_REPEAT"].setText(str(h.command_id_repeat))
-        self.field_labels["FPGA_TEMPERATURE"].setText(str(h.fpga_temperature))
-        self.field_labels["BOARD_TEMPERATURE"].setText(str(h.board_temperature))
-        self.field_labels["BOARD_HUMIDITY"].setText(str(h.board_humidity))
-        self.field_labels["INPUT_SOB_COUNT"].setText(str(h.input_sob_count))
-        self.field_labels["INPUT_PRT_COUNT"].setText(str(h.input_prt_count))
-        self.field_labels["INPUT_PPS_COUNT"].setText(str(h.input_pps_count))
-        self.field_labels["OUTPUT_PRT_COUNT"].setText(str(h.output_prt_count))
-        self.field_labels["OUTPUT_SOB_COUNT"].setText(str(h.output_sob_count))
-        self.field_labels["INPUT_SOB_WIDTH_US"].setText(str(h.input_sob_width_us))
-        self.field_labels["OUTPUT_SOB_WIDTH_US"].setText(str(h.output_sob_width_us))
-        self.field_labels["INPUT_PRT_WIDTH_US"].setText(str(h.input_prt_width_us))
-        self.field_labels["OUTPUT_PRT_WIDTH_US"].setText(str(h.output_prt_width_us))
-        self.field_labels["INPUT_PPS_WIDTH_US"].setText(str(h.input_pps_width_us))
-        self.field_labels["PPS_COUNTER"].setText(str(h.pps_counter))
-        self.field_labels["CHIP_ID"].setText(f"0x{h.chip_id:08X}")
+        self._set_field("DESTINATION_ID", str(h.destination_id))
+        self._set_field("SOURCE_ID", str(h.source_id))
+        self._set_field("PACKET_SIZE", str(h.packet_size))
+        self._set_field("COMMAND_ID", str(h.command_id))
+        self._set_field("COMMAND_ACK", str(h.command_ack))
+        self._set_field("MESSAGE_NUMBER", str(h.message_number))
+        self._set_field("DATE", str(h.date))
+        self._set_field("MONTH", str(h.month))
+        self._set_field("YEAR", str(h.year))
+        self._set_field("TIME_OF_DAY", str(h.time_of_day))
+        self._set_field("COMMAND_ID_REPEAT", str(h.command_id_repeat))
+        self._set_field("FPGA_TEMPERATURE", str(h.fpga_temperature))
+        self._set_field("BOARD_TEMPERATURE", str(h.board_temperature))
+        self._set_field("BOARD_HUMIDITY", str(h.board_humidity))
+        self._set_field("INPUT_SOB_COUNT", str(h.input_sob_count))
+        self._set_field("INPUT_PRT_COUNT", str(h.input_prt_count))
+        self._set_field("INPUT_PPS_COUNT", str(h.input_pps_count))
+        self._set_field("OUTPUT_PRT_COUNT", str(h.output_prt_count))
+        self._set_field("OUTPUT_SOB_COUNT", str(h.output_sob_count))
+        self._set_field("INPUT_SOB_WIDTH_US", str(h.input_sob_width_us))
+        self._set_field("OUTPUT_SOB_WIDTH_US", str(h.output_sob_width_us))
+        self._set_field("INPUT_PRT_WIDTH_US", str(h.input_prt_width_us))
+        self._set_field("OUTPUT_PRT_WIDTH_US", str(h.output_prt_width_us))
+        self._set_field("INPUT_PPS_WIDTH_US", str(h.input_pps_width_us))
+        self._set_field("PPS_COUNTER", str(h.pps_counter))
+        self._set_field("CHIP_ID", f"0x{h.chip_id:08X}")
+
         checksum_label = self.field_labels["CHECKSUM"]
-        checksum_label.setText("OK" if h.checksum_ok else "FAIL")
-        checksum_label.setStyleSheet(
-            "color: rgb(146, 208, 165); font-weight: 600; font-size: 9pt; font-family: Consolas, monospace;"
-            "background: transparent; border: none;"
-            if h.checksum_ok else
-            "color: rgb(240, 149, 149); font-weight: 600; font-size: 9pt; font-family: Consolas, monospace;"
-            "background: transparent; border: none;"
-        )
+        new_checksum_text = "OK" if h.checksum_ok else "FAIL"
+        normal_style = _CHECKSUM_OK_NORMAL_STYLE if h.checksum_ok else _CHECKSUM_FAIL_NORMAL_STYLE
+        glow_style = _CHECKSUM_OK_GLOW_STYLE if h.checksum_ok else _CHECKSUM_FAIL_GLOW_STYLE
+        if checksum_label.text() != new_checksum_text:
+            checksum_label.setText(new_checksum_text)
+            self._flash("CHECKSUM", normal_style, glow_style)
 
         self.header_hex_label.setText(_hex_full(header_raw))
         self.query_btn.setEnabled(True)

@@ -50,6 +50,7 @@ from packet import (
 )
 from qtrm_layout import NUM_QTRM
 from spin_field import DoubleSpinField, SpinField
+from tx_forward_matrix import TxForwardMatrix
 
 _DETAILS_WRAP_COLS = 5  # matches main_window.py's "Last Response" panel wrap width
 
@@ -136,6 +137,12 @@ _DIAGNOSTIC_FILTERABLE_FIELDS = {
 }
 
 
+# Selecting this field under HEALTH switches the matrix from the plain
+# LedMatrix to tx_forward_matrix.py's TxForwardMatrix (per-channel LEDs) -
+# see _is_tx_forward_mode().
+_TX_FORWARD_FIELD = "tx_forward_rf_status"
+
+
 def _format_value(value) -> str:
     return value.hex(" ").upper() if isinstance(value, (bytes, bytearray)) else str(value)
 
@@ -209,6 +216,17 @@ class StatusTab(QWidget):
         self.led_matrix = LedMatrix()
         self.led_matrix.led_clicked.connect(self._on_led_clicked)
         layout.addWidget(self.led_matrix, 1)
+
+        # Alternate full-array view, shown instead of led_matrix only while
+        # "Tx Forward RF Status" is the selected "Show Field" - see
+        # _is_tx_forward_mode()/_update_matrix_visibility(). Both matrices
+        # are kept in sync on every state change (mark_pending/show_results/
+        # etc.) regardless of which is actually visible, so toggling
+        # between them never shows stale data.
+        self.tx_forward_matrix = TxForwardMatrix()
+        self.tx_forward_matrix.cell_clicked.connect(self._on_led_clicked)
+        self.tx_forward_matrix.setVisible(False)
+        layout.addWidget(self.tx_forward_matrix, 1)
 
         self.details_box = self._build_details_group()
         layout.addWidget(self.details_box)
@@ -355,6 +373,17 @@ class StatusTab(QWidget):
         checked = self.filter_button_group.checkedButton()
         return checked.property("field_key") if checked is not None else None
 
+    def _is_tx_forward_mode(self) -> bool:
+        return (
+            self.status_type_combo.currentData() == STATUS_TYPE_HEALTH
+            and self._current_filter_field() == _TX_FORWARD_FIELD
+        )
+
+    def _update_matrix_visibility(self):
+        tx_mode = self._is_tx_forward_mode()
+        self.led_matrix.setVisible(not tx_mode)
+        self.tx_forward_matrix.setVisible(tx_mode)
+
     def _on_checkbox_toggled(self, button, checked: bool):
         if checked:
             # Manual exclusivity: selecting one deselects every other one -
@@ -368,6 +397,7 @@ class StatusTab(QWidget):
                     other.blockSignals(False)
         for btn in self.filter_button_group.buttons():
             btn.setStyleSheet(_FILTER_BTN_STYLE_ON if btn.isChecked() else _FILTER_BTN_STYLE_OFF)
+        self._update_matrix_visibility()
         self._on_filter_changed()
 
     def _on_filter_changed(self):
@@ -570,6 +600,8 @@ class StatusTab(QWidget):
         self.response_time_label.setText("")
         self.led_matrix.set_all(_IDLE_COLOR)
         self._reset_led_texts()
+        self.tx_forward_matrix.set_all_state("idle")
+        self._update_matrix_visibility()
         self._clear_details_to_placeholder()
 
     def mark_pending(self):
@@ -586,6 +618,7 @@ class StatusTab(QWidget):
         self._last_mode = "all"
         self.led_matrix.set_all(_PENDING_COLOR)
         self._reset_led_texts()
+        self.tx_forward_matrix.set_all_state("pending")
 
     def show_results(self, results):
         self._results = results
@@ -594,6 +627,7 @@ class StatusTab(QWidget):
         self.summary_label.setText(f"{valid_count}/{NUM_QTRM} QTRMs responded")
         self.led_matrix.set_results(valid_flags)
         self._apply_filter_to_leds(results)
+        self.tx_forward_matrix.set_results(results)
 
     def show_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
@@ -603,6 +637,7 @@ class StatusTab(QWidget):
         self.response_time_label.setText("")
         self.led_matrix.set_all(_NOT_LINKED_COLOR)
         self._reset_led_texts()
+        self.tx_forward_matrix.set_all_state("no_response")
 
     # -- individual QTRM query (click one LED) ------------------------------
 
@@ -618,6 +653,7 @@ class StatusTab(QWidget):
         self._last_mode = "individual"
         self.led_matrix.set_all(_PENDING_COLOR)
         self._reset_led_texts()
+        self.tx_forward_matrix.set_all_state("pending")
         self._clear_details_to_placeholder()
 
     def show_individual_result(self, qtrm_index: int, decoded):
@@ -630,14 +666,17 @@ class StatusTab(QWidget):
     def show_individual_no_response(self, qtrm_index: int):
         self.summary_label.setText(f"QTRM-{qtrm_index}: No response")
         self.led_matrix.set_one(qtrm_index, _NOT_LINKED_COLOR)
+        self.tx_forward_matrix.set_one_result(qtrm_index, None)
 
     def _reveal_individual_now(self, qtrm_index: int, decoded):
         if decoded is None:
             self.led_matrix.set_one(qtrm_index, _NOT_LINKED_COLOR)
             self.summary_label.setText(f"QTRM-{qtrm_index}: No valid response")
             self._set_led_text_for_one(qtrm_index, None)
+            self.tx_forward_matrix.set_one_result(qtrm_index, None)
             return
         self.led_matrix.set_one(qtrm_index, _LINKED_COLOR)
         self.summary_label.setText(f"QTRM-{qtrm_index}: Responded")
         self._populate_details(qtrm_index, decoded)
         self._set_led_text_for_one(qtrm_index, decoded)
+        self.tx_forward_matrix.set_one_result(qtrm_index, decoded)

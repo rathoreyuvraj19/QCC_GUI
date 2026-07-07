@@ -20,7 +20,7 @@ recently, same as every other tab.
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QFrame, QGridLayout, QHBoxLayout, QLabel,
+    QFrame, QGridLayout, QHBoxLayout, QLabel,
     QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -32,6 +32,7 @@ from command_style import send_button_style
 from packet import PRT_COUNT_INFINITE
 from segmented_control import SegmentedControl
 from spin_field import SpinField
+from toggle_switch import ToggleSwitch
 
 _ACCENT = "#00adb5"
 _TEXT = "#eeeeee"
@@ -121,6 +122,7 @@ class TimingTab(QWidget):
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._prt_count_before_infinite = 0
 
         content = QWidget()
         # Three vertical partitions side by side (SOB | PRT | PPS), each its
@@ -203,10 +205,16 @@ class TimingTab(QWidget):
         grid.setColumnStretch(0, 1)
         self.prt_count_spin = SpinField(0, _U32_SPIN_MAX, 0, field_width=110)
         _field_row(grid, 0, "PRT Count", self.prt_count_spin)
-        self.prt_infinite_check = QCheckBox("Infinite (0xFFFFFFFF)")
-        self.prt_infinite_check.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 12px;")
+
+        infinite_row = QHBoxLayout()
+        infinite_row.setSpacing(8)
+        infinite_label = QLabel("Infinite (0xFFFFFFFF)")
+        infinite_label.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 12px;")
+        infinite_row.addWidget(infinite_label)
+        self.prt_infinite_check = ToggleSwitch()
         self.prt_infinite_check.toggled.connect(self._on_prt_infinite_toggled)
-        grid.addWidget(self.prt_infinite_check, 1, 1, Qt.AlignRight | Qt.AlignVCenter)
+        infinite_row.addWidget(self.prt_infinite_check)
+        grid.addLayout(infinite_row, 1, 1, Qt.AlignRight | Qt.AlignVCenter)
         self.prt_pri_spin = SpinField(0, _U32_SPIN_MAX, 0, field_width=110)
         _field_row(grid, 2, "PRI Width (µs)", self.prt_pri_spin)
         self.prt_width_spin = SpinField(0, 65535, 0, field_width=110)
@@ -271,6 +279,18 @@ class TimingTab(QWidget):
     # -- send handlers -------------------------------------------------------
 
     def _on_prt_infinite_toggled(self, checked: bool):
+        """
+        Infinite PRT locks the count field to its max value (rather than
+        just disabling it at whatever number was last typed) - the field
+        visually shows 0xFFFFFFFF-equivalent max-out while infinite is on,
+        and the last real count the operator had entered is restored the
+        moment infinite is switched back off.
+        """
+        if checked:
+            self._prt_count_before_infinite = self.prt_count_spin.value()
+            self.prt_count_spin.setValue(_U32_SPIN_MAX)
+        else:
+            self.prt_count_spin.setValue(self._prt_count_before_infinite)
         self.prt_count_spin.spin.setEnabled(not checked)
 
     def _on_sob_send_clicked(self):

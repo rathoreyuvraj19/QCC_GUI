@@ -37,6 +37,11 @@ class _BaseSpinField(QWidget):
         self.spin = spin
         self.spin.setButtonSymbols(QAbstractSpinBox.NoButtons)
         self.spin.setFocusPolicy(Qt.WheelFocus)
+        # Qt's default CorrectToPreviousValue reverts an out-of-range typed
+        # value back to whatever was there before the edit - CorrectToNearestValue
+        # instead clamps it to the boundary actually violated (min if too low,
+        # max if too high), which is the "hold at min/max" behavior wanted here.
+        self.spin.setCorrectionMode(QAbstractSpinBox.CorrectToNearestValue)
         self.spin.setFixedWidth(field_width)
         self.spin.setStyleSheet(
             f"QAbstractSpinBox {{ background-color: {_FIELD_BG}; color: {_TEXT};"

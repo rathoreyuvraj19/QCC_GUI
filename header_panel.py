@@ -55,9 +55,10 @@ _VALUE_COLOR = "#eeeeee"
 _CONTENT_COL_WIDTH = 260
 
 # Any field whose value changed from the previous frame stays highlighted
-# (not a brief flash) until the user clears it via the "Clear Highlights"
-# button - padding/radius stay identical between normal and highlighted so
-# toggling doesn't nudge the row's layout, only background-color changes.
+# (not a brief flash) until the next command is sent (main_window.py calls
+# clear_highlights() right before every send) - padding/radius stay
+# identical between normal and highlighted so toggling doesn't nudge the
+# row's layout, only background-color changes.
 _GLOW_BG = "rgba(0, 173, 181, 0.35)"
 _VALUE_BASE_CSS = (
     f"color: {_VALUE_COLOR}; font-weight: 600; font-size: 9pt;"
@@ -133,8 +134,10 @@ class HeaderPanel(QWidget):
 
         # name -> normal style to revert to when cleared. A field appears
         # here as soon as its value changes at least once and stays until
-        # clear_highlights() is called - highlights persist across further
-        # show_frame() calls instead of auto-fading, per Yuvraj's ask.
+        # clear_highlights() is called - main_window.py calls that at the
+        # start of every send, so a field lights up on the response to
+        # THAT command and stays lit until the next command is sent
+        # (not until the operator manually clears it).
         self._highlighted = {}
 
         # No native title text - Qt's QGroupBox::title subcontrol often
@@ -171,17 +174,6 @@ class HeaderPanel(QWidget):
         # stretched single-word pill reads as a section header, not a
         # clickable action.
         query_row.addWidget(self.query_btn)
-
-        self.clear_highlights_btn = QPushButton("Clear Highlights")
-        self.clear_highlights_btn.setStyleSheet(_QUERY_BTN_STYLE)
-        self.clear_highlights_btn.setToolTip(
-            "Reverts every field currently highlighted (changed since the\n"
-            "last clear) back to its normal look - new changes will\n"
-            "highlight again."
-        )
-        self.clear_highlights_btn.clicked.connect(self.clear_highlights)
-        query_row.addWidget(self.clear_highlights_btn)
-
         query_row.addStretch(1)
         layout.addLayout(query_row)
 

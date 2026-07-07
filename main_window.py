@@ -334,12 +334,14 @@ class MainWindow(QMainWindow):
         row.addWidget(self.qcc_port_edit)
         row.addWidget(self.connect_btn)
         row.addWidget(self.conn_status_label)
-        self.quick_send_toggle_btn = QPushButton("Quick Send ▾")
+        row.addWidget(self.ping_btn)
+        row.addWidget(self.ping_result_label)
+        row.addStretch(1)
+        self.quick_send_toggle_btn = QPushButton("Timing Generation ▾")
         self.quick_send_toggle_btn.setStyleSheet(_QUICK_SEND_TOGGLE_STYLE)
         self.quick_send_toggle_btn.setToolTip("Show/hide the SOB/PRT quick-send shortcuts")
         self.quick_send_toggle_btn.clicked.connect(self._on_quick_send_toggle_clicked)
         row.addWidget(self.quick_send_toggle_btn)
-        row.addStretch(1)
 
         # Quick-access shortcuts to Timing Generation's SOB/PRT sends,
         # available from every tab (not just Timing Generation itself) -
@@ -408,7 +410,7 @@ class MainWindow(QMainWindow):
     def _on_quick_send_toggle_clicked(self):
         showing = not self.shortcuts_container.isVisible()
         self.shortcuts_container.setVisible(showing)
-        self.quick_send_toggle_btn.setText("Quick Send ▴" if showing else "Quick Send ▾")
+        self.quick_send_toggle_btn.setText("Timing Generation ▴" if showing else "Timing Generation ▾")
 
     # -- connection handling ---------------------------------------------
 
@@ -634,6 +636,18 @@ class MainWindow(QMainWindow):
             self._pending_timer.stop()
             self._pending_timer = None
 
+    def _send_frame(self, frame: bytes):
+        """
+        Every command send goes through here (instead of calling
+        self.worker.send_frame directly) so the header panel's stale
+        highlights from the PREVIOUS command are cleared right as the new
+        one goes out - the fields that changed in response to THIS command
+        will then re-highlight when show_frame() runs on the reply, and
+        stay lit until the next send clears them again.
+        """
+        self.header_panel.clear_highlights()
+        self.worker.send_frame(frame)
+
     def _on_dwell_timeout(self):
         if self._awaiting_kind != "dwell":
             return
@@ -755,7 +769,7 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "qcc_status"
         self.header_panel.mark_query_pending()
         self._begin_wait(self._on_qcc_status_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_qcc_status_timeout(self):
         if self._awaiting_kind != "qcc_status":
@@ -775,7 +789,7 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "dwell"
         self.dwell_tab.mark_pending()
         self._begin_wait(self._on_dwell_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_memory_write(self, data_type: int, qtrm_index: int, payload: bytes):
         if self.worker is None:
@@ -793,7 +807,7 @@ class MainWindow(QMainWindow):
         self._memory_write_target = qtrm_index
         self.memory_tab.mark_pending()
         self._begin_wait(self._on_memory_write_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_memory_write_all(self, data_type: int, payload: bytes):
         if self.worker is None:
@@ -810,7 +824,7 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "memory_write_all"
         self.memory_tab.mark_all_pending()
         self._begin_wait(self._on_memory_write_all_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_link_test_clicked(self, is_auto_resend: bool = False):
         if self.worker is None:
@@ -840,7 +854,7 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "link_test"
         self.link_test_tab.mark_pending()
         self._begin_wait(self._on_link_test_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_individual_link_test_clicked(self, qtrm_index: int):
         if self.worker is None:
@@ -855,7 +869,7 @@ class MainWindow(QMainWindow):
         self._individual_link_qtrm = qtrm_index
         self.link_test_tab.mark_individual_pending(qtrm_index)
         self._begin_wait(self._on_individual_link_test_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_rx_cal_send(self, qtrm_index, channel, phase, atten, tx_isolation_for_others):
         if self.worker is None:
@@ -874,7 +888,7 @@ class MainWindow(QMainWindow):
         self._rx_cal_target = qtrm_index
         self.rx_cal_tab.mark_pending()
         self._begin_wait(self._on_rx_cal_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_tx_cal_send(self, qtrm_index, channel, phase, atten, tx_isolation_for_others):
         if self.worker is None:
@@ -893,7 +907,7 @@ class MainWindow(QMainWindow):
         self._tx_cal_target = qtrm_index
         self.tx_cal_tab.mark_pending()
         self._begin_wait(self._on_tx_cal_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_isolation_send_all(self, tx_isolation: bool):
         if self.worker is None:
@@ -910,7 +924,7 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "isolation_all"
         self.isolation_tab.mark_all_pending()
         self._begin_wait(self._on_isolation_all_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_isolation_send_one(self, qtrm_index: int, tx_isolation: bool):
         if self.worker is None:
@@ -928,7 +942,7 @@ class MainWindow(QMainWindow):
         self._individual_isolation_qtrm = qtrm_index
         self.isolation_tab.mark_individual_pending(qtrm_index)
         self._begin_wait(self._on_isolation_individual_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_status_send_all(self, status_type: int, sub_status_type: int, beam_register_address: int):
         if self.worker is None:
@@ -948,7 +962,7 @@ class MainWindow(QMainWindow):
         self._status_sub_type_in_flight = sub_status_type
         self.status_tab.mark_pending()
         self._begin_wait(self._on_status_all_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_status_send_one(self, qtrm_index: int, status_type: int, sub_status_type: int,
                              beam_register_address: int):
@@ -970,7 +984,7 @@ class MainWindow(QMainWindow):
         self._status_sub_type_in_flight = sub_status_type
         self.status_tab.mark_individual_pending(qtrm_index)
         self._begin_wait(self._on_status_individual_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_reset_all_clicked(self):
         if self.worker is None:
@@ -978,7 +992,7 @@ class MainWindow(QMainWindow):
             return
         # Soft Reset gets no response - fire and forget, no timing/timeout tracking.
         frame = build_soft_reset_frame(target_qtrm_index=None, header=rc_settings.build_header(COMMAND_ID_SOFT_RESET))
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_reset_one_clicked(self, qtrm_index):
         if self.worker is None:
@@ -987,7 +1001,7 @@ class MainWindow(QMainWindow):
         frame = build_soft_reset_frame(
             target_qtrm_index=qtrm_index, header=rc_settings.build_header(COMMAND_ID_SOFT_RESET),
         )
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_timing_sob_send(self, external_loopback: bool, sob_width_us: int):
         if self.worker is None:
@@ -1003,7 +1017,7 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "timing_sob"
         self.timing_tab.mark_sob_pending()
         self._begin_wait(self._on_timing_sob_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_timing_prt_send(self, external_loopback: bool, prt_count: int, pri_width_us: int, prt_width_us: int):
         if self.worker is None:
@@ -1020,7 +1034,7 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "timing_prt"
         self.timing_tab.mark_prt_pending()
         self._begin_wait(self._on_timing_prt_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_timing_pps_send(self, pps_width_us: int):
         if self.worker is None:
@@ -1038,7 +1052,7 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = "timing_pps"
         self.timing_tab.mark_pps_pending()
         self._begin_wait(self._on_timing_pps_timeout)
-        self.worker.send_frame(frame)
+        self._send_frame(frame)
 
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
         # elapsed_us comes straight from udp_worker.py, timestamped right

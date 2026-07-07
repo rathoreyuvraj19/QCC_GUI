@@ -88,10 +88,19 @@ class _Led(QLabel):
 
     def set_color(self, color: QColor):
         self.setStyleSheet(
-            # Same 16px roundness as the Soft Reset button matrix (inherited
-            # there from the global QPushButton rule) so both QTRM display
-            # arrays share the same shape.
-            "border-radius: 16px; border: 1px solid rgba(0, 0, 0, 60);"
+            # Same 10px roundness as the Soft Reset/Isolation button matrix
+            # (command_style.py's matrix_button_style) so both QTRM display
+            # arrays share the same shape. Two gotchas learned fixing this:
+            # (1) border-radius MUST come after border - Qt's "border"
+            # shorthand resets border-radius back to 0 if declared before
+            # it, which silently made every cell render square even though
+            # this string contained "border-radius: ...". (2) radius must
+            # stay under half of _LED_MIN_HEIGHT (24px) - Qt's QSS engine
+            # doesn't clamp border-radius to half the box size like CSS
+            # does, so a 16px radius on a 24px-tall cell also rendered
+            # square; 10px is the value confirmed (via direct render test)
+            # to actually round at the real minimum cell size.
+            "border: 1px solid rgba(0, 0, 0, 60); border-radius: 10px;"
             f"background-color: rgb({color.red()}, {color.green()}, {color.blue()});"
             f"color: {_TEXT_COLOR}; font-size: 8pt; font-weight: 500; padding: 2px 4px;"
         )

@@ -96,15 +96,24 @@ def indicator_style(bg_color: str = None, radius: int = 14, border_color: str = 
 
 
 def matrix_button_style(bg_color: str = None, padding: str = "2px 4px", font_size_pt: int = 8,
-                         radius: int = 16) -> str:
+                         radius: int = 10) -> str:
     """
     Per-QTRM matrix button (Isolation's 96-button grid, Soft Reset's
     QTRM-id buttons): light grey idle with real hover/pressed feedback
     (it's clickable), flat solid color for pending/linked/not-linked
     results (a status snapshot, not meant to invite clicking while shown).
-    Default radius matches link_test_tab.py's _Led exactly (16px) - both
+    Default radius matches link_test_tab.py's _Led exactly (10px) - both
     are the same kind of per-QTRM indicator, just in different tabs, and
     should read as the same shape.
+
+    Radius is capped below 12px on purpose: these cells have a 24px
+    minimum height (_BUTTON_MIN_HEIGHT/_LED_MIN_HEIGHT), and Qt's QSS
+    engine doesn't clamp border-radius to half the box size like CSS does
+    - once radius exceeds half the widget's height, it silently renders
+    square corners instead of a rounded/pill shape (confirmed by direct
+    render test: 16px radius on a 24px-tall cell rendered square, 10-12px
+    rendered correctly). Don't raise this back above 12 without re-testing
+    at the actual 24px floor size, not just at a large/stretched size.
     """
     base = f"padding: {padding}; font-size: {font_size_pt}pt; font-weight: 500; border-radius: {radius}px;"
     if bg_color is None:

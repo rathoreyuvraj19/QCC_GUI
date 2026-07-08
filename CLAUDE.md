@@ -2,9 +2,10 @@
 
 PySide6 desktop app for building, sending, and receiving the 2970-byte QCC
 UDP frame (90-byte header + 96x30-byte QTRM data block), per
-`QCC_90Byte_Header_BitTable.docx` and the QTRM Message Format IDD. See
-[README.md](README.md) for setup/run instructions and a file-by-file
-overview.
+[docs/idd/packet_spec.yaml](docs/idd/packet_spec.yaml) - the in-repo source
+of truth for the packet layout (derived from `QCC_90Byte_Header_BitTable.docx`
+and the QTRM Message Format IDD). See [README.md](README.md) for setup/run
+instructions and a file-by-file overview.
 
 ## Open issues (flagged 2026-07-06, not yet started)
 
@@ -24,10 +25,12 @@ overview.
    `main_window.py`'s `local_port_edit` value rather than being
    independently configured.
 
-3. **"PPS width not in GUI"** - flagged but needs verification before
-   assuming it's a bug: per `QCC_90Byte_Header_BitTable.docx`, the response
-   header only defines `INPUT_PPS_WIDTH_US` (already shown in
-   `header_panel.py`) plus a separate `PPS_COUNTER` - there's no
-   `OUTPUT_PPS_WIDTH_US` field in the spec. Confirm with Yuvraj whether he
-   means something else (e.g. a different tab/panel) before changing
-   anything.
+3. ~~**"PPS width not in GUI"**~~ - RESOLVED 2026-07-08, corrected same day:
+   an earlier pass at this added a speculative `OUTPUT_PPS_WIDTH_US` field
+   that turned out not to exist in the real IDD. Once
+   `docs/idd/packet_spec.yaml` (the actual source of truth) landed in the
+   repo, the real gap was that `QCCHeaderTx` was missing `INPUT_PRT_PRI`/
+   `OUTPUT_PRT_PRI` (uint32 each, bytes 67-70/71-74) entirely, which pushed
+   `INPUT_PPS_WIDTH_US` and `PPS_COUNTER` to the wrong offsets and left
+   `RESERVED1` oversized. `core/packet.py`'s `QCCHeaderTx` and
+   `widgets/header_panel.py` (new "PRT PRI (µs)" group) now match the spec.

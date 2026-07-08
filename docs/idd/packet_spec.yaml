@@ -1,0 +1,250 @@
+# =============================================================================
+# packet_spec.yaml
+#
+# SINGLE SOURCE OF TRUTH for the QCC / 96x QTRM Ethernet UDP frame.
+#
+# Everything else (PySide6 GUI struct packing, HPS C register/packet defs,
+# VHDL address decode constants, and the IDD Word doc tables) should be
+# generated FROM this file, not hand-typed separately. If a field changes,
+# it changes here first, then regenerate the downstream artifacts.
+#
+# Byte order: little-endian, system-wide.
+# Total frame size: 2970 bytes = 90 (header) + 2880 (QTRM data block).
+#
+# Direction model:
+#   - The RESPONSE packet (QCC -> RC) is ALWAYS the same structure,
+#     regardless of which mode/command triggered it.
+#   - The TX packet (RC -> QCC, i.e. the command) DOES vary by mode.
+#     Bytes 1-32 are identical across every TX variant; only the
+#     Message Body (bytes 34-89) differs per Command ID.
+#
+# Status values per field:
+#   defined  - locked in, safe to generate code/docs from
+#   tbd      - placeholder only, do not generate downstream code for this yet
+# =============================================================================
+
+frame:
+  name: qcc_frame
+  total_size_bytes: 2970
+  byte_order: little_endian
+  sections:
+    - { name: header,          size_bytes: 90 }
+    - { name: qtrm_data_block, size_bytes: 2880 }
+
+# -----------------------------------------------------------------------------
+# Combined 90-byte header - shared structure for both directions (bytes 1-33
+# and byte 90 are identical fields in both RESPONSE and TX packets; only the
+# Message Body content at bytes 34-89 differs).
+# One CRC-8 checksum at the very end covers the whole header.
+# -----------------------------------------------------------------------------
+
+header:
+  name: qcc_header
+  size_bytes: 90
+  checksum:
+    algorithm: crc8_ccitt
+    polynomial: 0x07
+    init: 0x00
+    reflect_in: false
+    reflect_out: false
+    xor_out: 0x00
+    check_value: { input: "123456789", expect: 0xF4 }
+    covers: { start_byte: 1, end_byte: 89 }   # 1-indexed, inclusive
+    stored_at_byte: 90
+
+  fields:
+    - { byte: 1,       name: destination_id,   size: 1,  type: u8,       status: defined, desc: "RC fills this in the TX packet. QCC swaps it into source_id when building the Response." }
+    - { byte: 2,       name: source_id,        size: 1,  type: u8,       status: defined, desc: "RC fills this in the TX packet. QCC swaps it into destination_id when building the Response." }
+    - { byte: [3,4],   name: packet_size,      size: 2,  type: u16,      status: defined, desc: "Always 2970 (90-byte header + 2880-byte QTRM data block) - same fixed value in both directions." }
+    - { byte: 5,       name: command_id,       size: 1,  type: u8,       status: defined, desc: "Selects QCC operating mode. RC sets it in the TX packet; QCC echoes it back in the Response. See qcc_modes below.", enum_ref: qcc_modes }
+    - { byte: 6,       name: command_ack,      size: 1,  type: u8,       status: defined, desc: "RC fills 0x00 (command). QCC fills 0x01 (acknowledgement/response) in the Response.", values: { 0: command_from_rc, 1: response_from_qcc } }
+    - { byte: [7,10],  name: message_number,   size: 4,  type: u32,      status: defined, desc: "Counter incremented by RC per message sent. QCC echoes the same value back in its Response so RC can match request to response." }
+    - { byte: 11,      name: date,             size: 1,  type: u8,       status: defined, desc: "Day of month, decimal (not hex). Filled by RC; QCC copies unchanged into Response.", range: [1, 31] }
+    - { byte: 12,      name: month,            size: 1,  type: u8,       status: defined, desc: "Month, decimal (not hex). Filled by RC; QCC copies unchanged into Response.", range: [1, 12] }
+    - { byte: [13,14], name: year,             size: 2,  type: u16,      status: defined, desc: "Calendar year, decimal (not hex). Lower/Higher byte combine per byte order. Filled by RC; QCC copies unchanged into Response." }
+    - { byte: [15,18], name: time_of_day,      size: 4,  type: u32,      status: tbd,     desc: "Filled by RC; QCC copies exactly into Response, unchanged. Exact format/units (ms-since-midnight vs packed HHMMSS) still TBD." }
+    - { byte: [19,31], name: reserved_a,       size: 13, type: "u8[13]", status: defined, desc: "Reserved" }
+    - { byte: 32,      name: reserved_b,       size: 1,  type: u8,       status: defined, desc: "Reserved (previously a standalone XOR checksum - removed; single CRC-8 at byte 90 covers the whole header now)" }
+    - { byte: 33,      name: command_id_echo,  size: 1,  type: u8,       status: defined, desc: "Same value as command_id (byte 5), repeated here. RC sets it in the TX packet for framing/validation; QCC copies it back unchanged in the Response." }
+    - { byte: [34,89], name: message_body,     size: 56, type: "u8[56]", status: mixed,   desc: "RESPONSE direction: fully defined, see message_body_response below. TX direction: varies per command_id/mode, see message_body_tx below." }
+    - { byte: 90,      name: checksum,         size: 1,  type: u8,       status: defined, desc: "CRC-8/CCITT over bytes 1-89" }
+
+# -----------------------------------------------------------------------------
+# QCC operating modes (byte 5 / byte 33 echo) - sourced from MODE_OPTIONS in
+# main_window.py. Only NORMAL triggers a DMA write (mSGDMA) on the HPS side -
+# no other mode does. qtrm_data_block_state describes whether the 2880-byte
+# QTRM data block is populated or left empty in the Response for that mode.
+# -----------------------------------------------------------------------------
+
+qcc_modes:
+  - { value: 0, name: NORMAL,               status: defined, desc: "SOB/PRT/PPS pass through from input to output", triggers_dma_write: true,  qtrm_data_block_state: populated, response_note: "Response = full 90-byte header + fully populated 2880-byte QTRM data block." }
+  - { value: 1, name: INTERNAL_LOOPBACK,    status: defined, desc: "SOB/PRT/PPS generated internally by QCC and looped to output", triggers_dma_write: false, qtrm_data_block_state: tbd }
+  - { value: 2, name: EXTERNAL_LOOPBACK,    status: defined, desc: "External SOB/PRT/PPS signals read and looped back", triggers_dma_write: false, qtrm_data_block_state: tbd }
+  - { value: 3, name: STATUS_RESPONSE_ONLY, status: defined, desc: "No action taken; QCC returns its current response packet", triggers_dma_write: false, qtrm_data_block_state: empty, response_note: "Response = 90-byte header (current telemetry) + QTRM data block left empty (not populated)." }
+  - { value: 4, name: QCC_RESET,            status: defined, desc: "Resets all FPGA-side buffers, counters, and internal state via a PIO pin", triggers_dma_write: false, qtrm_data_block_state: tbd, response_note: "Response = 90-byte header reporting the reset (zeroed) values." }
+  - { value: 5, name: REMOTE_PROGRAMMING,   status: tbd,      desc: "Likely needs a separate variable-length packet type - exceeds the 56-byte message_body", triggers_dma_write: false, qtrm_data_block_state: tbd }
+
+# -----------------------------------------------------------------------------
+# Message Body (bytes 34-89, 56 bytes) - TX direction (RC -> QCC command).
+# Varies per command_id/mode. NORMAL, STATUS_RESPONSE_ONLY, and QCC_RESET
+# need no command data at all (the mode trigger itself is the command).
+# INTERNAL_LOOPBACK and EXTERNAL_LOOPBACK share the same structure: byte 34
+# (relative offset 0) selects a sub-command type (SOB/PRT/PPS), and the rest
+# of the body depends on that sub-command. REMOTE_PROGRAMMING is unresolved.
+# -----------------------------------------------------------------------------
+
+message_body_tx:
+  size_bytes: 56
+  per_mode:
+    NORMAL:
+      status: defined
+      fields: []
+      note: "No command data needed - SOB/PRT/PPS pass through automatically."
+    STATUS_RESPONSE_ONLY:
+      status: defined
+      fields: []
+      note: "No command data needed - no action taken."
+    QCC_RESET:
+      status: defined
+      fields: []
+      note: "No command data needed - triggers PIO-pin reset of all counters/buffers."
+    REMOTE_PROGRAMMING:
+      status: tbd
+      fields: []
+      note: "Likely needs a different, larger structure (address/length/data) than the 56-byte message_body allows."
+    LOOPBACK:  # shared by INTERNAL_LOOPBACK and EXTERNAL_LOOPBACK
+      status: defined
+      applies_to: [INTERNAL_LOOPBACK, EXTERNAL_LOOPBACK]
+      selector:
+        offset: 0            # relative to message_body start (= absolute byte 34)
+        name: command_type
+        size: 1
+        type: u8
+        enum_ref: loopback_command_types
+      variants:
+        SOB:
+          command_type_value: 0x00
+          valid_modes: [INTERNAL_LOOPBACK, EXTERNAL_LOOPBACK]
+          fields:
+            - { offset: [1,2], name: sob_width, size: 2, type: u16, desc: "SOB pulse width" }
+            - { offset: [3,55], name: reserved, size: 53, type: "u8[53]", desc: "Unused in this command" }
+        PRT:
+          command_type_value: 0x01
+          valid_modes: [INTERNAL_LOOPBACK, EXTERNAL_LOOPBACK]
+          fields:
+            - { offset: [1,4],  name: prt_count,    size: 4, type: u32, desc: "Number of PRTs to generate. 0xFFFFFFFF = generate infinite PRTs." }
+            - { offset: [5,8],  name: pri_width_us, size: 4, type: u32, desc: "Pulse Repetition Interval, microseconds." }
+            - { offset: [9,10], name: prt_width_us, size: 2, type: u16, desc: "PRT pulse width, microseconds." }
+            - { offset: [11,55], name: reserved,    size: 45, type: "u8[45]", desc: "Unused in this command" }
+        PPS:
+          command_type_value: 0x02
+          valid_modes: [EXTERNAL_LOOPBACK]   # PPS is external-loopback only
+          fields:
+            - { offset: [1,2], name: pps_width, size: 2, type: u16, desc: "PPS pulse width" }
+            - { offset: [3,55], name: reserved, size: 53, type: "u8[53]", desc: "Unused in this command. Valid only when operating mode is External Loopback." }
+
+loopback_command_types:
+  - { value: 0x00, name: SOB, desc: "SOB command", valid_modes: [INTERNAL_LOOPBACK, EXTERNAL_LOOPBACK] }
+  - { value: 0x01, name: PRT, desc: "PRT command", valid_modes: [INTERNAL_LOOPBACK, EXTERNAL_LOOPBACK] }
+  - { value: 0x02, name: PPS, desc: "PPS command", valid_modes: [EXTERNAL_LOOPBACK] }
+
+# -----------------------------------------------------------------------------
+# Message Body (bytes 34-89, 56 bytes) - RESPONSE direction (QCC -> RC).
+# Fixed format, ALWAYS the same regardless of which mode triggered it -
+# only the qtrm_data_block content varies by mode (see qcc_modes above).
+# Offsets below are relative to the start of message_body (add 34 for
+# absolute byte position in the full 90-byte header).
+# -----------------------------------------------------------------------------
+
+message_body_response:
+  size_bytes: 56
+  status: defined
+  fields:
+    - { offset: [0,1],   name: fpga_temperature,      size: 2, type: "s10.0 (2's complement)", desc: "FPGA die temperature. 10 usable bits, 2's complement signed value in bits 0-9; bits 10-15 = 0 (fixed)." }
+    - { offset: [2,3],   name: board_temperature,     size: 2, type: u16, desc: "Board temperature sensor reading, 16-bit." }
+    - { offset: [4,5],   name: board_humidity,        size: 2, type: u16, desc: "Board humidity sensor reading, 16-bit." }
+    - { offset: [6,9],   name: input_sob_count,       size: 4, type: u32, desc: "SOB count measured on input" }
+    - { offset: [10,13], name: input_prt_count,       size: 4, type: u32, desc: "PRT count measured on input" }
+    - { offset: [14,17], name: input_pps_count,       size: 4, type: u32, desc: "PPS count measured on input" }
+    - { offset: [18,21], name: output_prt_count,      size: 4, type: u32, desc: "PRT count measured on output" }
+    - { offset: [22,25], name: output_sob_count,      size: 4, type: u32, desc: "SOB count measured on output" }
+    - { offset: [26,27], name: input_sob_width_us,    size: 2, type: u16, desc: "Last SOB pulse width measured on input, microseconds" }
+    - { offset: [28,29], name: output_sob_width_us,   size: 2, type: u16, desc: "Last SOB pulse width measured on output, microseconds" }
+    - { offset: [30,31], name: input_prt_width_us,    size: 2, type: u16, desc: "Last PRT pulse width measured on input, microseconds" }
+    - { offset: [32,33], name: output_prt_width_us,   size: 2, type: u16, desc: "Last PRT pulse width measured on output, microseconds" }
+    - { offset: [34,37], name: input_prt_pri,         size: 4, type: u32, desc: "PRT PRI (Pulse Repetition Interval) measured on input, microseconds" }
+    - { offset: [38,41], name: output_prt_pri,        size: 4, type: u32, desc: "PRT PRI (Pulse Repetition Interval) measured on output, microseconds" }
+    - { offset: [42,43], name: input_pps_width_us,    size: 2, type: u16, desc: "Last PPS pulse width measured on input, microseconds" }
+    - { offset: [44,47], name: pps_counter,           size: 4, type: u32, desc: "Separate 32-bit PPS counter (distinct from input_pps_count)" }
+    - { offset: [48,51], name: reserved,              size: 4, type: "u8[4]", desc: "Reserved" }
+    - { offset: [52,55], name: chip_id,               size: 4, type: u32, desc: "Lower 32 bits of the 64-bit chip ID, positioned immediately before the Checksum" }
+
+# -----------------------------------------------------------------------------
+# QTRM data block: 96 fixed 30-byte slots, positional QTRM ID (not a field
+# inside the bytes). Sourced from packet.py (QTRMSlot / QTRMChannel / CMD_*).
+# Whether this block is populated or empty in a given Response depends on
+# the mode - see qcc_modes[].qtrm_data_block_state above.
+# -----------------------------------------------------------------------------
+
+qtrm_data_block:
+  size_bytes: 2880
+  num_slots: 96
+  slot_size_bytes: 30
+  qtrm_id: positional   # slot index (1..96), not an explicit field
+
+qtrm_slot:
+  name: qtrm_slot
+  size_bytes: 30
+  checksum:
+    algorithm: xor
+    covers: { start_byte: 0, end_byte: 28 }   # 0-indexed within the slot
+    stored_at_byte: 29
+    owner: gui_or_qtrm   # generated/verified by GUI/QTRM side, NOT by QCC
+  fields:
+    - { byte: 0,     name: header,          size: 1, type: u8, status: defined, desc: "Fixed value 0xAA" }
+    - { byte: 1,     name: packet_size_id,  size: 1, type: u8, status: defined, desc: "0x04 for QTRM (4 channels)" }
+    - { byte: 2,     name: command_type,    size: 1, type: u8, status: defined, desc: "See qtrm_command_types below", enum_ref: qtrm_command_types }
+    - { byte: 3,     name: status_byte,     size: 1, type: u8, status: defined, desc: "ACK_TYPE (bits 7-4) / ACK_ON_OFF (bits 3-0)" }
+    - { byte: 4,     name: dwell_id,        size: 1, type: u8, status: defined, desc: "Dwell / MSG ID" }
+    - { byte: 5,     name: frequency_id,    size: 1, type: u8, status: defined, desc: "Frequency ID" }
+    - { byte: [6,8], name: reserved,        size: 3, type: "u8[3]", status: defined, desc: "Reserved" }
+    - { byte: [9,13],  name: channel_1, size: 5, type: qtrm_channel, status: defined, desc: "Channel 1" }
+    - { byte: [14,18], name: channel_2, size: 5, type: qtrm_channel, status: defined, desc: "Channel 2" }
+    - { byte: [19,23], name: channel_3, size: 5, type: qtrm_channel, status: defined, desc: "Channel 3" }
+    - { byte: [24,28], name: channel_4, size: 5, type: qtrm_channel, status: defined, desc: "Channel 4" }
+    - { byte: 29,    name: xor_checksum, size: 1, type: u8, status: defined, desc: "XOR of bytes 0-28" }
+
+qtrm_channel:
+  size_bytes: 5
+  fields:
+    - { offset: 0, name: control,   size: 1, type: u8, desc: "Control byte" }
+    - { offset: 1, name: tx_phase,  size: 1, type: u8, desc: "Tx phase" }
+    - { offset: 2, name: tx_atten,  size: 1, type: u8, desc: "Tx attenuation" }
+    - { offset: 3, name: rx_phase,  size: 1, type: u8, desc: "Rx phase" }
+    - { offset: 4, name: rx_atten,  size: 1, type: u8, desc: "Rx attenuation" }
+
+qtrm_command_types:
+  - { value: 0x00, name: CMD_RESERVED,          desc: "Reserved" }
+  - { value: 0x01, name: CMD_DWELL,             desc: "Dwell" }
+  - { value: 0x02, name: CMD_RX_CAL,            desc: "Rx Calibration" }
+  - { value: 0x03, name: CMD_TX_CAL,            desc: "Tx Calibration" }
+  - { value: 0x04, name: CMD_RX_ISOLATION,      desc: "Rx Isolation" }
+  - { value: 0x05, name: CMD_TX_ISOLATION,      desc: "Tx Isolation" }
+  - { value: 0x06, name: CMD_RX_PATTERN,        desc: "Rx Pattern" }
+  - { value: 0x07, name: CMD_TX_PATTERN,        desc: "Tx Pattern" }
+  - { value: 0x20, name: CMD_SOFT_RESET,        desc: "Soft Reset" }
+  - { value: 0x21, name: CMD_STATUS,            desc: "Status" }
+  - { value: 0x22, name: CMD_DATA_STORAGE,      desc: "Data Storage" }
+  - { value: 0x23, name: CMD_DC_CONTROL,        desc: "DC Control" }
+  - { value: 0x40, name: CMD_TIMING_SIGNAL_GEN, desc: "Timing Signal Generation" }
+
+# -----------------------------------------------------------------------------
+# Open items - carried over verbatim so codegen/doc tools can flag them
+# rather than silently assuming an answer.
+# -----------------------------------------------------------------------------
+
+open_items:
+  - "What format is time_of_day (header bytes 15-18)?"
+  - "REMOTE_PROGRAMMING mode message_body is fully TBD - needs a different, larger structure (address/length/data) than 56 bytes allows; may need a separate variable-length packet type entirely."
+  - "INTERNAL_LOOPBACK and EXTERNAL_LOOPBACK message_body_tx SOB/PRT/PPS field sizes/units are drafted and approved, but not yet cross-checked against the actual sob_gen/prt_gen VHDL register widths (e.g. sob_gen's i_sob_width port is 8-bit in the current RTL, vs 16-bit specified here - needs reconciliation before implementation)."
+  - "qtrm_data_block_state for INTERNAL_LOOPBACK, EXTERNAL_LOOPBACK, and QCC_RESET is still TBD - only NORMAL (populated) and STATUS_RESPONSE_ONLY (empty) have been confirmed."

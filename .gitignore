@@ -10,3 +10,5 @@ dist/
 *.spec
 rc_settings.json
 connection_settings.json
+
+.claude/skills/run-qcc-qtrm-control/shots/

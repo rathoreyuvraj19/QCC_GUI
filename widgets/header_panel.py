@@ -95,8 +95,10 @@ _FIELD_SECTIONS = [
     ]),
     ("Pulse Widths (µs)", [
         "INPUT_SOB_WIDTH_US", "OUTPUT_SOB_WIDTH_US",
-        "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US", "INPUT_PPS_WIDTH_US",
+        "INPUT_PRT_WIDTH_US", "OUTPUT_PRT_WIDTH_US",
+        "INPUT_PPS_WIDTH_US",
     ]),
+    ("PRT PRI (µs)", ["INPUT_PRT_PRI", "OUTPUT_PRT_PRI"]),
     ("Misc", ["PPS_COUNTER", "CHIP_ID"]),
 ]
 
@@ -172,7 +174,8 @@ class HeaderPanel(QWidget):
         self.query_btn.clicked.connect(self.query_status_requested)
         # Normal button size, not stretched to the panel's full width - a
         # stretched single-word pill reads as a section header, not a
-        # clickable action.
+        # clickable action. Centered with a stretch on both sides.
+        query_row.addStretch(1)
         query_row.addWidget(self.query_btn)
         query_row.addStretch(1)
         layout.addLayout(query_row)
@@ -332,6 +335,8 @@ class HeaderPanel(QWidget):
         self._set_field("INPUT_PRT_WIDTH_US", str(h.input_prt_width_us))
         self._set_field("OUTPUT_PRT_WIDTH_US", str(h.output_prt_width_us))
         self._set_field("INPUT_PPS_WIDTH_US", str(h.input_pps_width_us))
+        self._set_field("INPUT_PRT_PRI", str(h.input_prt_pri))
+        self._set_field("OUTPUT_PRT_PRI", str(h.output_prt_pri))
         self._set_field("PPS_COUNTER", str(h.pps_counter))
         self._set_field("CHIP_ID", f"0x{h.chip_id:08X}")
 

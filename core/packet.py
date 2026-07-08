@@ -5,12 +5,10 @@ Byte-exact packet builder/parser for the QCC Ethernet UDP frame.
 
 Overall frame layout (little-endian throughout):
     [ 90 bytes ]   Header          - defined below (QCCHeaderTx for QCC->RC
-                                      responses, per QCC_90Byte_Header_
-                                      BitTable.docx, 2026-07-05; QCCHeaderRx
-                                      for RC->QCC commands is still the
-                                      older 58-byte-only format - not yet
-                                      updated to match the new command-side
-                                      tables in that doc)
+                                      responses, QCCHeaderRx for RC->QCC
+                                      commands - both match the unified
+                                      90-byte layout in docs/idd/packet_spec.yaml,
+                                      the source of truth for this frame)
     [ 2880 bytes ] QTRM data block - 96 x 30-byte QTRM slots (QTRMSlot)
     -------------------------------
     Total: 2970 bytes
@@ -872,9 +870,11 @@ class QCCHeaderTx:
     61-62   OUTPUT_SOB_WIDTH_US    2     uint16
     63-64   INPUT_PRT_WIDTH_US     2     uint16
     65-66   OUTPUT_PRT_WIDTH_US    2     uint16
-    67-68   INPUT_PPS_WIDTH_US     2     uint16
-    69-72   PPS_COUNTER            4     uint32  Separate 32-bit counter, distinct from INPUT_PPS_COUNT
-    73-84   RESERVED1              12    byte[12]
+    67-70   INPUT_PRT_PRI          4     uint32  PRT PRI (Pulse Repetition Interval) measured on input, us
+    71-74   OUTPUT_PRT_PRI         4     uint32  PRT PRI (Pulse Repetition Interval) measured on output, us
+    75-76   INPUT_PPS_WIDTH_US     2     uint16
+    77-80   PPS_COUNTER            4     uint32  Separate 32-bit counter, distinct from INPUT_PPS_COUNT
+    81-84   RESERVED1              4     byte[4]
     85-88   CHIP_ID                4     uint32  Lower 32 bits of a 64-bit chip ID
     89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
     """
@@ -887,7 +887,7 @@ class QCCHeaderTx:
     MODE_REMOTE_PROGRAMMING = 5
 
     # Everything except the final checksum byte (89 bytes).
-    _BODY_FMT = "<BBHBBIBBHI14sBHHHIIIIIHHHHHI12sI"
+    _BODY_FMT = "<BBHBBIBBHI14sBHHHIIIIIHHHHIIHI4sI"
 
     def __init__(self):
         self.destination_id = 0
@@ -913,6 +913,8 @@ class QCCHeaderTx:
         self.output_sob_width_us = 0
         self.input_prt_width_us = 0
         self.output_prt_width_us = 0
+        self.input_prt_pri = 0
+        self.output_prt_pri = 0
         self.input_pps_width_us = 0
         self.pps_counter = 0
         self.chip_id = 0
@@ -930,9 +932,11 @@ class QCCHeaderTx:
             self.input_sob_count, self.input_prt_count, self.input_pps_count,
             self.output_prt_count, self.output_sob_count,
             self.input_sob_width_us, self.output_sob_width_us,
-            self.input_prt_width_us, self.output_prt_width_us, self.input_pps_width_us,
+            self.input_prt_width_us, self.output_prt_width_us,
+            self.input_prt_pri, self.output_prt_pri,
+            self.input_pps_width_us,
             self.pps_counter,
-            bytes(12),
+            bytes(4),
             self.chip_id,
         )
         assert len(body) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE - 1
@@ -951,7 +955,9 @@ class QCCHeaderTx:
             input_sob_count, input_prt_count, input_pps_count,
             output_prt_count, output_sob_count,
             input_sob_width_us, output_sob_width_us,
-            input_prt_width_us, output_prt_width_us, input_pps_width_us,
+            input_prt_width_us, output_prt_width_us,
+            input_prt_pri, output_prt_pri,
+            input_pps_width_us,
             pps_counter,
             _reserved1,
             chip_id,
@@ -983,6 +989,8 @@ class QCCHeaderTx:
         obj.output_sob_width_us = output_sob_width_us
         obj.input_prt_width_us = input_prt_width_us
         obj.output_prt_width_us = output_prt_width_us
+        obj.input_prt_pri = input_prt_pri
+        obj.output_prt_pri = output_prt_pri
         obj.input_pps_width_us = input_pps_width_us
         obj.pps_counter = pps_counter
         obj.chip_id = chip_id

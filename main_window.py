@@ -13,7 +13,7 @@ the QCC/QTRM side yet.
 import time
 
 from PySide6.QtCore import Qt, QTimer
-from PySide6.QtGui import QAction
+from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel,
@@ -116,11 +116,27 @@ class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("QCC / 96x QTRM Control")
+        # The Connection bar's row of widgets (Local Port/QCC IP/QCC Port/
+        # Connect/Ping Test/Timing Generation toggle) has a combined layout
+        # minimum around 1428px logical - wider than the 1400 requested
+        # below on its own, and easily wider than a laptop screen's
+        # available width once Windows DPI scaling (>100%) turns that into
+        # physical pixels. Without an explicit minimum smaller than that,
+        # Qt reports the layout minimum as the OS-level window minimum,
+        # which can exceed the actual screen and trigger
+        # "QWindowsWindow::setGeometry: Unable to set geometry" spam. Cap
+        # it explicitly so the window can always be shrunk to fit.
+        self.setMinimumSize(1000, 600)
         # Tall enough that the Header panel's ~26 decoded fields fit
         # without its internal scrollbar kicking in on a typical 1080p
         # screen (see header_panel.py's compacted spacing) - 700 was too
-        # short and forced scrolling even after that compaction.
-        self.resize(1400, 900)
+        # short and forced scrolling even after that compaction. Capped to
+        # the actual available screen so it never requests more than fits.
+        screen = QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        width = 1400 if avail is None else min(1400, avail.width() - 40)
+        height = 900 if avail is None else min(900, avail.height() - 60)
+        self.resize(width, height)
 
         self.worker: UdpWorker | None = None
         # None | "dwell" | "memory_write" | "memory_write_all" | "link_test" |
@@ -390,7 +406,6 @@ class MainWindow(QMainWindow):
         self.quick_send_toggle_btn.setStyleSheet(_QUICK_SEND_TOGGLE_STYLE)
         self.quick_send_toggle_btn.setToolTip("Show/hide the SOB/PRT quick-send shortcuts")
         self.quick_send_toggle_btn.clicked.connect(self._on_quick_send_toggle_clicked)
-        row.addWidget(self.quick_send_toggle_btn)
 
         # Quick-access shortcuts to Timing Generation's SOB/PRT sends,
         # available from every tab (not just Timing Generation itself) -
@@ -401,12 +416,8 @@ class MainWindow(QMainWindow):
         # copy with its own state.
         #
         # A plain show/hide row (not a QMenu - tried that, Yuvraj wanted
-        # the original toggle back), but right-aligned under
-        # quick_send_toggle_btn (not left-aligned/full width like the very
-        # first version) so it visually reads as "belonging" to that
-        # button instead of a separate banner. No "Quick send:" label -
-        # just the two buttons - the toggle button itself already says
-        # what this is.
+        # the original toggle back). No "Quick send:" label - just the two
+        # buttons - the toggle button itself already says what this is.
         self.shortcuts_container = QWidget()
         shortcuts_row = QHBoxLayout(self.shortcuts_container)
         shortcuts_row.setContentsMargins(0, 0, 0, 0)
@@ -419,9 +430,16 @@ class MainWindow(QMainWindow):
         shortcuts_row.addWidget(self.conn_prt_btn)
         self.shortcuts_container.setVisible(False)
 
-        shortcuts_align_row = QHBoxLayout()
-        shortcuts_align_row.addStretch(1)
-        shortcuts_align_row.addWidget(self.shortcuts_container)
+        # Toggle button and its shortcuts stacked as one column, both
+        # horizontally centered within it - keeps the SOB/PRT pair visually
+        # anchored to the toggle button that reveals them regardless of the
+        # two rows' differing widths, instead of two independent
+        # right-anchored rows that only coincidentally lined up on one edge.
+        toggle_col = QVBoxLayout()
+        toggle_col.setSpacing(6)
+        toggle_col.addWidget(self.quick_send_toggle_btn, 0, Qt.AlignHCenter)
+        toggle_col.addWidget(self.shortcuts_container, 0, Qt.AlignHCenter)
+        row.addLayout(toggle_col)
 
         # Its own row, not crammed into the row above - that row already
         # has several fixed-size buttons plus a QLineEdit with no minimum
@@ -449,7 +467,6 @@ class MainWindow(QMainWindow):
         )
         outer.addWidget(title_label)
         outer.addLayout(row)
-        outer.addLayout(shortcuts_align_row)
         outer.addLayout(warning_row)
         return box
 

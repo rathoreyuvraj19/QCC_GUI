@@ -34,6 +34,16 @@ NUM_QTRM = 96
 QTRM_BLOCK_SIZE = QTRM_SLOT_SIZE * NUM_QTRM          # 2880
 TOTAL_PACKET_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + QTRM_BLOCK_SIZE  # 2970
 
+# Remote Programming (Mode 5) TX frame - the one frame shape in the system
+# that is NOT 2970 bytes: [90-byte header][4096-byte payload][10-byte inner
+# bootloader command] = 4196, always, for every Remote Programming
+# operation (payload zero-filled except during Program chunk streaming).
+# The RX side stays the standard 2970-byte frame. See bootloader_packet.py
+# for the inner command set.
+RP_PAYLOAD_SIZE = 4096
+RP_INNER_CMD_SIZE = 10
+RP_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + RP_PAYLOAD_SIZE + RP_INNER_CMD_SIZE  # 4196
+
 # ---------------------------------------------------------------------------
 # CRC-8 / CCITT  (poly 0x07, init 0x00, no reflect, xorout 0x00)
 # Check value: crc8(b"123456789") == 0xF4
@@ -640,10 +650,14 @@ class QCCHeaderRx:
 
     def __init__(self, destination_id: int = 0, source_id: int = 0, command_id: int = 0,
                  message_number: int = 0, date: int = 0, month: int = 0, year: int = 0,
-                 time_of_day: int = 0, message_body: bytes = b"", reserved0: bytes = b""):
+                 time_of_day: int = 0, message_body: bytes = b"", reserved0: bytes = b"",
+                 packet_size: int = TOTAL_PACKET_SIZE):
         self.destination_id = destination_id & 0xFF
         self.source_id = source_id & 0xFF
-        self.packet_size = TOTAL_PACKET_SIZE
+        # 2970 for every standard frame; 4196 (RP_FRAME_SIZE) for Remote
+        # Programming TX frames - ASSUMPTION: the doc doesn't say what
+        # PACKET_SIZE should read in the 4196-byte frame, actual size chosen.
+        self.packet_size = packet_size & 0xFFFF
         self.command_id = command_id & 0xFF
         self.command_ack = 0
         self.message_number = message_number & 0xFFFFFFFF
@@ -767,6 +781,54 @@ def build_header_only_frame(header: bytes) -> bytes:
     out.extend(bytes(QTRM_BLOCK_SIZE))
     assert len(out) == TOTAL_PACKET_SIZE
     return bytes(out)
+
+
+# ---------------------------------------------------------------------------
+# Remote Programming (Mode 5) - 4196-byte TX frame and RX slot demux.
+# QCC is a dumb relay for this mode: it strips the 90-byte header and
+# broadcasts [payload + inner command] identically to all 96 QTRMs over the
+# low-speed (115200) link. The inner 10-byte command set lives in
+# bootloader_packet.py. Note the Memory Operation tab also sends
+# command_id 5 but in standard 2970-byte frames - QCC presumably
+# distinguishes the two by frame size.
+# ---------------------------------------------------------------------------
+
+
+def build_remote_programming_frame(header: bytes, inner_cmd: bytes,
+                                   payload: bytes = b"") -> bytes:
+    """
+    [90-byte header][4096-byte payload][10-byte inner bootloader command].
+
+    payload shorter than 4096 is zero-filled to the right; Program chunk
+    callers pass their own 0xFF-padded final chunk instead (padding byte is
+    the caller's choice, this function never re-pads a full-size payload).
+    """
+    assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    assert len(inner_cmd) == RP_INNER_CMD_SIZE
+    assert len(payload) <= RP_PAYLOAD_SIZE
+    out = bytearray(header)
+    out.extend(payload)
+    out.extend(bytes(RP_PAYLOAD_SIZE - len(payload)))
+    out.extend(inner_cmd)
+    assert len(out) == RP_FRAME_SIZE
+    return bytes(out)
+
+
+def extract_rp_slots(raw: bytes) -> list:
+    """
+    Per-QTRM bootloader responses from a standard 2970-byte RX frame: the
+    FIRST 10 bytes of each 30-byte QTRM slot (the remaining 20 are
+    reserved/unused for Remote Programming). Deliberately does NOT go
+    through QTRMSlot.from_bytes - that validates the normal-mode 30-byte
+    slot format (0xAA header + XOR over all 30), which doesn't apply here;
+    decode the returned slices with bootloader_packet.parse_slot instead.
+    """
+    assert len(raw) == TOTAL_PACKET_SIZE
+    base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    return [
+        raw[base + i * QTRM_SLOT_SIZE: base + i * QTRM_SLOT_SIZE + RP_INNER_CMD_SIZE]
+        for i in range(NUM_QTRM)
+    ]
 
 
 # ---------------------------------------------------------------------------

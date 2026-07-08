@@ -24,6 +24,11 @@ _ACCENT = "#00adb5"
 _ACCENT_PRESSED = "#00858c"
 _TEXT = "#eeeeee"
 
+_FIELD_BG_DISABLED = "#2b2f35"
+_FIELD_BORDER_DISABLED = "#3a3f47"
+_ARROW_BG_DISABLED = "#2b2f35"
+_TEXT_DISABLED = "#8a9099"
+
 _RADIUS = 12
 _ARROW_WIDTH = 24
 
@@ -50,6 +55,8 @@ class _BaseSpinField(QWidget):
             "border-top-right-radius: 0px; border-bottom-right-radius: 0px;"
             "padding: 8px 10px; }"
             f"QAbstractSpinBox:focus {{ border-color: {_ACCENT}; }}"
+            f"QAbstractSpinBox:disabled {{ background-color: {_FIELD_BG_DISABLED};"
+            f"color: {_TEXT_DISABLED}; border-color: {_FIELD_BORDER_DISABLED}; }}"
         )
 
         self.up_btn = QToolButton()
@@ -72,6 +79,8 @@ class _BaseSpinField(QWidget):
                 "font-size: 7pt; padding: 0px; }"
                 f"QToolButton:hover {{ background-color: {_ACCENT}; }}"
                 f"QToolButton:pressed {{ background-color: {_ACCENT_PRESSED}; }}"
+                f"QToolButton:disabled {{ background-color: {_ARROW_BG_DISABLED};"
+                f"color: {_TEXT_DISABLED}; border-color: {_FIELD_BORDER_DISABLED}; }}"
             )
         self.up_btn.clicked.connect(self.spin.stepUp)
         self.down_btn.clicked.connect(self.spin.stepDown)

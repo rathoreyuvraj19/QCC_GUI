@@ -62,7 +62,11 @@ def collapsible_group_box(title: str, start_expanded: bool = True) -> tuple:
     header_row.addWidget(toggle_btn)
 
     title_label = QLabel(title.upper())
-    title_label.setStyleSheet(_TITLE_STYLE + " QLabel:hover { color: #1fc2ca; }")
+    # QSS rejects mixing a bare property list with a selector rule in one string.
+    title_label.setStyleSheet(
+        f"QLabel {{ {_TITLE_STYLE} }}"
+        "QLabel:hover { color: #1fc2ca; }"
+    )
     title_label.setCursor(Qt.PointingHandCursor)
     header_row.addWidget(title_label)
     header_row.addStretch(1)

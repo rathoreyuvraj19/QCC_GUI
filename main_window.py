@@ -20,7 +20,7 @@ from PySide6.QtWidgets import (
     QGroupBox, QMessageBox, QTabWidget, QInputDialog,
 )
 
-from packet import (
+from core.packet import (
     build_link_test_frame, build_individual_link_frame, parse_link_test_response,
     build_cal_frame, build_soft_reset_frame, build_isolation_frame,
     build_status_frame, parse_status_frame, STATUS_TYPE_DIAGNOSTIC,
@@ -29,33 +29,38 @@ from packet import (
     build_sob_message_body, build_prt_message_body, build_pps_message_body,
     build_header_only_frame,
 )
-from rc_settings import (
+from core.rc_settings import (
     rc_settings, COMMAND_ID_DWELL, COMMAND_ID_LINK_TEST, COMMAND_ID_STATUS,
     COMMAND_ID_RX_CAL, COMMAND_ID_TX_CAL, COMMAND_ID_ISOLATION,
     COMMAND_ID_SOFT_RESET, COMMAND_ID_MEMORY_OPERATION, COMMAND_ID_QCC_STATUS,
 )
-from command_style import send_button_style
+from core.command_style import send_button_style
 from connection_settings import connection_settings
-from udp_worker import UdpWorker
+from core.udp_worker import UdpWorker
 from ping_worker import PingWorker
-from header_panel import HeaderPanel
-from link_test_tab import LinkTestTab
-from status_tab import StatusTab
-from cal_tab import CalTab
-from isolation_tab import IsolationTab
-from soft_reset_tab import SoftResetTab
-from dwell_tab import DwellTab
-from memory_tab import MemoryTab
-from timing_tab import TimingTab
-from rc_settings_tab import RCSettingsTab
+from widgets.header_panel import HeaderPanel
+from tabs.link_test_tab import LinkTestTab
+from tabs.status_tab import StatusTab
+from tabs.cal_tab import CalTab
+from tabs.isolation_tab import IsolationTab
+from tabs.soft_reset_tab import SoftResetTab
+from tabs.dwell_tab import DwellTab
+from tabs.memory_tab import MemoryTab
+from tabs.timing_tab import TimingTab
+from tabs.remote_programming_tab import RemoteProgrammingTab
+from apps.remote_prog_controller import (
+    RemoteProgController, OP_AUTHENTICATE, OP_LRU_INFO, OP_MODE_STEP1,
+    OP_MODE_STEP2, OP_PROGRAM, OP_VERIFY,
+)
+from tabs.rc_settings_tab import RCSettingsTab
 
 # Plain local gate, not real security - just requires a deliberate action
 # before this NVM-write-capable tab can be opened, per Yuvraj's explicit ask.
 MEMORY_TAB_PASSWORD = "0145"
-from spin_field import SpinField
-from rx_test_app import RxTestWindow
-from tx_test_window import TxTestWindow
-from status_responder_app import StatusResponderWindow
+from widgets.spin_field import SpinField
+from apps.rx_test_app import RxTestWindow
+from apps.tx_test_window import TxTestWindow
+from apps.status_responder_app import StatusResponderWindow
 
 
 RESPONSE_TIMEOUT_MS = 1000
@@ -219,6 +224,40 @@ class MainWindow(QMainWindow):
         self.conn_sob_btn.clicked.connect(self.timing_tab.sob_send_btn.click)
         self.conn_prt_btn.clicked.connect(self.timing_tab.prt_send_btn.click)
 
+        # Remote Programming - firmware update over the bootloader link.
+        # Unlike every other tab, its operations are multi-frame sessions
+        # (30 s polls, chunk streaming), so a dedicated controller owns the
+        # state machine and _on_frame_received routes frames to it wholesale
+        # while a session is active instead of the one-shot kind dispatch.
+        self.remote_programming_tab = RemoteProgrammingTab()
+        self.remote_prog_ctrl = RemoteProgController(send_fn=self._send_frame, parent=self)
+        self.remote_programming_tab.set_controller(self.remote_prog_ctrl)
+
+        rp_tab, rp_ctrl = self.remote_programming_tab, self.remote_prog_ctrl
+        rp_tab.mode_step1_requested.connect(self._on_rp_mode_step1)
+        rp_tab.mode_step2_requested.connect(self._on_rp_mode_step2)
+        rp_tab.lru_info_requested.connect(self._on_rp_lru_info)
+        rp_tab.authenticate_requested.connect(self._on_rp_authenticate)
+        rp_tab.verify_requested.connect(self._on_rp_verify)
+        rp_tab.program_requested.connect(self._on_rp_program)
+        rp_tab.retry_requested.connect(self._on_rp_retry)
+        rp_tab.cancel_requested.connect(rp_ctrl.cancel)
+        rp_tab.chunk_timeout_changed.connect(self._on_rp_chunk_timeout_changed)
+
+        rp_ctrl.step_result.connect(rp_tab.on_step_result)
+        rp_ctrl.gate_changed.connect(rp_tab.on_gate_changed)
+        rp_ctrl.lru_row_updated.connect(rp_tab.on_lru_row)
+        rp_ctrl.op_row_updated.connect(rp_tab.on_op_row)
+        rp_ctrl.op_window_closed.connect(rp_tab.on_op_window_closed)
+        rp_ctrl.chunk_progress.connect(rp_tab.on_chunk_progress)
+        rp_ctrl.ack_recorded.connect(rp_tab.on_ack_recorded)
+        rp_ctrl.program_finished.connect(rp_tab.on_program_finished)
+        rp_ctrl.session_finished.connect(rp_tab.on_session_finished)
+        rp_ctrl.session_finished.connect(self._on_rp_session_finished)
+        rp_ctrl.log_frame.connect(rp_tab.on_log_frame)
+
+        self._remote_programming_tab_index = self.tabs.addTab(rp_tab, "Remote Programming")
+
         self.rc_settings_tab = RCSettingsTab()
         self.tabs.addTab(self.rc_settings_tab, "RC Settings")
 
@@ -276,16 +315,26 @@ class MainWindow(QMainWindow):
         self.tx_cal_tab.reset_to_idle()
         self.timing_tab.reset_to_idle()
         self.memory_tab.reset_to_idle()
+        # Never mid-session - switching away and back during a Program pass
+        # must not wipe the live ack matrix / progress state.
+        if self._awaiting_kind != "remote_programming":
+            self.remote_programming_tab.reset_to_idle()
 
         if index == self.tabs.indexOf(self.rc_settings_tab):
             self.rc_settings_tab.refresh_message_number()
 
         # Prompts every time this tab is entered (not just once per session)
         # - per Yuvraj's explicit ask, since it can write to real hardware's
-        # flash memory.
-        if index == self._memory_tab_index:
+        # flash memory. The Remote Programming tab shares the same gate: a
+        # firmware update is at least as destructive as an NVM write.
+        if index == self._memory_tab_index or (
+            index == self._remote_programming_tab_index
+            and self._awaiting_kind != "remote_programming"
+        ):
+            tab_name = ("Memory Operation" if index == self._memory_tab_index
+                        else "Remote Programming")
             password, ok = QInputDialog.getText(
-                self, "Memory Operation - Locked",
+                self, f"{tab_name} - Locked",
                 "This tab can write to real hardware's flash memory.\nEnter password:",
                 QLineEdit.Password,
             )
@@ -351,22 +400,16 @@ class MainWindow(QMainWindow):
         # values and pending/result indicator - not a second independent
         # copy with its own state.
         #
-        # Hidden by default (per Yuvraj's later ask) and toggled via
-        # quick_send_toggle_btn above - wrapped in its own QWidget (not a
-        # bare QHBoxLayout) since only a widget's visibility can be
-        # toggled; a hidden layout with no widget wrapper still reserves
-        # its row's space.
-        #
-        # Own row, not packed into the row above - that row already sits
-        # right at the edge of fitting a 1920px-wide display once font
-        # metrics/DPI scaling vary machine to machine (this is the same
-        # class of overflow already fixed once by moving the 3 window-
-        # opening buttons into the Tools menu) - two more wide buttons in
-        # that single row reintroduces the risk.
+        # A plain show/hide row (not a QMenu - tried that, Yuvraj wanted
+        # the original toggle back), but right-aligned under
+        # quick_send_toggle_btn (not left-aligned/full width like the very
+        # first version) so it visually reads as "belonging" to that
+        # button instead of a separate banner. No "Quick send:" label -
+        # just the two buttons - the toggle button itself already says
+        # what this is.
         self.shortcuts_container = QWidget()
         shortcuts_row = QHBoxLayout(self.shortcuts_container)
         shortcuts_row.setContentsMargins(0, 0, 0, 0)
-        shortcuts_row.addWidget(QLabel("Quick send:"))
         self.conn_sob_btn = QPushButton("Send SOB")
         self.conn_sob_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
         shortcuts_row.addWidget(self.conn_sob_btn)
@@ -374,8 +417,11 @@ class MainWindow(QMainWindow):
         self.conn_prt_btn = QPushButton("Send PRT")
         self.conn_prt_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
         shortcuts_row.addWidget(self.conn_prt_btn)
-        shortcuts_row.addStretch(1)
         self.shortcuts_container.setVisible(False)
+
+        shortcuts_align_row = QHBoxLayout()
+        shortcuts_align_row.addStretch(1)
+        shortcuts_align_row.addWidget(self.shortcuts_container)
 
         # Its own row, not crammed into the row above - that row already
         # has several fixed-size buttons plus a QLineEdit with no minimum
@@ -403,7 +449,7 @@ class MainWindow(QMainWindow):
         )
         outer.addWidget(title_label)
         outer.addLayout(row)
-        outer.addWidget(self.shortcuts_container)
+        outer.addLayout(shortcuts_align_row)
         outer.addLayout(warning_row)
         return box
 
@@ -444,6 +490,11 @@ class MainWindow(QMainWindow):
         self.ping_result_label.setText(latency_text)
 
     def _disconnect(self, status_text: str = "Disconnected"):
+        # A Remote Programming session can't outlive the socket - kill its
+        # timers/state cleanly (this also releases the _awaiting_kind busy-
+        # lock via session_finished) before the worker goes away, so a
+        # chunk watchdog never fires into a dead connection.
+        self.remote_prog_ctrl.cancel()
         if self.worker is not None:
             # Disconnect the status signal first - worker.stop() blocks
             # until the thread actually exits, and its queued "Stopped"
@@ -1054,6 +1105,57 @@ class MainWindow(QMainWindow):
         self._begin_wait(self._on_timing_pps_timeout)
         self._send_frame(frame)
 
+    # -- Remote Programming session handlers ------------------------------
+    # All thin: check connection/busy, set the session busy-lock, tell the
+    # tab to show pending, delegate to the controller (which owns every
+    # timer and sends via _send_frame). session_finished clears the lock.
+
+    def _rp_start(self, op: str, start_fn, *args, retry: bool = False):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+        self._awaiting_kind = "remote_programming"
+        if retry:
+            self.remote_programming_tab.mark_retry_started()
+        else:
+            self.remote_programming_tab.mark_session_started(op)
+        start_fn(*args)
+        if not self.remote_prog_ctrl.busy:
+            # The controller refused (its own gate/empty-image checks) - the
+            # busy-lock must never stick without an active session behind it.
+            self._awaiting_kind = None
+            self.remote_programming_tab.on_session_finished(op, False, "Could not start")
+
+    def _on_rp_session_finished(self, op: str, ok: bool, text: str):
+        if self._awaiting_kind == "remote_programming":
+            self._awaiting_kind = None
+
+    def _on_rp_mode_step1(self):
+        self._rp_start(OP_MODE_STEP1, self.remote_prog_ctrl.start_mode_step1)
+
+    def _on_rp_mode_step2(self):
+        self._rp_start(OP_MODE_STEP2, self.remote_prog_ctrl.start_mode_step2)
+
+    def _on_rp_lru_info(self):
+        self._rp_start(OP_LRU_INFO, self.remote_prog_ctrl.start_lru_info)
+
+    def _on_rp_authenticate(self):
+        self._rp_start(OP_AUTHENTICATE, self.remote_prog_ctrl.start_authenticate)
+
+    def _on_rp_verify(self):
+        self._rp_start(OP_VERIFY, self.remote_prog_ctrl.start_verify)
+
+    def _on_rp_program(self, image: bytes):
+        self._rp_start(OP_PROGRAM, self.remote_prog_ctrl.start_program, bytes(image))
+
+    def _on_rp_retry(self):
+        self._rp_start(OP_PROGRAM, self.remote_prog_ctrl.start_retry_pass, retry=True)
+
+    def _on_rp_chunk_timeout_changed(self, ms: int):
+        self.remote_prog_ctrl.chunk_timeout_ms = ms
+
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
         # elapsed_us comes straight from udp_worker.py, timestamped right
         # at the actual sendto()/recvfrom() calls inside the worker thread -
@@ -1065,6 +1167,22 @@ class MainWindow(QMainWindow):
         # stray/unsolicited frame) - treat that the same as "unknown".
         if elapsed_us < 0:
             elapsed_us = None
+
+        # Remote Programming sessions are multi-frame: keep the busy-lock
+        # (_awaiting_kind) set and route EVERY frame to the controller until
+        # its session_finished clears it - no one-shot dispatch, no _end_wait
+        # (the controller runs its own QTimer windows/watchdogs; _begin_wait
+        # was never armed for this kind).
+        if self._awaiting_kind == "remote_programming":
+            self._last_received_frame = raw
+            if self._rx_test_window is not None:
+                self._rx_test_window.show_frame(raw)
+            self.header_panel.show_frame(raw)
+            if elapsed_us is not None:
+                self.remote_programming_tab.show_response_time(elapsed_us)
+            self.remote_prog_ctrl.on_frame(raw, elapsed_us)
+            return
+
         self._end_wait()  # stop the timeout watchdog only, see its docstring
         kind, self._awaiting_kind = self._awaiting_kind, None
 

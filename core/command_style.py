@@ -72,6 +72,11 @@ def send_button_style(color: str = SEND_COLOR, hover: str = SEND_HOVER_COLOR,
         f"border-radius: {radius}px; padding: {padding}; font-weight: {font_weight}; {font_size_css} }}"
         f"QPushButton:hover {{ background-color: {hover}; }}"
         f"QPushButton:pressed {{ background-color: {pressed}; }}"
+        # A widget's own stylesheet shadows the app-level QPushButton:disabled
+        # rule (theme.py) once it sets background-color on the base selector,
+        # so disabled must be restated here or a gated-off button stays full
+        # color with no visual cue that it's inactive.
+        f"QPushButton:disabled {{ background-color: #393e46; color: rgba(238, 238, 238, 0.35); }}"
     )
 
 

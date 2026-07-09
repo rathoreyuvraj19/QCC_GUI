@@ -113,30 +113,45 @@ _QUICK_SEND_TOGGLE_STYLE = (
 
 
 class MainWindow(QMainWindow):
-    def __init__(self):
+    def __init__(
+        self,
+        enable_remote_programming: bool = True,
+        initial_ip: str | None = None,
+        initial_port: int | None = None,
+        initial_local_port: int | None = None,
+        auto_connect: bool = False,
+        embedded: bool = False,
+    ):
         super().__init__()
+        self._enable_remote_programming = enable_remote_programming
+        self._embedded = embedded
         self.setWindowTitle("QCC / 96x QTRM Control")
-        # The Connection bar's row of widgets (Local Port/QCC IP/QCC Port/
-        # Connect/Ping Test/Timing Generation toggle) has a combined layout
-        # minimum around 1428px logical - wider than the 1400 requested
-        # below on its own, and easily wider than a laptop screen's
-        # available width once Windows DPI scaling (>100%) turns that into
-        # physical pixels. Without an explicit minimum smaller than that,
-        # Qt reports the layout minimum as the OS-level window minimum,
-        # which can exceed the actual screen and trigger
-        # "QWindowsWindow::setGeometry: Unable to set geometry" spam. Cap
-        # it explicitly so the window can always be shrunk to fit.
-        self.setMinimumSize(1000, 600)
-        # Tall enough that the Header panel's ~26 decoded fields fit
-        # without its internal scrollbar kicking in on a typical 1080p
-        # screen (see header_panel.py's compacted spacing) - 700 was too
-        # short and forced scrolling even after that compaction. Capped to
-        # the actual available screen so it never requests more than fits.
-        screen = QGuiApplication.primaryScreen()
-        avail = screen.availableGeometry() if screen else None
-        width = 1400 if avail is None else min(1400, avail.width() - 40)
-        height = 900 if avail is None else min(900, avail.height() - 60)
-        self.resize(width, height)
+        if not embedded:
+            # The Connection bar's row of widgets (Local Port/QCC IP/QCC Port/
+            # Connect/Ping Test/Timing Generation toggle) has a combined layout
+            # minimum around 1428px logical - wider than the 1400 requested
+            # below on its own, and easily wider than a laptop screen's
+            # available width once Windows DPI scaling (>100%) turns that into
+            # physical pixels. Without an explicit minimum smaller than that,
+            # Qt reports the layout minimum as the OS-level window minimum,
+            # which can exceed the actual screen and trigger
+            # "QWindowsWindow::setGeometry: Unable to set geometry" spam. Cap
+            # it explicitly so the window can always be shrunk to fit.
+            self.setMinimumSize(1000, 600)
+            # Tall enough that the Header panel's ~26 decoded fields fit
+            # without its internal scrollbar kicking in on a typical 1080p
+            # screen (see header_panel.py's compacted spacing) - 700 was too
+            # short and forced scrolling even after that compaction. Capped to
+            # the actual available screen so it never requests more than fits.
+            screen = QGuiApplication.primaryScreen()
+            avail = screen.availableGeometry() if screen else None
+            width = 1400 if avail is None else min(1400, avail.width() - 40)
+            height = 900 if avail is None else min(900, avail.height() - 60)
+            self.resize(width, height)
+        # Embedded instances (one per Multi-QCC tile) size to their own
+        # content instead - the Multi-QCC window's grid + scroll area
+        # handles overflow, and a fixed 1000x600+ minimum per tile would
+        # make a 2-column grid unusably wide.
 
         self.worker: UdpWorker | None = None
         # None | "dwell" | "memory_write" | "memory_write_all" | "link_test" |
@@ -160,16 +175,30 @@ class MainWindow(QMainWindow):
         self._tx_test_window: TxTestWindow | None = None
         self._last_sent_frame: bytes | None = None
         self._last_received_frame: bytes | None = None
+        self._multi_qcc_window = None
         self._responder_window: StatusResponderWindow | None = None
         self._qcc_ip_before_responder: str | None = None
         self._qcc_ip_overridden_for_responder = False
 
         self._build_ui()
 
+        if initial_ip is not None:
+            self.qcc_ip_edit.setText(initial_ip)
+        if initial_port is not None:
+            self.qcc_port_edit.spin.setValue(initial_port)
+        if initial_local_port is not None:
+            self.local_port_edit.spin.setValue(initial_local_port)
+        if auto_connect:
+            self._on_connect_clicked()
+
     # -- UI construction ------------------------------------------------
 
     def _build_ui(self):
-        self._build_menu_bar()
+        # Embedded tiles skip the Tools menu (RX/TX test windows, Status
+        # Responder, Multi-QCC launcher) - those are single-shared-instance
+        # tools scoped to the top-level app, not per-tile.
+        if not self._embedded:
+            self._build_menu_bar()
 
         central = QWidget()
         self.setCentralWidget(central)
@@ -245,34 +274,40 @@ class MainWindow(QMainWindow):
         # (30 s polls, chunk streaming), so a dedicated controller owns the
         # state machine and _on_frame_received routes frames to it wholesale
         # while a session is active instead of the one-shot kind dispatch.
-        self.remote_programming_tab = RemoteProgrammingTab()
-        self.remote_prog_ctrl = RemoteProgController(send_fn=self._send_frame, parent=self)
-        self.remote_programming_tab.set_controller(self.remote_prog_ctrl)
+        # Skipped entirely when opened as a Multi-QCC tile's popup window -
+        # not needed there yet, see enable_remote_programming.
+        self.remote_programming_tab = None
+        self.remote_prog_ctrl = None
+        self._remote_programming_tab_index = -1
+        if self._enable_remote_programming:
+            self.remote_programming_tab = RemoteProgrammingTab()
+            self.remote_prog_ctrl = RemoteProgController(send_fn=self._send_frame, parent=self)
+            self.remote_programming_tab.set_controller(self.remote_prog_ctrl)
 
-        rp_tab, rp_ctrl = self.remote_programming_tab, self.remote_prog_ctrl
-        rp_tab.mode_step1_requested.connect(self._on_rp_mode_step1)
-        rp_tab.mode_step2_requested.connect(self._on_rp_mode_step2)
-        rp_tab.lru_info_requested.connect(self._on_rp_lru_info)
-        rp_tab.authenticate_requested.connect(self._on_rp_authenticate)
-        rp_tab.verify_requested.connect(self._on_rp_verify)
-        rp_tab.program_requested.connect(self._on_rp_program)
-        rp_tab.retry_requested.connect(self._on_rp_retry)
-        rp_tab.cancel_requested.connect(rp_ctrl.cancel)
-        rp_tab.chunk_timeout_changed.connect(self._on_rp_chunk_timeout_changed)
+            rp_tab, rp_ctrl = self.remote_programming_tab, self.remote_prog_ctrl
+            rp_tab.mode_step1_requested.connect(self._on_rp_mode_step1)
+            rp_tab.mode_step2_requested.connect(self._on_rp_mode_step2)
+            rp_tab.lru_info_requested.connect(self._on_rp_lru_info)
+            rp_tab.authenticate_requested.connect(self._on_rp_authenticate)
+            rp_tab.verify_requested.connect(self._on_rp_verify)
+            rp_tab.program_requested.connect(self._on_rp_program)
+            rp_tab.retry_requested.connect(self._on_rp_retry)
+            rp_tab.cancel_requested.connect(rp_ctrl.cancel)
+            rp_tab.chunk_timeout_changed.connect(self._on_rp_chunk_timeout_changed)
 
-        rp_ctrl.step_result.connect(rp_tab.on_step_result)
-        rp_ctrl.gate_changed.connect(rp_tab.on_gate_changed)
-        rp_ctrl.lru_row_updated.connect(rp_tab.on_lru_row)
-        rp_ctrl.op_row_updated.connect(rp_tab.on_op_row)
-        rp_ctrl.op_window_closed.connect(rp_tab.on_op_window_closed)
-        rp_ctrl.chunk_progress.connect(rp_tab.on_chunk_progress)
-        rp_ctrl.ack_recorded.connect(rp_tab.on_ack_recorded)
-        rp_ctrl.program_finished.connect(rp_tab.on_program_finished)
-        rp_ctrl.session_finished.connect(rp_tab.on_session_finished)
-        rp_ctrl.session_finished.connect(self._on_rp_session_finished)
-        rp_ctrl.log_frame.connect(rp_tab.on_log_frame)
+            rp_ctrl.step_result.connect(rp_tab.on_step_result)
+            rp_ctrl.gate_changed.connect(rp_tab.on_gate_changed)
+            rp_ctrl.lru_row_updated.connect(rp_tab.on_lru_row)
+            rp_ctrl.op_row_updated.connect(rp_tab.on_op_row)
+            rp_ctrl.op_window_closed.connect(rp_tab.on_op_window_closed)
+            rp_ctrl.chunk_progress.connect(rp_tab.on_chunk_progress)
+            rp_ctrl.ack_recorded.connect(rp_tab.on_ack_recorded)
+            rp_ctrl.program_finished.connect(rp_tab.on_program_finished)
+            rp_ctrl.session_finished.connect(rp_tab.on_session_finished)
+            rp_ctrl.session_finished.connect(self._on_rp_session_finished)
+            rp_ctrl.log_frame.connect(rp_tab.on_log_frame)
 
-        self._remote_programming_tab_index = self.tabs.addTab(rp_tab, "Remote Programming")
+            self._remote_programming_tab_index = self.tabs.addTab(rp_tab, "Remote Programming")
 
         self.rc_settings_tab = RCSettingsTab()
         self.tabs.addTab(self.rc_settings_tab, "RC Settings")
@@ -325,6 +360,12 @@ class MainWindow(QMainWindow):
         responder_action.triggered.connect(self._on_open_responder_clicked)
         tools_menu.addAction(responder_action)
 
+        tools_menu.addSeparator()
+
+        multi_qcc_action = QAction("Open Multi-QCC Window", self)
+        multi_qcc_action.triggered.connect(self._on_open_multi_qcc_clicked)
+        tools_menu.addAction(multi_qcc_action)
+
     def _on_tab_changed(self, index):
         self.status_tab.reset_to_idle()
         self.rx_cal_tab.reset_to_idle()
@@ -333,7 +374,7 @@ class MainWindow(QMainWindow):
         self.memory_tab.reset_to_idle()
         # Never mid-session - switching away and back during a Program pass
         # must not wipe the live ack matrix / progress state.
-        if self._awaiting_kind != "remote_programming":
+        if self.remote_programming_tab is not None and self._awaiting_kind != "remote_programming":
             self.remote_programming_tab.reset_to_idle()
 
         if index == self.tabs.indexOf(self.rc_settings_tab):
@@ -628,6 +669,17 @@ class MainWindow(QMainWindow):
         self._tx_test_window.show()
         self._tx_test_window.raise_()
         self._tx_test_window.activateWindow()
+
+    def _on_open_multi_qcc_clicked(self):
+        # Local import - avoids a circular import (multi_qcc_window.py
+        # imports MainWindow to open each tile's Dwell Settings popup).
+        from multi_qcc_window import MultiQccWindow
+
+        if self._multi_qcc_window is None:
+            self._multi_qcc_window = MultiQccWindow()
+        self._multi_qcc_window.show()
+        self._multi_qcc_window.raise_()
+        self._multi_qcc_window.activateWindow()
 
     def _on_open_responder_clicked(self):
         # Same one-shared-instance pattern as the RX/TX test windows.
@@ -1374,7 +1426,13 @@ class MainWindow(QMainWindow):
         # flight (e.g. arrived after its own timeout already fired). Nothing
         # to update.
 
-    def closeEvent(self, event):
+    def shutdown(self):
+        """
+        Stop this window's worker thread. Same logic closeEvent runs below -
+        pulled out so embedded instances (Multi-QCC tiles, which are child
+        widgets and never receive their own closeEvent) can be cleaned up
+        explicitly by whoever removes their tile.
+        """
         if self.worker is not None:
             try:
                 self.worker.stop()
@@ -1386,4 +1444,7 @@ class MainWindow(QMainWindow):
                 # Swallow it and let the window close normally anyway;
                 # the app is already shutting down either way.
                 pass
+
+    def closeEvent(self, event):
+        self.shutdown()
         super().closeEvent(event)

@@ -44,6 +44,16 @@ This greps `.py`/`.md` across the repo (skipping `build/`/`dist/`) and groups hi
 - `message_length(packet_size_id) == packet_size_id * 5 + 10` (IDD Section 4) — a field whose presence depends on packet size needs this checked, not just the raw struct.
 - Full frame is 2970 bytes (90-byte header + 96 x 30-byte QTRM block), **except** Remote Programming (Mode 5) TX frames, which are 4196 bytes (90 + 4096-byte payload + 10-byte inner bootloader command) — if your IDD change is about Mode 5, check `bootloader_packet.py` instead of/in addition to `core/packet.py`.
 
+## Docx updates for bitfield definitions
+
+When a reserved byte is split into a bitfield (e.g., byte 82 changing from "Reserved-N" to "GENERATOR_STATUS" with bit-level encoding), the docx row for that byte should be updated to reflect the bitfield definition:
+
+1. **Field Name**: change to the field name (e.g., "GENERATOR_STATUS")
+2. **Remarks/Notes**: add the bit layout with the actual QCC protocol terminology (bypass/internal, not external/internal). Example: "Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bits 7-2: reserved."
+3. **Immediately following bytes** (e.g., bytes 83-85 if the old field was 4 bytes) remain as reserved bytes. They are no longer part of the bitfield—just padding.
+
+Use `python-docx` for surgical edits (rename field name, update remarks) rather than regenerating the table from YAML, since docx has complex merged-cell structure that the regeneration script doesn't preserve perfectly. See "Don't hand-build/edit" Gotcha below for full context.
+
 ## Gotchas
 
 - A field's `Notes` column often encodes cross-references ("Same as offset 4", "valid only when mode is External Loopback") — when you resize/move a field, grep for those notes too via `find_idd_refs.py`, since they won't literally contain the field's name.

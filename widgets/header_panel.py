@@ -30,7 +30,7 @@ outside the tabs' own scroll areas, so without this its full height would
 add directly to the whole window's minimum size.
 """
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
     QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QCCHeaderTx
+from widgets.spin_field import DoubleSpinField
 
 _PANEL_WIDTH = 340
 _HEADER_TOTAL_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
@@ -111,7 +112,7 @@ _FIELD_SECTIONS = [
         "INPUT_PPS_WIDTH_US",
     ]),
     ("PRT PRI (µs)", ["INPUT_PRT_PRI", "OUTPUT_PRT_PRI"]),
-    ("Misc", ["PPS_COUNTER", "CHIP_ID"]),
+    ("Misc", ["PPS_COUNTER", "GENERATOR_STATUS", "CHIP_ID"]),
 ]
 
 _QUERY_BTN_STYLE = (
@@ -120,6 +121,15 @@ _QUERY_BTN_STYLE = (
     f"QPushButton:hover {{ background-color: rgba(0, 173, 181, 0.15); }}"
     f"QPushButton:pressed {{ background-color: rgba(0, 173, 181, 0.3); }}"
     f"QPushButton:disabled {{ color: rgba(238, 238, 238, 0.35); border-color: rgba(238, 238, 238, 0.2); }}"
+)
+
+# Latched-on look while auto-resend is active - solid fill instead of the
+# normal outline-only style, so the button itself is the on/off indicator.
+_QUERY_BTN_ACTIVE_STYLE = (
+    f"QPushButton {{ background-color: {_ACCENT}; color: #14181f;"
+    f"border: 1px solid {_ACCENT}; border-radius: 8px; padding: 5px 8px; font-weight: 700; }}"
+    f"QPushButton:hover {{ background-color: rgba(0, 173, 181, 0.85); }}"
+    f"QPushButton:pressed {{ background-color: rgba(0, 173, 181, 0.7); }}"
 )
 
 
@@ -137,7 +147,7 @@ class HeaderPanel(QWidget):
     response arrives.
     """
 
-    query_status_requested = Signal()
+    query_status_requested = Signal(bool)          # is_auto_resend
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -145,6 +155,15 @@ class HeaderPanel(QWidget):
         # stays constant regardless of window size; only its height
         # stretches (to fill the whole window, top to bottom).
         self.setFixedWidth(_PANEL_WIDTH)
+
+        # Same auto-resend pattern as link_test_tab.py: a QTimer owned by
+        # this widget re-emits query_status_requested(True) every interval;
+        # main_window.py's handler treats is_auto_resend=True ticks as
+        # low-priority (skip silently if something else is in flight,
+        # instead of popping a "Busy" dialog every interval).
+        self._auto_resending = False
+        self._resend_timer = QTimer(self)
+        self._resend_timer.timeout.connect(lambda: self.query_status_requested.emit(True))
 
         # name -> normal style to revert to when cleared. A field appears
         # here as soon as its value changes at least once and stays until
@@ -174,6 +193,7 @@ class HeaderPanel(QWidget):
         title_label.setStyleSheet(
             "color: #00adb5; font-size: 13pt; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
         )
+        title_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(title_label)
 
         query_row = QHBoxLayout()
@@ -181,9 +201,11 @@ class HeaderPanel(QWidget):
         self.query_btn.setStyleSheet(_QUERY_BTN_STYLE)
         self.query_btn.setToolTip(
             "Sends a non-operational QCC Status command - QCC just replies with\n"
-            "its current header (latest sensor/counter values), no action taken."
+            "its current header (latest sensor/counter values), no action taken.\n\n"
+            "If Resend Every (s) is > 0, click starts auto-resend at that interval;\n"
+            "click again (button reads \"Stop\") to turn it off."
         )
-        self.query_btn.clicked.connect(self.query_status_requested)
+        self.query_btn.clicked.connect(self._on_query_btn_clicked)
         # Normal button size, not stretched to the panel's full width - a
         # stretched single-word pill reads as a section header, not a
         # clickable action. Centered with a stretch on both sides.
@@ -194,7 +216,20 @@ class HeaderPanel(QWidget):
 
         self.query_status_label = QLabel("")
         self.query_status_label.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 8pt;")
+        self.query_status_label.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.query_status_label)
+
+        # Resend interval - 0 = one-time send (no auto-resend). Same units/
+        # widget as link_test_tab.py's "Resend every (s)" for consistency.
+        delay_row = QHBoxLayout()
+        delay_label = QLabel("Resend every (s):")
+        delay_label.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 8pt;")
+        self.resend_delay_spin = DoubleSpinField(0.0, 300.0, 0.0, step=0.1, decimals=1, field_width=64)
+        delay_row.addStretch(1)
+        delay_row.addWidget(delay_label)
+        delay_row.addWidget(self.resend_delay_spin)
+        delay_row.addStretch(1)
+        layout.addLayout(delay_row)
 
         card = QFrame()
         card.setStyleSheet(
@@ -265,6 +300,29 @@ class HeaderPanel(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
+
+    def _on_query_btn_clicked(self) -> None:
+        """
+        Same toggle shape as link_test_tab.py's _on_send_btn_clicked: a
+        click while already auto-resending stops the timer and latches
+        back off; otherwise sends once immediately and, if the interval
+        spinbox is > 0, starts the timer (button text/style flip to the
+        "active" state as the visible latch indicator).
+        """
+        if self._auto_resending:
+            self._resend_timer.stop()
+            self._auto_resending = False
+            self.query_btn.setStyleSheet(_QUERY_BTN_STYLE)
+            self.query_btn.setText("Query QCC Status")
+            return
+
+        interval_s = self.resend_delay_spin.value()
+        self.query_status_requested.emit(False)
+        if interval_s > 0:
+            self._auto_resending = True
+            self.query_btn.setStyleSheet(_QUERY_BTN_ACTIVE_STYLE)
+            self.query_btn.setText("◉ Resending - click to Stop")
+            self._resend_timer.start(int(interval_s * 1000))
 
     def _make_value_label(self, name: str) -> QLabel:
         value_label = QLabel("-")
@@ -350,6 +408,8 @@ class HeaderPanel(QWidget):
         self._set_field("INPUT_PRT_PRI", str(h.input_prt_pri))
         self._set_field("OUTPUT_PRT_PRI", str(h.output_prt_pri))
         self._set_field("PPS_COUNTER", str(h.pps_counter))
+        gen_status_str = f"SOB={'Internal' if h.sob_is_internal() else 'Bypass'}\nPRT={'Internal' if h.prt_is_internal() else 'Bypass'}"
+        self._set_field("GENERATOR_STATUS", gen_status_str)
         self._set_field("CHIP_ID", f"0x{h.chip_id:08X}")
 
         checksum_label = self.field_labels["CHECKSUM"]

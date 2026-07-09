@@ -236,6 +236,7 @@ _mock_header.input_prt_width_us = 30
 _mock_header.output_prt_width_us = 40
 _mock_header.input_pps_width_us = 50
 _mock_header.pps_counter = 600
+_mock_header.set_generator_state(sob_internal=True, prt_internal=False)
 _mock_header.chip_id = 0x12345678
 _mock_header_bytes = _mock_header.to_bytes()
 

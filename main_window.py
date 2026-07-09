@@ -827,11 +827,27 @@ class MainWindow(QMainWindow):
 
     # -- send / receive ---------------------------------------------------
 
-    def _on_query_qcc_status(self):
+    def _on_query_qcc_status(self, is_auto_resend: bool = False):
         if self.worker is None:
-            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            if not is_auto_resend:
+                QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
-        if not self._check_not_busy():
+
+        if is_auto_resend:
+            # Same reasoning as _on_link_test_clicked's auto-resend branch:
+            # the header panel's own QTimer fires this regardless of
+            # whether the previous query got a response or timed out - if
+            # nothing else is in flight, cancel any still-pending wait for
+            # our own last tick and send again now rather than waiting the
+            # full RESPONSE_TIMEOUT_MS out; if something unrelated (Dwell,
+            # RX Cal, ...) is in flight, skip this tick quietly.
+            if self._awaiting_kind not in (None, "qcc_status"):
+                return
+            self._awaiting_kind = None
+            if self._pending_timer is not None:
+                self._pending_timer.stop()
+                self._pending_timer = None
+        elif not self._check_not_busy():
             return
 
         # QCC Status (Mode 3) is non-operational - QCC just returns its

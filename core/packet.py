@@ -874,7 +874,8 @@ class QCCHeaderTx:
     71-74   OUTPUT_PRT_PRI         4     uint32  PRT PRI (Pulse Repetition Interval) measured on output, us
     75-76   INPUT_PPS_WIDTH_US     2     uint16
     77-80   PPS_COUNTER            4     uint32  Separate 32-bit counter, distinct from INPUT_PPS_COUNT
-    81-84   RESERVED1              4     byte[4]
+    81      GENERATOR_STATUS       1     byte    Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bits 7-2: reserved.
+    82-84   RESERVED1              3     byte[3]
     85-88   CHIP_ID                4     uint32  Lower 32 bits of a 64-bit chip ID
     89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
     """
@@ -893,7 +894,7 @@ class QCCHeaderTx:
     QCC_COMMAND_REMOTE_PROGRAMMING = 0xFF
 
     # Everything except the final checksum byte (89 bytes).
-    _BODY_FMT = "<BBHBBIBBHI14sBHHHIIIIIHHHHIIHI4sI"
+    _BODY_FMT = "<BBHBBIBBHI14sBHHHIIIIIHHHHIIHIB3sI"
 
     def __init__(self):
         self.destination_id = 0
@@ -923,8 +924,21 @@ class QCCHeaderTx:
         self.output_prt_pri = 0
         self.input_pps_width_us = 0
         self.pps_counter = 0
+        self.generator_status = 0  # Bit 0: SOB_STATE, Bit 1: PRT_STATE
         self.chip_id = 0
         self.checksum_ok = None
+
+    def sob_is_internal(self) -> bool:
+        """Return True if SOB is internal generator, False if bypass."""
+        return bool(self.generator_status & 0x01)
+
+    def prt_is_internal(self) -> bool:
+        """Return True if PRT is internal generator, False if bypass."""
+        return bool((self.generator_status >> 1) & 0x01)
+
+    def set_generator_state(self, sob_internal: bool, prt_internal: bool) -> None:
+        """Set SOB and PRT state bits in generator_status."""
+        self.generator_status = (int(sob_internal) & 0x01) | ((int(prt_internal) & 0x01) << 1)
 
     def to_bytes(self) -> bytes:
         body = struct.pack(
@@ -942,7 +956,8 @@ class QCCHeaderTx:
             self.input_prt_pri, self.output_prt_pri,
             self.input_pps_width_us,
             self.pps_counter,
-            bytes(4),
+            self.generator_status,
+            bytes(3),
             self.chip_id,
         )
         assert len(body) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE - 1
@@ -965,6 +980,7 @@ class QCCHeaderTx:
             input_prt_pri, output_prt_pri,
             input_pps_width_us,
             pps_counter,
+            generator_status,
             _reserved1,
             chip_id,
             chk,
@@ -999,6 +1015,7 @@ class QCCHeaderTx:
         obj.output_prt_pri = output_prt_pri
         obj.input_pps_width_us = input_pps_width_us
         obj.pps_counter = pps_counter
+        obj.generator_status = generator_status & 0xFF
         obj.chip_id = chip_id
         obj.checksum_ok = crc8(raw[:-1]) == chk
         return obj

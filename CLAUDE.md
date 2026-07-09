@@ -34,3 +34,28 @@ instructions and a file-by-file overview.
    `INPUT_PPS_WIDTH_US` and `PPS_COUNTER` to the wrong offsets and left
    `RESERVED1` oversized. `core/packet.py`'s `QCCHeaderTx` and
    `widgets/header_panel.py` (new "PRT PRI (µs)" group) now match the spec.
+
+4. **QCC_COMMAND redesign synced 2026-07-09, mapping needs confirmation** -
+   the mode-based `COMMAND_ID` scheme (byte 5, 0=Normal..5=Remote
+   Programming) was replaced by a flat `QCC_COMMAND` enum at byte 33
+   (`DATA_DISTRIBUTION`/`QCC_STATUS`/`QCC_RESET`/`PRT_BYPASS`/`SOB_BYPASS`/
+   `PRT_INTERNAL_GEN`/`SOB_INTERNAL_GEN`/`PPS_INTERNAL_GEN`/
+   `REMOTE_PROGRAMMING`); byte 5 is now an unused `ECHO_BYTE`.
+   `docs/idd/packet_spec.yaml`, `core/packet.py`, `core/rc_settings.py`,
+   `main_window.py`'s Timing tab handlers, `widgets/header_panel.py`, and
+   the standalone test apps (`tx_test_window.py`/`rx_test_app.py`/
+   `status_responder_app.py`) are all updated to match. Two mappings were
+   **assumed, not stated in the new IDD, and need Yuvraj's confirmation**:
+   - Soft Reset and Memory Operation are now mapped to `DATA_DISTRIBUTION`
+     (0x00) in `core/rc_settings.py`, on the reasoning that both deliver a
+     QTRM-targeted command via the DMA'd 2880-byte data block. They
+     previously used `QCC_RESET`(4)/`REMOTE_PROGRAMMING`(5) under the old
+     scheme, neither of which has a clean equivalent now (`QCC_RESET` is
+     now a QCC-level PIO-pin reset unrelated to QTRM soft-reset; real
+     `REMOTE_PROGRAMMING` is now reserved for the 4196-byte bootloader
+     protocol).
+   - PPS has no Bypass counterpart in the new enum (only
+     `PPS_INTERNAL_GEN` exists) - `main_window.py`'s Timing tab sends
+     `PPS_INTERNAL_GEN` unconditionally now; confirm this is intended
+     rather than a missing `PPS_BYPASS` command.
+   See `docs/idd/packet_spec.yaml`'s `open_items` for the full detail.

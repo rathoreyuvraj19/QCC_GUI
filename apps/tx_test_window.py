@@ -30,19 +30,22 @@ from widgets.raw_slot_model import RawSlotTableModel
 from widgets.segmented_control import SegmentedControl
 from widgets.titled_group import collapsible_group_box, titled_group_box
 
-_MODE_NAMES = {
-    QCCHeaderRx.MODE_NORMAL: "Normal",
-    QCCHeaderRx.MODE_INTERNAL_LOOPBACK: "Internal Loopback",
-    QCCHeaderRx.MODE_EXTERNAL_LOOPBACK: "External Loopback",
-    QCCHeaderRx.MODE_STATUS_ONLY: "Status/Response Only",
-    QCCHeaderRx.MODE_QCC_RESET: "QCC Reset",
-    QCCHeaderRx.MODE_REMOTE_PROGRAMMING: "Remote Programming",
+_QCC_COMMAND_NAMES = {
+    QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION: "DATA_DISTRIBUTION",
+    QCCHeaderRx.QCC_COMMAND_QCC_STATUS: "QCC_STATUS",
+    QCCHeaderRx.QCC_COMMAND_QCC_RESET: "QCC_RESET",
+    QCCHeaderRx.QCC_COMMAND_PRT_BYPASS: "PRT_BYPASS",
+    QCCHeaderRx.QCC_COMMAND_SOB_BYPASS: "SOB_BYPASS",
+    QCCHeaderRx.QCC_COMMAND_PRT_INTERNAL_GEN: "PRT_INTERNAL_GEN",
+    QCCHeaderRx.QCC_COMMAND_SOB_INTERNAL_GEN: "SOB_INTERNAL_GEN",
+    QCCHeaderRx.QCC_COMMAND_PPS_INTERNAL_GEN: "PPS_INTERNAL_GEN",
+    QCCHeaderRx.QCC_COMMAND_REMOTE_PROGRAMMING: "REMOTE_PROGRAMMING",
 }
 
 _COMMAND_FIELDS = [
-    "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE", "COMMAND_ID", "COMMAND_ACK",
+    "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE", "ECHO_BYTE", "COMMAND_ACK",
     "MESSAGE_NUMBER", "DATE", "MONTH", "YEAR", "TIME_OF_DAY",
-    "COMMAND_ID_REPEAT", "CHECKSUM",
+    "QCC_COMMAND", "CHECKSUM",
 ]
 
 
@@ -143,14 +146,14 @@ class TxTestWindow(QMainWindow):
         self.field_labels["DESTINATION_ID"].setText(str(h.destination_id))
         self.field_labels["SOURCE_ID"].setText(str(h.source_id))
         self.field_labels["PACKET_SIZE"].setText(str(h.packet_size))
-        self.field_labels["COMMAND_ID"].setText(_MODE_NAMES.get(h.command_id, str(h.command_id)))
+        self.field_labels["ECHO_BYTE"].setText(str(h.echo_byte))
         self.field_labels["COMMAND_ACK"].setText(str(h.command_ack))
         self.field_labels["MESSAGE_NUMBER"].setText(str(h.message_number))
         self.field_labels["DATE"].setText(str(h.date))
         self.field_labels["MONTH"].setText(str(h.month))
         self.field_labels["YEAR"].setText(str(h.year))
         self.field_labels["TIME_OF_DAY"].setText(str(h.time_of_day))
-        self.field_labels["COMMAND_ID_REPEAT"].setText(str(h.command_id_repeat))
+        self.field_labels["QCC_COMMAND"].setText(_QCC_COMMAND_NAMES.get(h.qcc_command, f"0x{h.qcc_command:02X}"))
         self.field_labels["CHECKSUM"].setText("OK" if h.checksum_ok else "FAIL")
 
         for i, b in enumerate(header_raw):

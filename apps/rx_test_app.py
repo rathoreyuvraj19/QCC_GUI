@@ -44,10 +44,22 @@ from widgets.raw_slot_model import RawSlotTableModel
 from widgets.segmented_control import SegmentedControl
 from widgets.titled_group import collapsible_group_box, titled_group_box
 
+_QCC_COMMAND_NAMES = {
+    QCCHeaderTx.QCC_COMMAND_DATA_DISTRIBUTION: "DATA_DISTRIBUTION",
+    QCCHeaderTx.QCC_COMMAND_QCC_STATUS: "QCC_STATUS",
+    QCCHeaderTx.QCC_COMMAND_QCC_RESET: "QCC_RESET",
+    QCCHeaderTx.QCC_COMMAND_PRT_BYPASS: "PRT_BYPASS",
+    QCCHeaderTx.QCC_COMMAND_SOB_BYPASS: "SOB_BYPASS",
+    QCCHeaderTx.QCC_COMMAND_PRT_INTERNAL_GEN: "PRT_INTERNAL_GEN",
+    QCCHeaderTx.QCC_COMMAND_SOB_INTERNAL_GEN: "SOB_INTERNAL_GEN",
+    QCCHeaderTx.QCC_COMMAND_PPS_INTERNAL_GEN: "PPS_INTERNAL_GEN",
+    QCCHeaderTx.QCC_COMMAND_REMOTE_PROGRAMMING: "REMOTE_PROGRAMMING",
+}
+
 _RESPONSE_FIELDS = [
-    "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE", "COMMAND_ID", "COMMAND_ACK",
+    "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE", "ECHO_BYTE", "COMMAND_ACK",
     "MESSAGE_NUMBER", "DATE", "MONTH", "YEAR", "TIME_OF_DAY",
-    "COMMAND_ID_REPEAT", "CHECKSUM",
+    "QCC_COMMAND", "CHECKSUM",
 ]
 
 
@@ -148,14 +160,14 @@ class RxTestWindow(QMainWindow):
         self.resp_labels["DESTINATION_ID"].setText(str(h.destination_id))
         self.resp_labels["SOURCE_ID"].setText(str(h.source_id))
         self.resp_labels["PACKET_SIZE"].setText(str(h.packet_size))
-        self.resp_labels["COMMAND_ID"].setText(str(h.command_id))
+        self.resp_labels["ECHO_BYTE"].setText(str(h.echo_byte))
         self.resp_labels["COMMAND_ACK"].setText(str(h.command_ack))
         self.resp_labels["MESSAGE_NUMBER"].setText(str(h.message_number))
         self.resp_labels["DATE"].setText(str(h.date))
         self.resp_labels["MONTH"].setText(str(h.month))
         self.resp_labels["YEAR"].setText(str(h.year))
         self.resp_labels["TIME_OF_DAY"].setText(str(h.time_of_day))
-        self.resp_labels["COMMAND_ID_REPEAT"].setText(str(h.command_id_repeat))
+        self.resp_labels["QCC_COMMAND"].setText(_QCC_COMMAND_NAMES.get(h.qcc_command, f"0x{h.qcc_command:02X}"))
         self.resp_labels["CHECKSUM"].setText("OK" if h.checksum_ok else "FAIL")
 
         for i, b in enumerate(header_raw):

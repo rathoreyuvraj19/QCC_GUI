@@ -62,7 +62,8 @@ class NamedByteGrid(QWidget):
         self._name_edits = []
         self._cells = []
         grid = QGridLayout(self)
-        grid.setSpacing(3)
+        grid.setSpacing(10)
+        grid.setContentsMargins(0, 8, 0, 0)
         for i in range(num_bytes):
             label_index = start_index + i
 
@@ -128,8 +129,8 @@ class RCSettingsTab(QWidget):
 
         content = QWidget()
         root = QVBoxLayout(content)
-        root.setContentsMargins(16, 16, 16, 16)
-        root.setSpacing(14)
+        root.setContentsMargins(20, 20, 20, 20)
+        root.setSpacing(20)
 
         root.addWidget(self._build_editable_group())
         root.addWidget(self._build_auto_group())
@@ -166,7 +167,7 @@ class RCSettingsTab(QWidget):
         # QLabel as the heading, styled normally, is the reliable way to
         # get a bold/larger section title instead of the flat native one.
         box = QGroupBox("")
-        box.setStyleSheet("QGroupBox { padding-top: 14px; }")
+        box.setStyleSheet("QGroupBox { padding: 18px; }")
         outer = QVBoxLayout(box)
         title_label = QLabel("EDITABLE HEADER FIELDS (BYTES 1-32)")
         title_label.setStyleSheet(
@@ -176,6 +177,8 @@ class RCSettingsTab(QWidget):
 
         form_widget = QWidget()
         form = QFormLayout(form_widget)
+        form.setVerticalSpacing(16)
+        form.setHorizontalSpacing(24)
         outer.addWidget(form_widget)
 
         self.destination_id_spin = SpinField(0, 255, rc_settings.destination_id)
@@ -193,7 +196,9 @@ class RCSettingsTab(QWidget):
         self.datetime_edit.dateTimeChanged.connect(self._on_fields_changed)
         form.addRow("DATE / MONTH / YEAR / TIME_OF_DAY", self.datetime_edit)
 
-        form.addRow(QLabel("RESERVED0 (bytes 19-32, editable names + values):"))
+        reserved_label = QLabel("RESERVED0 (bytes 19-32, editable names + values):")
+        reserved_label.setStyleSheet("margin-top: 10px;")
+        form.addRow(reserved_label)
         self.reserved_grid = NamedByteGrid(14, wrap_cols=7, start_index=19)
         self.reserved_grid.changed.connect(self._on_fields_changed)
         form.addRow(self.reserved_grid)
@@ -202,7 +207,7 @@ class RCSettingsTab(QWidget):
 
     def _build_auto_group(self):
         box = QGroupBox("")
-        box.setStyleSheet("QGroupBox { padding-top: 14px; }")
+        box.setStyleSheet("QGroupBox { padding: 18px; }")
         outer = QVBoxLayout(box)
         title_label = QLabel("AUTOMATIC HEADER FIELDS (NOT EDITABLE HERE)")
         title_label.setStyleSheet(
@@ -212,6 +217,8 @@ class RCSettingsTab(QWidget):
 
         form_widget = QWidget()
         form = QFormLayout(form_widget)
+        form.setVerticalSpacing(16)
+        form.setHorizontalSpacing(24)
         outer.addWidget(form_widget)
 
         self.packet_size_label = QLabel(f"{TOTAL_PACKET_SIZE} (fixed frame size)")
@@ -220,7 +227,7 @@ class RCSettingsTab(QWidget):
 
         command_id_label = QLabel("Set automatically per command sent")
         command_id_label.setStyleSheet(_AUTO_STYLE)
-        form.addRow("COMMAND_ID / COMMAND_ID_REPEAT", command_id_label)
+        form.addRow("ECHO_BYTE / QCC_COMMAND", command_id_label)
 
         command_ack_label = QLabel("0 (fixed - this is always the command direction)")
         command_ack_label.setStyleSheet(_AUTO_STYLE)

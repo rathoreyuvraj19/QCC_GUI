@@ -15,7 +15,7 @@ inside any individual tab's own layout, and not one instance per tab) -
 so it shows whichever frame was most recently received from ANY tab, a
 global "last received," not per-tab memory.
 
-Also carries a "Query QCC Status" button - QCC Status (Mode 3,
+Also carries a "Query QCC Status" button - QCC_STATUS (0x01,
 COMMAND_ID_QCC_STATUS in rc_settings.py) is a non-operational command:
 QCC just returns its current header with the latest sensor/counter values
 and a zero-filled body, no action taken. Lets the operator manually
@@ -41,6 +41,18 @@ from core.packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QCCHeaderTx
 
 _PANEL_WIDTH = 340
 _HEADER_TOTAL_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+
+_QCC_COMMAND_NAMES = {
+    QCCHeaderTx.QCC_COMMAND_DATA_DISTRIBUTION: "DATA_DISTRIBUTION",
+    QCCHeaderTx.QCC_COMMAND_QCC_STATUS: "QCC_STATUS",
+    QCCHeaderTx.QCC_COMMAND_QCC_RESET: "QCC_RESET",
+    QCCHeaderTx.QCC_COMMAND_PRT_BYPASS: "PRT_BYPASS",
+    QCCHeaderTx.QCC_COMMAND_SOB_BYPASS: "SOB_BYPASS",
+    QCCHeaderTx.QCC_COMMAND_PRT_INTERNAL_GEN: "PRT_INTERNAL_GEN",
+    QCCHeaderTx.QCC_COMMAND_SOB_INTERNAL_GEN: "SOB_INTERNAL_GEN",
+    QCCHeaderTx.QCC_COMMAND_PPS_INTERNAL_GEN: "PPS_INTERNAL_GEN",
+    QCCHeaderTx.QCC_COMMAND_REMOTE_PROGRAMMING: "REMOTE_PROGRAMMING",
+}
 
 _ACCENT = "#00adb5"
 _ACCENT_HOVER = "#1fc2ca"
@@ -84,7 +96,7 @@ _CHECKSUM_FAIL_GLOW_STYLE = _CHECKSUM_FAIL_BASE_CSS + f" background-color: {_GLO
 _FIELD_SECTIONS = [
     ("Routing / Command", [
         "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE",
-        "COMMAND_ID", "COMMAND_ACK", "COMMAND_ID_REPEAT",
+        "ECHO_BYTE", "COMMAND_ACK", "QCC_COMMAND",
         "MESSAGE_NUMBER", "CHECKSUM",
     ]),
     ("Timestamp", ["DATE", "MONTH", "YEAR", "TIME_OF_DAY"]),
@@ -314,14 +326,14 @@ class HeaderPanel(QWidget):
         self._set_field("DESTINATION_ID", str(h.destination_id))
         self._set_field("SOURCE_ID", str(h.source_id))
         self._set_field("PACKET_SIZE", str(h.packet_size))
-        self._set_field("COMMAND_ID", str(h.command_id))
+        self._set_field("ECHO_BYTE", str(h.echo_byte))
         self._set_field("COMMAND_ACK", str(h.command_ack))
         self._set_field("MESSAGE_NUMBER", str(h.message_number))
         self._set_field("DATE", str(h.date))
         self._set_field("MONTH", str(h.month))
         self._set_field("YEAR", str(h.year))
         self._set_field("TIME_OF_DAY", str(h.time_of_day))
-        self._set_field("COMMAND_ID_REPEAT", str(h.command_id_repeat))
+        self._set_field("QCC_COMMAND", _QCC_COMMAND_NAMES.get(h.qcc_command, f"0x{h.qcc_command:02X}"))
         self._set_field("FPGA_TEMPERATURE", str(h.fpga_temperature))
         self._set_field("BOARD_TEMPERATURE", str(h.board_temperature))
         self._set_field("BOARD_HUMIDITY", str(h.board_humidity))

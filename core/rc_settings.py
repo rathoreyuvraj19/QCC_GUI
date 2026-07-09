@@ -9,23 +9,39 @@ once (defaulting to the moment the GUI started) rather than per-command.
 Deliberately NOT settable here, per Yuvraj's scoping of the RC Settings
 tab:
   - PACKET_SIZE - always TOTAL_PACKET_SIZE, whatever's actually being sent.
-  - COMMAND_ID / COMMAND_ID_REPEAT - determined by which command is being
-    sent (build_header(command_id) takes it as an argument instead).
+  - ECHO_BYTE / QCC_COMMAND - determined by which command is being sent
+    (build_header(command_id) takes the QCC_COMMAND value as an argument;
+    ECHO_BYTE is no longer interpreted by QCC at all, always sent as 0).
   - COMMAND_ACK - always 0 in this (RC -> QCC) direction.
   - MESSAGE_NUMBER - a running counter of every command sent this GUI
     session, starting at 1 and incrementing on every build_header() call.
     Not persisted across restarts - "simply the number of msg sent by
     gui, starting with 1,2,3...".
 
-Command tabs' actual COMMAND_ID values (matching QCCHeaderRx.MODE_*, per
-Yuvraj): Dwell/Link Test/Status/RX Cal/TX Cal/Isolation all send Normal
-(0) - "no separate tab required for normal command". Soft Reset sends QCC
-Reset (4). Memory Operation sends Remote Programming (5). Timing
-Generation (SOB/PRT/PPS) sends Internal Loopback (1) or External Loopback
-(2), whichever the operator picks per-send - no single fixed COMMAND_ID_*
-constant for it, unlike every other tab above. The shared HeaderPanel's
-"Query QCC Status" button (present on every tab) sends Status/Response
-Only (3).
+Command tabs' actual QCC_COMMAND values (matching QCCHeaderRx.QCC_COMMAND_*,
+redesigned 2026-07-09 - the old mode-based COMMAND_ID scheme is gone).
+Dwell/Link Test/Status/RX Cal/TX Cal/Isolation all send DATA_DISTRIBUTION
+(0x00) - they work by DMA'ing the 2880-byte QTRM data block, and
+DATA_DISTRIBUTION is the only command that triggers that DMA write, per
+the IDD ("no separate tab required for normal command" carries over
+unchanged from the old Normal/0 mapping). Timing Generation (SOB/PRT/PPS)
+picks Bypass vs Internal Gen per-send based on the operator's Loopback
+switch - no single fixed COMMAND_ID_* constant for it, unlike every other
+tab above. The shared HeaderPanel's "Query QCC Status" button (present on
+every tab) sends QCC_STATUS (0x01).
+
+ASSUMPTION (flagged for Yuvraj to confirm - see CLAUDE.md open issues):
+Soft Reset and Memory Operation also work by delivering a QTRM-targeted
+command in the data block (CMD_SOFT_RESET / CMD_DATA_STORAGE in
+core/packet.py), so both are mapped to DATA_DISTRIBUTION (0x00) here too -
+previously they used MODE_QCC_RESET(4)/MODE_REMOTE_PROGRAMMING(5)
+respectively, which don't have a clean equivalent in the new 9-command
+enum (QCC_RESET now means "reset FPGA-side buffers/counters via PIO pin",
+a QCC-level action unrelated to sending a QTRM soft-reset command; and
+REMOTE_PROGRAMMING is now reserved for the actual 4196-byte bootloader
+protocol, distinct in framing from Memory Operation's standard 2970-byte
+frames). Confirm this mapping is correct before relying on it against
+real hardware.
 """
 
 import json
@@ -45,24 +61,26 @@ else:
     _APP_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 _SAVE_PATH = os.path.join(_APP_DIR, "rc_settings.json")
 
-COMMAND_ID_DWELL = QCCHeaderRx.MODE_NORMAL
-COMMAND_ID_LINK_TEST = QCCHeaderRx.MODE_NORMAL
-COMMAND_ID_STATUS = QCCHeaderRx.MODE_NORMAL
-COMMAND_ID_RX_CAL = QCCHeaderRx.MODE_NORMAL
-COMMAND_ID_TX_CAL = QCCHeaderRx.MODE_NORMAL
-COMMAND_ID_ISOLATION = QCCHeaderRx.MODE_NORMAL
-COMMAND_ID_SOFT_RESET = QCCHeaderRx.MODE_QCC_RESET
-COMMAND_ID_MEMORY_OPERATION = QCCHeaderRx.MODE_REMOTE_PROGRAMMING
+COMMAND_ID_DWELL = QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION
+COMMAND_ID_LINK_TEST = QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION
+COMMAND_ID_STATUS = QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION
+COMMAND_ID_RX_CAL = QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION
+COMMAND_ID_TX_CAL = QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION
+COMMAND_ID_ISOLATION = QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION
+# ASSUMPTION: changed from the old MODE_QCC_RESET(4) - see module docstring above.
+COMMAND_ID_SOFT_RESET = QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION
+# ASSUMPTION: changed from the old MODE_REMOTE_PROGRAMMING(5) - see module docstring above.
+COMMAND_ID_MEMORY_OPERATION = QCCHeaderRx.QCC_COMMAND_DATA_DISTRIBUTION
 # The Remote Programming tab proper (firmware update over the bootloader
-# link) shares command_id 5 with Memory Operation above - QCC presumably
-# tells the two apart by frame size (Memory Operation sends standard
-# 2970-byte frames, Remote Programming sends 4196-byte ones).
-COMMAND_ID_REMOTE_PROGRAMMING = QCCHeaderRx.MODE_REMOTE_PROGRAMMING
-# The HeaderPanel's "Query QCC Status" button (Mode 3 - "QCC simply returns
-# its current response packet, no action taken", per the doc) - distinct
-# from COMMAND_ID_STATUS above, which is the per-QTRM Status tab's Normal
-# (0) mode command.
-COMMAND_ID_QCC_STATUS = QCCHeaderRx.MODE_STATUS_ONLY
+# link, 4196-byte frames) - now has its own dedicated command value,
+# distinct from Memory Operation above (which no longer shares a command
+# value with it, unlike the pre-redesign scheme).
+COMMAND_ID_REMOTE_PROGRAMMING = QCCHeaderRx.QCC_COMMAND_REMOTE_PROGRAMMING
+# The HeaderPanel's "Query QCC Status" button ("QCC simply returns its
+# current response packet, no action taken", per the doc) - distinct from
+# COMMAND_ID_STATUS above, which is the per-QTRM Status tab's
+# DATA_DISTRIBUTION command.
+COMMAND_ID_QCC_STATUS = QCCHeaderRx.QCC_COMMAND_QCC_STATUS
 
 
 class RCSettings:
@@ -94,7 +112,7 @@ class RCSettings:
         h = QCCHeaderRx(
             destination_id=self.destination_id,
             source_id=self.source_id,
-            command_id=command_id,
+            qcc_command=command_id,
             message_number=self.next_message_number(),
             date=self.date,
             month=self.month,

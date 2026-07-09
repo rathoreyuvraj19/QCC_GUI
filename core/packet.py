@@ -597,7 +597,8 @@ def build_memory_write_frame(data_type: int, payload: bytes, target_qtrm_index: 
 
 # ---------------------------------------------------------------------------
 # QCC RX header (RC -> QCC, command) - full 90-byte header, per
-# QCC_90Byte_Header_BitTable.docx (2026-07-05)'s TX PACKET tables.
+# docs/idd/packet_spec.yaml (redesigned 2026-07-09: flat QCC_COMMAND enum
+# at byte 32/33 replaces the old mode-based COMMAND_ID at byte 4/5).
 #
 # Display/decode only for now - deliberately NOT wired into any of the
 # actual build_*_frame functions below, which still all send an all-zero
@@ -606,13 +607,12 @@ def build_memory_write_frame(data_type: int, payload: bytes, target_qtrm_index: 
 # field names for what's actually being sent (all zero) rather than the
 # old MSG_ID/MODE/COMMAND_DATA layout, which no longer matches the current
 # spec. Bytes 0-32 share the exact same structure as QCCHeaderTx's (the
-# response); the 56-byte Message Body (bytes 33-88) is mode-dependent and
-# still undefined for every mode per the doc (Mode 0/3/4 explicitly need
-# none; Mode 1/2/5 TBD) - kept as a generic opaque blob, not decoded further,
-# EXCEPT Mode 1/2 (Internal/External Loopback)'s SOB/PRT/PPS sub-commands,
-# which the Timing Generation tab does build for real (see
-# build_sob_message_body/build_prt_message_body/build_pps_message_body and
-# build_header_only_frame below).
+# response); the 56-byte Message Body (bytes 33-88) is command-dependent:
+# DATA_DISTRIBUTION/QCC_STATUS/QCC_RESET/REMOTE_PROGRAMMING need none;
+# PRT_BYPASS/PRT_INTERNAL_GEN, SOB_BYPASS/SOB_INTERNAL_GEN, and
+# PPS_INTERNAL_GEN each have their own fixed body layout, built by
+# build_prt_body/build_sob_body/build_pps_body and sent via
+# build_header_only_frame below.
 # ---------------------------------------------------------------------------
 
 
@@ -622,8 +622,8 @@ class QCCHeaderRx:
     0       DESTINATION_ID         1     byte    RC fills - QCC swaps this into its response's Source ID
     1       SOURCE_ID              1     byte    RC fills - QCC swaps this into its response's Destination ID
     2-3     PACKET_SIZE            2     uint16  Fixed 2970
-    4       COMMAND_ID             1     byte    QCC mode: 0=Normal,1=Internal Loopback,2=External Loopback,
-                                                   3=Status/Response Only,4=QCC Reset,5=Remote Programming
+    4       ECHO_BYTE              1     byte    RC may send any value; QCC no longer interprets this byte
+                                                   and echoes it back unchanged in the Response (byte 4)
     5       COMMAND_ACK            1     byte    0x00 for a command (vs 0x01 for a response)
     6-9     MESSAGE_NUMBER         4     uint32  Counter of messages sent by RC to QCC, incremented per message
     10      DATE                   1     byte    Decimal 1-31
@@ -631,24 +631,30 @@ class QCCHeaderRx:
     12-13   YEAR                   2     uint16  Decimal
     14-17   TIME_OF_DAY            4     uint32  Format still TBD
     18-31   RESERVED0              14    byte[14]
-    32      COMMAND_ID (repeat)    1     byte    Same as offset 4
-    33-88   MESSAGE_BODY           56    byte[56] Mode-dependent, undefined for every mode currently
+    32      QCC_COMMAND            1     byte    Selects the command to execute - see QCC_COMMAND_* below
+    33-88   MESSAGE_BODY           56    byte[56] Command-dependent, see build_*_body() functions below
     89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
     """
 
-    MODE_NORMAL = 0
-    MODE_INTERNAL_LOOPBACK = 1
-    MODE_EXTERNAL_LOOPBACK = 2
-    MODE_STATUS_ONLY = 3
-    MODE_QCC_RESET = 4
-    MODE_REMOTE_PROGRAMMING = 5
+    # Flat QCC_COMMAND enum (redesigned 2026-07-09, replaces the old
+    # MODE_NORMAL..MODE_REMOTE_PROGRAMMING mode-based scheme). Selected via
+    # the qcc_command field (byte 32/33 1-indexed) instead of byte 4/5.
+    QCC_COMMAND_DATA_DISTRIBUTION = 0x00
+    QCC_COMMAND_QCC_STATUS = 0x01
+    QCC_COMMAND_QCC_RESET = 0x02
+    QCC_COMMAND_PRT_BYPASS = 0x03
+    QCC_COMMAND_SOB_BYPASS = 0x04
+    QCC_COMMAND_PRT_INTERNAL_GEN = 0x05
+    QCC_COMMAND_SOB_INTERNAL_GEN = 0x06
+    QCC_COMMAND_PPS_INTERNAL_GEN = 0x07
+    QCC_COMMAND_REMOTE_PROGRAMMING = 0xFF
 
     # Everything except the final checksum byte (89 bytes).
     _BODY_FMT = "<BBHBBIBBHI14sB56s"
 
-    def __init__(self, destination_id: int = 0, source_id: int = 0, command_id: int = 0,
-                 message_number: int = 0, date: int = 0, month: int = 0, year: int = 0,
-                 time_of_day: int = 0, message_body: bytes = b"", reserved0: bytes = b"",
+    def __init__(self, destination_id: int = 0, source_id: int = 0, echo_byte: int = 0,
+                 qcc_command: int = 0, message_number: int = 0, date: int = 0, month: int = 0,
+                 year: int = 0, time_of_day: int = 0, message_body: bytes = b"", reserved0: bytes = b"",
                  packet_size: int = TOTAL_PACKET_SIZE):
         self.destination_id = destination_id & 0xFF
         self.source_id = source_id & 0xFF
@@ -656,14 +662,14 @@ class QCCHeaderRx:
         # Programming TX frames - ASSUMPTION: the doc doesn't say what
         # PACKET_SIZE should read in the 4196-byte frame, actual size chosen.
         self.packet_size = packet_size & 0xFFFF
-        self.command_id = command_id & 0xFF
+        self.echo_byte = echo_byte & 0xFF
         self.command_ack = 0
         self.message_number = message_number & 0xFFFFFFFF
         self.date = date & 0xFF
         self.month = month & 0xFF
         self.year = year & 0xFFFF
         self.time_of_day = time_of_day & 0xFFFFFFFF
-        self.command_id_repeat = self.command_id
+        self.qcc_command = qcc_command & 0xFF
         body = bytearray(56)
         if message_body:
             body[: len(message_body)] = message_body[:56]
@@ -678,10 +684,10 @@ class QCCHeaderRx:
         body = struct.pack(
             self._BODY_FMT,
             self.destination_id, self.source_id, self.packet_size,
-            self.command_id, self.command_ack, self.message_number,
+            self.echo_byte, self.command_ack, self.message_number,
             self.date, self.month, self.year, self.time_of_day,
             self.reserved0,
-            self.command_id_repeat,
+            self.qcc_command,
             self.message_body,
         )
         assert len(body) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE - 1
@@ -692,10 +698,10 @@ class QCCHeaderRx:
         assert len(raw) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
         (
             destination_id, source_id, packet_size,
-            command_id, command_ack, message_number,
+            echo_byte, command_ack, message_number,
             date, month, year, time_of_day,
             reserved0,
-            command_id_repeat,
+            qcc_command,
             message_body,
             chk,
         ) = struct.unpack(cls._BODY_FMT + "B", raw)
@@ -704,7 +710,7 @@ class QCCHeaderRx:
         obj.destination_id = destination_id
         obj.source_id = source_id
         obj.packet_size = packet_size
-        obj.command_id = command_id
+        obj.echo_byte = echo_byte
         obj.command_ack = command_ack
         obj.message_number = message_number
         obj.date = date
@@ -712,55 +718,49 @@ class QCCHeaderRx:
         obj.year = year
         obj.reserved0 = reserved0
         obj.time_of_day = time_of_day
-        obj.command_id_repeat = command_id_repeat
+        obj.qcc_command = qcc_command
         obj.message_body = message_body
         obj.checksum_ok = crc8(raw[:-1]) == chk
         return obj
 
 
 # ---------------------------------------------------------------------------
-# Mode 1/2 (Internal/External Loopback) Message Body sub-commands - per
-# QCC_90Byte_Header_BitTable.docx's SOB/PRT/PPS Command breakdown tables.
-# COMMAND_TYPE lives at message_body[0] (absolute byte 34); the
-# command-specific fields immediately follow it. Each builder returns the
-# full 56-byte Message Body (COMMAND_TYPE + fields, zero-padded) ready to
-# pass into QCCHeaderRx(message_body=...) / rc_settings.build_header().
+# PRT_BYPASS/PRT_INTERNAL_GEN, SOB_BYPASS/SOB_INTERNAL_GEN, and
+# PPS_INTERNAL_GEN Message Body layouts - per docs/idd/packet_spec.yaml.
+# Each command now selects its body shape via qcc_command (byte 32/33)
+# rather than an in-body selector byte, so PRT_BYPASS and PRT_INTERNAL_GEN
+# share build_prt_body (Bypass vs Internal Gen is which qcc_command value
+# the caller passes to QCCHeaderRx, not a body field); same for SOB.
 # ---------------------------------------------------------------------------
-
-TIMING_CMD_SOB = 0x00
-TIMING_CMD_PRT = 0x01
-TIMING_CMD_PPS = 0x02  # valid only when the command's mode is External Loopback
 
 PRT_COUNT_INFINITE = 0xFFFFFFFF
 
 
-def build_sob_message_body(sob_width_us: int) -> bytes:
-    """SOB command (bytes 35-36 = SOB_WIDTH, u16); valid for Internal or External Loopback."""
+def build_sob_body(sob_width_us: int) -> bytes:
+    """SOB body (bytes 0-1 = SOB_WIDTH, u16, rest reserved). Used by SOB_BYPASS and SOB_INTERNAL_GEN."""
     body = bytearray(56)
-    body[0] = TIMING_CMD_SOB
-    struct.pack_into("<H", body, 1, sob_width_us & 0xFFFF)
+    struct.pack_into("<H", body, 0, sob_width_us & 0xFFFF)
     return bytes(body)
 
 
-def build_prt_message_body(prt_count: int, pri_width_us: int, prt_width_us: int) -> bytes:
+def build_prt_body(prt_count: int, pri_width_us: int, prt_width_us: int) -> bytes:
     """
-    PRT command (bytes 35-38 = PRT_COUNT u32, 39-42 = PRI_WIDTH_US u32,
-    43-44 = PRT_WIDTH_US u16); valid for Internal or External Loopback.
-    prt_count = PRT_COUNT_INFINITE (0xFFFFFFFF) generates infinite PRTs.
+    PRT body (bytes 0-3 = PRT_COUNT u32, 4-7 = PRI_WIDTH_US u32, 8-9 =
+    PRT_WIDTH_US u16, rest reserved). Used by PRT_BYPASS and
+    PRT_INTERNAL_GEN. prt_count = PRT_COUNT_INFINITE (0xFFFFFFFF) generates
+    infinite PRTs.
     """
     body = bytearray(56)
-    body[0] = TIMING_CMD_PRT
-    struct.pack_into("<I", body, 1, prt_count & 0xFFFFFFFF)
-    struct.pack_into("<I", body, 5, pri_width_us & 0xFFFFFFFF)
-    struct.pack_into("<H", body, 9, prt_width_us & 0xFFFF)
+    struct.pack_into("<I", body, 0, prt_count & 0xFFFFFFFF)
+    struct.pack_into("<I", body, 4, pri_width_us & 0xFFFFFFFF)
+    struct.pack_into("<H", body, 8, prt_width_us & 0xFFFF)
     return bytes(body)
 
 
-def build_pps_message_body(pps_width_us: int) -> bytes:
-    """PPS command (bytes 35-36 = PPS_WIDTH, u16); valid only for External Loopback."""
+def build_pps_body(pps_width_us: int) -> bytes:
+    """PPS body (bytes 0-1 = PPS_WIDTH, u16, rest reserved). Used by PPS_INTERNAL_GEN."""
     body = bytearray(56)
-    body[0] = TIMING_CMD_PPS
-    struct.pack_into("<H", body, 1, pps_width_us & 0xFFFF)
+    struct.pack_into("<H", body, 0, pps_width_us & 0xFFFF)
     return bytes(body)
 
 
@@ -768,11 +768,11 @@ def build_header_only_frame(header: bytes) -> bytes:
     """
     Full 2970-byte frame for a command that's entirely described by its
     90-byte header, with the QTRM data block simply zero-filled since it
-    doesn't touch any individual QTRM - the SOB/PRT/PPS timing commands
-    (header encodes the chosen Loopback mode and Message Body, see
-    build_*_message_body above) and the QCC Status/Response Only command
-    (Mode 3 - "QCC simply returns its current response packet, no action
-    taken", per the doc) both fit this shape.
+    doesn't touch any individual QTRM - the PRT/SOB/PPS timing commands
+    (header's qcc_command selects Bypass vs Internal Gen, message_body
+    carries the fields, see build_prt_body/build_sob_body/build_pps_body
+    above) and QCC_STATUS ("QCC simply returns its current response
+    packet, no action taken", per the doc) both fit this shape.
     """
     assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     out = bytearray(header)
@@ -782,13 +782,14 @@ def build_header_only_frame(header: bytes) -> bytes:
 
 
 # ---------------------------------------------------------------------------
-# Remote Programming (Mode 5) - 4196-byte TX frame and RX slot demux.
-# QCC is a dumb relay for this mode: it strips the 90-byte header and
-# broadcasts [payload + inner command] identically to all 96 QTRMs over the
-# low-speed (115200) link. The inner 10-byte command set lives in
-# bootloader_packet.py. Note the Memory Operation tab also sends
-# command_id 5 but in standard 2970-byte frames - QCC presumably
-# distinguishes the two by frame size.
+# REMOTE_PROGRAMMING (qcc_command 0xFF) - 4196-byte TX frame and RX slot
+# demux. QCC is a dumb relay for this command: it strips the 90-byte header
+# and broadcasts [payload + inner command] identically to all 96 QTRMs over
+# the low-speed (115200) link. The inner 10-byte command set lives in
+# bootloader_packet.py. Distinct from the Memory Operation tab, which sends
+# a standard 2970-byte DATA_DISTRIBUTION frame (see rc_settings.py) -
+# no longer sharing a qcc_command value with real Remote Programming now
+# that each command has its own dedicated enum value.
 # ---------------------------------------------------------------------------
 
 
@@ -831,15 +832,14 @@ def extract_rp_slots(raw: bytes) -> list:
 
 # ---------------------------------------------------------------------------
 # QCC TX header (QCC -> RC, response) - full 90-byte header, fixed format.
-# Per QCC_90Byte_Header_BitTable.docx (2026-07-05) - supersedes the earlier
-# 58-byte-only QCCHeaderTx. The old "32-byte Fixed Header (still TBD) +
-# 58-byte QCC Header" split is gone as an implementation boundary: this doc
-# defines real fields across the whole 90 bytes, and the single CRC-8 at
-# the very last byte covers all 89 bytes before it (not just the last 58) -
-# so encode/decode must happen on the full 90-byte block as one unit.
-# FIXED_HEADER_SIZE/QCC_HEADER_SIZE (32/58) still correctly describe the
-# frame's overall byte layout (32+58=90, unchanged), just not a boundary
-# this class's own (de)serialization respects internally anymore.
+# Per docs/idd/packet_spec.yaml (redesigned 2026-07-09: byte 32/33 is now
+# QCC_COMMAND, echoing back whichever of the 9 flat commands produced this
+# response, replacing the old mode-based COMMAND_ID/COMMAND_ID_REPEAT at
+# byte 4/5 and 32/33). The single CRC-8 at the very last byte covers all 89
+# bytes before it, so encode/decode must happen on the full 90-byte block
+# as one unit. FIXED_HEADER_SIZE/QCC_HEADER_SIZE (32/58) still correctly
+# describe the frame's overall byte layout (32+58=90, unchanged), just not
+# a boundary this class's own (de)serialization respects internally.
 # ---------------------------------------------------------------------------
 
 
@@ -849,7 +849,7 @@ class QCCHeaderTx:
     0       DESTINATION_ID         1     byte    Echo of the command's Source ID
     1       SOURCE_ID              1     byte    Echo of the command's Destination ID
     2-3     PACKET_SIZE            2     uint16  Fixed 2970 (whole-frame size)
-    4       COMMAND_ID             1     byte    Echoed QCC mode (0-5, MODE_* below)
+    4       ECHO_BYTE              1     byte    Echoed unchanged from the command's byte 4 (no longer interpreted)
     5       COMMAND_ACK            1     byte    0x01 for a response (vs 0x00 for a command)
     6-9     MESSAGE_NUMBER         4     uint32  Echoed command message counter
     10      DATE                   1     byte    Decimal 1-31, echoed
@@ -857,7 +857,7 @@ class QCCHeaderTx:
     12-13   YEAR                   2     uint16  Decimal (not hex), echoed
     14-17   TIME_OF_DAY            4     uint32  Echoed, exact format still TBD
     18-31   RESERVED0              14    byte[14]
-    32      COMMAND_ID (repeat)    1     byte    Same value as offset 4
+    32      QCC_COMMAND            1     byte    Echoes which command (see QCC_COMMAND_* below) produced this response
     33-34   FPGA_TEMPERATURE       2     int16   10-bit 2's complement in bits 0-9, bits 10-15 = 0
     35-36   BOARD_TEMPERATURE      2     uint16
     37-38   BOARD_HUMIDITY         2     uint16
@@ -879,12 +879,18 @@ class QCCHeaderTx:
     89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
     """
 
-    MODE_NORMAL = 0
-    MODE_INTERNAL_LOOPBACK = 1
-    MODE_EXTERNAL_LOOPBACK = 2
-    MODE_STATUS_ONLY = 3
-    MODE_QCC_RESET = 4
-    MODE_REMOTE_PROGRAMMING = 5
+    # Same flat QCC_COMMAND enum as QCCHeaderRx - kept duplicated on this
+    # class (rather than importing) so callers can write QCCHeaderTx.QCC_COMMAND_*
+    # without depending on QCCHeaderRx, matching the pre-existing MODE_* pattern.
+    QCC_COMMAND_DATA_DISTRIBUTION = 0x00
+    QCC_COMMAND_QCC_STATUS = 0x01
+    QCC_COMMAND_QCC_RESET = 0x02
+    QCC_COMMAND_PRT_BYPASS = 0x03
+    QCC_COMMAND_SOB_BYPASS = 0x04
+    QCC_COMMAND_PRT_INTERNAL_GEN = 0x05
+    QCC_COMMAND_SOB_INTERNAL_GEN = 0x06
+    QCC_COMMAND_PPS_INTERNAL_GEN = 0x07
+    QCC_COMMAND_REMOTE_PROGRAMMING = 0xFF
 
     # Everything except the final checksum byte (89 bytes).
     _BODY_FMT = "<BBHBBIBBHI14sBHHHIIIIIHHHHIIHI4sI"
@@ -893,14 +899,14 @@ class QCCHeaderTx:
         self.destination_id = 0
         self.source_id = 0
         self.packet_size = TOTAL_PACKET_SIZE
-        self.command_id = 0
+        self.echo_byte = 0
         self.command_ack = 1
         self.message_number = 0
         self.date = 0
         self.month = 0
         self.year = 0
         self.time_of_day = 0
-        self.command_id_repeat = 0
+        self.qcc_command = 0
         self.fpga_temperature = 0  # signed, -512..511 (10-bit 2's complement)
         self.board_temperature = 0
         self.board_humidity = 0
@@ -924,10 +930,10 @@ class QCCHeaderTx:
         body = struct.pack(
             self._BODY_FMT,
             self.destination_id, self.source_id, self.packet_size,
-            self.command_id, self.command_ack, self.message_number,
+            self.echo_byte, self.command_ack, self.message_number,
             self.date, self.month, self.year, self.time_of_day,
             bytes(14),
-            self.command_id_repeat,
+            self.qcc_command,
             (self.fpga_temperature & 0x3FF), self.board_temperature, self.board_humidity,
             self.input_sob_count, self.input_prt_count, self.input_pps_count,
             self.output_prt_count, self.output_sob_count,
@@ -947,10 +953,10 @@ class QCCHeaderTx:
         assert len(raw) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
         (
             destination_id, source_id, packet_size,
-            command_id, command_ack, message_number,
+            echo_byte, command_ack, message_number,
             date, month, year, time_of_day,
             _reserved0,
-            command_id_repeat,
+            qcc_command,
             fpga_temp_raw, board_temperature, board_humidity,
             input_sob_count, input_prt_count, input_pps_count,
             output_prt_count, output_sob_count,
@@ -968,14 +974,14 @@ class QCCHeaderTx:
         obj.destination_id = destination_id
         obj.source_id = source_id
         obj.packet_size = packet_size
-        obj.command_id = command_id
+        obj.echo_byte = echo_byte
         obj.command_ack = command_ack
         obj.message_number = message_number
         obj.date = date
         obj.month = month
         obj.year = year
         obj.time_of_day = time_of_day
-        obj.command_id_repeat = command_id_repeat
+        obj.qcc_command = qcc_command
         fpga_temp_raw &= 0x3FF
         obj.fpga_temperature = fpga_temp_raw - 1024 if fpga_temp_raw >= 512 else fpga_temp_raw
         obj.board_temperature = board_temperature

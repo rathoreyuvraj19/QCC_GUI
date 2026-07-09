@@ -1,0 +1,6656 @@
+document:
+  title: RESPONSE PACKET (QCC -> RC) - FULL 90-BYTE BIT-LEVEL TABLE
+  source_file: /mnt/user-data/outputs/QCC_Protocol_Updated.docx
+tables:
+- name: RESPONSE PACKET (QCC -> RC) - FULL 90-BYTE BIT-LEVEL TABLE
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: QCC fills this by swapping - echoes the command's Source ID back as this response's Destination
+      ID.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: QCC fills this by swapping - echoes the command's Destination ID back as this response's
+      Source ID.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Echoes byte 5 from the command packet unchanged. QCC no longer interprets this byte.
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x01'
+    remarks: QCC fills 0x01, indicating this packet is QCC's response back to RC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter value echoed back from the command, so RC can identify which message this response
+      corresponds to.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter value echoed back from the command, so RC can identify which message this response
+      corresponds to.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter value echoed back from the command, so RC can identify which message this response
+      corresponds to.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter value echoed back from the command, so RC can identify which message this response
+      corresponds to.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Copied unchanged from the command by QCC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Copied unchanged from the command by QCC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Copied unchanged from the command by QCC. Current year, decimal (not hex). Lower Order Byte
+      and Higher Order Byte combine per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Copied unchanged from the command by QCC. Current year, decimal (not hex). Lower Order Byte
+      and Higher Order Byte combine per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Copied exactly from the command by QCC, unchanged. Exact format/units still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Copied exactly from the command by QCC, unchanged. Exact format/units still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Copied exactly from the command by QCC, unchanged. Exact format/units still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Copied exactly from the command by QCC, unchanged. Exact format/units still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND (Echo)
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Echoes the QCC_COMMAND value (byte 33) from the command that produced this response, identifying
+      which of the 9 commands was executed.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34
+    field_name: FPGA_TEMPERATURE - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: FPGA die temperature. 10 usable bits, 2's complement signed value in bits 0-9; bits 10-15
+      = 0 (fixed).
+    fill_color: F4CCCC
+    remarks_merged: false
+  - byte_no: 35
+    field_name: FPGA_TEMPERATURE - Higher Order Byte
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: FPGA die temperature. 10 usable bits, 2's complement signed value in bits 0-9; bits 10-15
+      = 0 (fixed).
+    fill_color: F4CCCC
+    remarks_merged: false
+  - byte_no: 36
+    field_name: BOARD_TEMPERATURE - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Board temperature sensor reading, 16-bit.
+    fill_color: D9D2E9
+    remarks_merged: false
+  - byte_no: 37
+    field_name: BOARD_TEMPERATURE - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Board temperature sensor reading, 16-bit.
+    fill_color: D9D2E9
+    remarks_merged: false
+  - byte_no: 38
+    field_name: BOARD_HUMIDITY - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Board humidity sensor reading, 16-bit.
+    fill_color: FCE5CD
+    remarks_merged: false
+  - byte_no: 39
+    field_name: BOARD_HUMIDITY - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Board humidity sensor reading, 16-bit.
+    fill_color: FCE5CD
+    remarks_merged: false
+  - byte_no: 40
+    field_name: INPUT_SOB_COUNT - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: SOB count measured on input.
+    fill_color: D0E0E3
+    remarks_merged: false
+  - byte_no: 41
+    field_name: INPUT_SOB_COUNT
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: SOB count measured on input.
+    fill_color: D0E0E3
+    remarks_merged: false
+  - byte_no: 42
+    field_name: INPUT_SOB_COUNT
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: SOB count measured on input.
+    fill_color: D0E0E3
+    remarks_merged: false
+  - byte_no: 43
+    field_name: INPUT_SOB_COUNT - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: SOB count measured on input.
+    fill_color: D0E0E3
+    remarks_merged: false
+  - byte_no: 44
+    field_name: INPUT_PRT_COUNT - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: PRT count measured on input.
+    fill_color: EAD1DC
+    remarks_merged: false
+  - byte_no: 45
+    field_name: INPUT_PRT_COUNT
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: PRT count measured on input.
+    fill_color: EAD1DC
+    remarks_merged: false
+  - byte_no: 46
+    field_name: INPUT_PRT_COUNT
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: PRT count measured on input.
+    fill_color: EAD1DC
+    remarks_merged: false
+  - byte_no: 47
+    field_name: INPUT_PRT_COUNT - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: PRT count measured on input.
+    fill_color: EAD1DC
+    remarks_merged: false
+  - byte_no: 48
+    field_name: INPUT_PPS_COUNT - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: PPS count measured on input.
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 49
+    field_name: INPUT_PPS_COUNT
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: PPS count measured on input.
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 50
+    field_name: INPUT_PPS_COUNT
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: PPS count measured on input.
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 51
+    field_name: INPUT_PPS_COUNT - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: PPS count measured on input.
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 52
+    field_name: OUTPUT_PRT_COUNT - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: PRT count measured on output.
+    fill_color: E6B8AF
+    remarks_merged: false
+  - byte_no: 53
+    field_name: OUTPUT_PRT_COUNT
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: PRT count measured on output.
+    fill_color: E6B8AF
+    remarks_merged: false
+  - byte_no: 54
+    field_name: OUTPUT_PRT_COUNT
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: PRT count measured on output.
+    fill_color: E6B8AF
+    remarks_merged: false
+  - byte_no: 55
+    field_name: OUTPUT_PRT_COUNT - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: PRT count measured on output.
+    fill_color: E6B8AF
+    remarks_merged: false
+  - byte_no: 56
+    field_name: OUTPUT_SOB_COUNT - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: SOB count measured on output.
+    fill_color: B4A7D6
+    remarks_merged: false
+  - byte_no: 57
+    field_name: OUTPUT_SOB_COUNT
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: SOB count measured on output.
+    fill_color: B4A7D6
+    remarks_merged: false
+  - byte_no: 58
+    field_name: OUTPUT_SOB_COUNT
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: SOB count measured on output.
+    fill_color: B4A7D6
+    remarks_merged: false
+  - byte_no: 59
+    field_name: OUTPUT_SOB_COUNT - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: SOB count measured on output.
+    fill_color: B4A7D6
+    remarks_merged: false
+  - byte_no: 60
+    field_name: INPUT_SOB_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Last SOB pulse width, input, microseconds.
+    fill_color: D9EAD3
+    remarks_merged: false
+  - byte_no: 61
+    field_name: INPUT_SOB_WIDTH_US - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Last SOB pulse width, input, microseconds.
+    fill_color: D9EAD3
+    remarks_merged: false
+  - byte_no: 62
+    field_name: OUTPUT_SOB_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Last SOB pulse width, output, microseconds.
+    fill_color: FFE5B4
+    remarks_merged: false
+  - byte_no: 63
+    field_name: OUTPUT_SOB_WIDTH_US - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Last SOB pulse width, output, microseconds.
+    fill_color: FFE5B4
+    remarks_merged: false
+  - byte_no: 64
+    field_name: INPUT_PRT_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Last PRT pulse width, input, microseconds.
+    fill_color: CFE2F3
+    remarks_merged: false
+  - byte_no: 65
+    field_name: INPUT_PRT_WIDTH_US - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Last PRT pulse width, input, microseconds.
+    fill_color: CFE2F3
+    remarks_merged: false
+  - byte_no: 66
+    field_name: OUTPUT_PRT_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Last PRT pulse width, output, microseconds.
+    fill_color: F9CB9C
+    remarks_merged: false
+  - byte_no: 67
+    field_name: OUTPUT_PRT_WIDTH_US - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Last PRT pulse width, output, microseconds.
+    fill_color: F9CB9C
+    remarks_merged: false
+  - byte_no: 68
+    field_name: INPUT_PRT_PRI - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: PRT PRI (Pulse Repetition Interval) measured on input, microseconds (32-bit).
+    fill_color: B4E7CE
+    remarks_merged: false
+  - byte_no: 69
+    field_name: INPUT_PRT_PRI
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: PRT PRI (Pulse Repetition Interval) measured on input, microseconds (32-bit).
+    fill_color: B4E7CE
+    remarks_merged: false
+  - byte_no: 70
+    field_name: INPUT_PRT_PRI
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: PRT PRI (Pulse Repetition Interval) measured on input, microseconds (32-bit).
+    fill_color: B4E7CE
+    remarks_merged: false
+  - byte_no: 71
+    field_name: INPUT_PRT_PRI - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: PRT PRI (Pulse Repetition Interval) measured on input, microseconds (32-bit).
+    fill_color: B4E7CE
+    remarks_merged: false
+  - byte_no: 72
+    field_name: OUTPUT_PRT_PRI - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: PRT PRI (Pulse Repetition Interval) measured on output, microseconds (32-bit).
+    fill_color: E4C1F9
+    remarks_merged: false
+  - byte_no: 73
+    field_name: OUTPUT_PRT_PRI
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: PRT PRI (Pulse Repetition Interval) measured on output, microseconds (32-bit).
+    fill_color: E4C1F9
+    remarks_merged: false
+  - byte_no: 74
+    field_name: OUTPUT_PRT_PRI
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: PRT PRI (Pulse Repetition Interval) measured on output, microseconds (32-bit).
+    fill_color: E4C1F9
+    remarks_merged: false
+  - byte_no: 75
+    field_name: OUTPUT_PRT_PRI - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: PRT PRI (Pulse Repetition Interval) measured on output, microseconds (32-bit).
+    fill_color: E4C1F9
+    remarks_merged: false
+  - byte_no: 76
+    field_name: INPUT_PPS_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Last PPS pulse width, input, microseconds.
+    fill_color: F6DDCC
+    remarks_merged: false
+  - byte_no: 77
+    field_name: INPUT_PPS_WIDTH_US - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Last PPS pulse width, input, microseconds.
+    fill_color: F6DDCC
+    remarks_merged: false
+  - byte_no: 78
+    field_name: PPS_COUNTER - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Separate 32-bit PPS counter (distinct from INPUT_PPS_COUNT above).
+    fill_color: C9E4DE
+    remarks_merged: false
+  - byte_no: 79
+    field_name: PPS_COUNTER
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Separate 32-bit PPS counter (distinct from INPUT_PPS_COUNT above).
+    fill_color: C9E4DE
+    remarks_merged: false
+  - byte_no: 80
+    field_name: PPS_COUNTER
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Separate 32-bit PPS counter (distinct from INPUT_PPS_COUNT above).
+    fill_color: C9E4DE
+    remarks_merged: false
+  - byte_no: 81
+    field_name: PPS_COUNTER - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Separate 32-bit PPS counter (distinct from INPUT_PPS_COUNT above).
+    fill_color: C9E4DE
+    remarks_merged: false
+  - byte_no: 82
+    field_name: Reserved-14
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 83
+    field_name: Reserved-15
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 84
+    field_name: Reserved-16
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 85
+    field_name: Reserved-17
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 86
+    field_name: CHIP_ID - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Lower 32 bits of the 64-bit chip ID, positioned immediately before the Checksum.
+    fill_color: F2C6DE
+    remarks_merged: false
+  - byte_no: 87
+    field_name: CHIP_ID
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Lower 32 bits of the 64-bit chip ID, positioned immediately before the Checksum.
+    fill_color: F2C6DE
+    remarks_merged: false
+  - byte_no: 88
+    field_name: CHIP_ID
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Lower 32 bits of the 64-bit chip ID, positioned immediately before the Checksum.
+    fill_color: F2C6DE
+    remarks_merged: false
+  - byte_no: 89
+    field_name: CHIP_ID - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Lower 32 bits of the 64-bit chip ID, positioned immediately before the Checksum.
+    fill_color: F2C6DE
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0x00 (DATA_DISTRIBUTION)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: Selects DATA_DISTRIBUTION. Triggers a DMA write (mSGDMA); QCC responds with the full 90-byte
+      Response header plus the full, populated 2880-byte QTRM data block.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34-89
+    field_name: MESSAGE_BODY
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0x01 (QCC_STATUS)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x01'
+    remarks: Selects QCC_STATUS. No DMA triggered; QCC responds with current telemetry in the 90-byte
+      Response header only.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34-89
+    field_name: MESSAGE_BODY
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0x02 (QCC_RESET)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x02'
+    remarks: Selects QCC_RESET. No DMA triggered; resets FPGA-side buffers, counters, and internal state
+      via a PIO pin.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34-89
+    field_name: MESSAGE_BODY
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0x03 (PRT_BYPASS)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x03'
+    remarks: Selects PRT_BYPASS. No DMA triggered; PRT generator is bypassed using the externally-supplied
+      parameters below.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34
+    field_name: PRT_COUNT - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 35
+    field_name: PRT_COUNT
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 36
+    field_name: PRT_COUNT
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 37
+    field_name: PRT_COUNT - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 38
+    field_name: PRI_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 39
+    field_name: PRI_WIDTH_US
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 40
+    field_name: PRI_WIDTH_US
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 41
+    field_name: PRI_WIDTH_US - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 42
+    field_name: PRT_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9E4DE
+    remarks_merged: false
+  - byte_no: 43
+    field_name: PRT_WIDTH_US - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9E4DE
+    remarks_merged: false
+  - byte_no: 44-89
+    field_name: Reserved
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0x04 (SOB_BYPASS)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x04'
+    remarks: Selects SOB_BYPASS. No DMA triggered; SOB generator is bypassed using the externally-supplied
+      width below.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34
+    field_name: SOB_WIDTH - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: F9CB9C
+    remarks_merged: false
+  - byte_no: 35
+    field_name: SOB_WIDTH - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: F9CB9C
+    remarks_merged: false
+  - byte_no: 36-89
+    field_name: Reserved
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0x05 (PRT_INTERNAL_GEN)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x05'
+    remarks: Selects PRT_INTERNAL_GEN. No DMA triggered; configures the PRT internal generator using the
+      parameters below.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34
+    field_name: PRT_COUNT - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 35
+    field_name: PRT_COUNT
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 36
+    field_name: PRT_COUNT
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 37
+    field_name: PRT_COUNT - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C6E2FF
+    remarks_merged: false
+  - byte_no: 38
+    field_name: PRI_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 39
+    field_name: PRI_WIDTH_US
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 40
+    field_name: PRI_WIDTH_US
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 41
+    field_name: PRI_WIDTH_US - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 42
+    field_name: PRT_WIDTH_US - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9E4DE
+    remarks_merged: false
+  - byte_no: 43
+    field_name: PRT_WIDTH_US - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: C9E4DE
+    remarks_merged: false
+  - byte_no: 44-89
+    field_name: Reserved
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0x06 (SOB_INTERNAL_GEN)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x06'
+    remarks: Selects SOB_INTERNAL_GEN. No DMA triggered; configures the SOB internal generator using the
+      width below.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34
+    field_name: SOB_WIDTH - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: F9CB9C
+    remarks_merged: false
+  - byte_no: 35
+    field_name: SOB_WIDTH - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: F9CB9C
+    remarks_merged: false
+  - byte_no: 36-89
+    field_name: Reserved
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0x07 (PPS_INTERNAL_GEN)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x07'
+    remarks: Selects PPS_INTERNAL_GEN. No DMA triggered; configures the PPS internal generator using the
+      width below.
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34
+    field_name: PPS_WIDTH - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: FFE5B4
+    remarks_merged: false
+  - byte_no: 35
+    field_name: PPS_WIDTH - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: ''
+    fill_color: FFE5B4
+    remarks_merged: false
+  - byte_no: 36-89
+    field_name: Reserved
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false
+- name: TX PACKET (RC -> QCC) - QCC_COMMAND = 0xFF (REMOTE_PROGRAMMING)
+  kind: bitfield
+  columns:
+  - byte_no
+  - field_name
+  - bits
+  - value_hex
+  - remarks
+  rows:
+  - byte_no: 1
+    field_name: Destination ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Source ID when it builds its response.
+    fill_color: E1D5E7
+    remarks_merged: false
+  - byte_no: 2
+    field_name: Source ID
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). QCC will swap this into Destination ID when it builds its response.
+    fill_color: FCE4D6
+    remarks_merged: false
+  - byte_no: 3
+    field_name: Packet Size - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 4
+    field_name: Packet Size - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Total packet size = 2970 bytes (90-byte header + 2880-byte QTRM data block). Same fixed value
+      in both the command and the response - QCC does not compute a different size, it writes the same
+      constant.
+    fill_color: F8CBAD
+    remarks_merged: false
+  - byte_no: 5
+    field_name: Echo Byte
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC may send any value; QCC no longer interprets this byte and echoes it back unchanged in
+      the response (byte 5).
+    fill_color: FFE699
+    remarks_merged: false
+  - byte_no: 6
+    field_name: Command/Acknowledgement
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0x00'
+    remarks: RC fills 0x00, indicating this packet is a command sent by RC to QCC.
+    fill_color: C9DAF8
+    remarks_merged: false
+  - byte_no: 7
+    field_name: Message Number - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 8
+    field_name: Message Number
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 9
+    field_name: Message Number
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 10
+    field_name: Message Number - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Counter of messages sent by RC to QCC, incremented per message.
+    fill_color: A9C4EB
+    remarks_merged: false
+  - byte_no: 11
+    field_name: DATE
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-31 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-31.
+    fill_color: D5A6BD
+    remarks_merged: false
+  - byte_no: 12
+    field_name: MONTH
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 01-12 (dec)
+    remarks: Filled by RC. Decimal value (not hex), 01-12.
+    fill_color: A9CCE3
+    remarks_merged: false
+  - byte_no: 13
+    field_name: YEAR - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 14
+    field_name: YEAR - Higher Order Byte
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: XX (dec)
+    remarks: Filled by RC. Current year, decimal (not hex). Lower Order Byte and Higher Order Byte combine
+      per byte order (little-endian) to form the full decimal year value.
+    fill_color: A3E4D7
+    remarks_merged: false
+  - byte_no: 15
+    field_name: Time of the day - Lower Order Byte
+    bits:
+    - b07
+    - b06
+    - b05
+    - b04
+    - b03
+    - b02
+    - b01
+    - b00
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 16
+    field_name: Time of the day
+    bits:
+    - b15
+    - b14
+    - b13
+    - b12
+    - b11
+    - b10
+    - b09
+    - b08
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 17
+    field_name: Time of the day
+    bits:
+    - b23
+    - b22
+    - b21
+    - b20
+    - b19
+    - b18
+    - b17
+    - b16
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 18
+    field_name: Time of the day - Higher Order Byte
+    bits:
+    - b31
+    - b30
+    - b29
+    - b28
+    - b27
+    - b26
+    - b25
+    - b24
+    value_hex: 0xXX
+    remarks: Filled by RC (GUI). Exact format/units (e.g. ms-since-midnight vs packed HHMMSS) still TBD.
+    fill_color: D2B4DE
+    remarks_merged: false
+  - byte_no: 19
+    field_name: Reserved-0
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 20
+    field_name: Reserved-1
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 21
+    field_name: Reserved-2
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 22
+    field_name: Reserved-3
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 23
+    field_name: Reserved-4
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 24
+    field_name: Reserved-5
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 25
+    field_name: Reserved-6
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 26
+    field_name: Reserved-7
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 27
+    field_name: Reserved-8
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 28
+    field_name: Reserved-9
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 29
+    field_name: Reserved-10
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 30
+    field_name: Reserved-11
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 31
+    field_name: Reserved-12
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 32
+    field_name: Reserved-13
+    bits:
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    - '0'
+    value_hex: '0x00'
+    remarks: Reserved Byte (previously a standalone checksum - removed; single CRC-8 at byte 90 now covers
+      the whole header)
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 33
+    field_name: QCC_COMMAND
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: '0xFF'
+    remarks: Selects REMOTE_PROGRAMMING. No DMA triggered. TBD - remote programming payload structure
+      to be defined separately (likely different framing than the 56-byte MESSAGE_BODY allows).
+    fill_color: B6D7A8
+    remarks_merged: false
+  - byte_no: 34-89
+    field_name: MESSAGE_BODY
+    bits:
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    - '-'
+    value_hex: '0x00'
+    remarks: ''
+    fill_color: F2F2F2
+    remarks_merged: false
+  - byte_no: 90
+    field_name: Checksum
+    bits:
+    - b7
+    - b6
+    - b5
+    - b4
+    - b3
+    - b2
+    - b1
+    - b0
+    value_hex: 0xXX
+    remarks: CRC-8/CCITT over bytes 1-89 (poly 0x07, init 0x00, no reflection, xorout 0x00)
+    fill_color: FFF2CC
+    remarks_merged: false

@@ -1,19 +1,23 @@
 """
 timing_tab.py
 
-"Timing Generation" - the Mode 1/2 (Internal/External Loopback) SOB/PRT/PPS
-sub-commands from QCC_90Byte_Header_BitTable.docx's "TX PACKET (RC -> QCC) -
-MODE 1 / 2" tables. Unlike every other command tab (which targets individual
-QTRMs via the 2880-byte QTRM data block), these three commands live entirely
-in the 90-byte header's Message Body (byte 34 = COMMAND_TYPE selecting
-SOB/PRT/PPS, bytes 35-89 = that command's fields) - the QTRM data block is
-unused, per build_header_only_frame in packet.py.
+"Timing Generation" - the PRT_BYPASS/PRT_INTERNAL_GEN, SOB_BYPASS/
+SOB_INTERNAL_GEN, and PPS_INTERNAL_GEN commands from
+docs/idd/packet_spec.yaml (redesigned 2026-07-09: each is now its own flat
+QCC_COMMAND value rather than a Mode 1/2 Loopback sub-command). Unlike
+every other command tab (which targets individual QTRMs via the 2880-byte
+QTRM data block), these commands live entirely in the 90-byte header's
+Message Body (bytes 34-89 = that command's fields, no in-body selector
+byte anymore - qcc_command itself picks the command) - the QTRM data block
+is unused, per build_header_only_frame in packet.py.
 
 Page is split into three vertical partitions side by side (SOB | PRT |
 PPS), one per timing signal, each with its own settings and its own
-dedicated Send button - SOB and PRT can run in either Internal or External
-Loopback (a segmented control per section); PPS is External Loopback only,
-per the doc, so it has no such switch. main_window.py's single global
+dedicated Send button - SOB and PRT can run as either Internal Gen or
+Bypass (a segmented control per section, sending SOB_INTERNAL_GEN/
+SOB_BYPASS or PRT_INTERNAL_GEN/PRT_BYPASS respectively); PPS only has an
+Internal Gen command in the redesigned IDD (no PPS_BYPASS - see CLAUDE.md
+open issues), so it has no such switch. main_window.py's single global
 HeaderPanel sidebar shows whichever command's response arrived most
 recently, same as every other tab.
 """
@@ -155,7 +159,7 @@ class TimingTab(QWidget):
     def _build_sob_section(self):
         box, form = _section_box("SOB (Start of Burst)")
 
-        self.sob_loopback_switch = SegmentedControl("Internal Loopback", "External Loopback")
+        self.sob_loopback_switch = SegmentedControl("Internal Gen", "Bypass")
         form.addWidget(self.sob_loopback_switch)
 
         grid = QGridLayout()
@@ -196,7 +200,7 @@ class TimingTab(QWidget):
     def _build_prt_section(self):
         box, form = _section_box("PRT (Pulse Repetition Train)")
 
-        self.prt_loopback_switch = SegmentedControl("Internal Loopback", "External Loopback")
+        self.prt_loopback_switch = SegmentedControl("Internal Gen", "Bypass")
         form.addWidget(self.prt_loopback_switch)
 
         grid = QGridLayout()
@@ -238,7 +242,7 @@ class TimingTab(QWidget):
     def _build_pps_section(self):
         box, form = _section_box("PPS (Pulse Per Second)")
 
-        note = QLabel("External Loopback only, per the IDD")
+        note = QLabel("Internal Gen only - no Bypass command in the redesigned IDD")
         note.setStyleSheet(f"color: {_MUTED}; font-size: 11px; font-style: italic; background: transparent;")
         form.addWidget(note)
 

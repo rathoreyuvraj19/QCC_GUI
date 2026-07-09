@@ -26,7 +26,7 @@ from core.packet import (
     build_status_frame, parse_status_frame, STATUS_TYPE_DIAGNOSTIC,
     build_dwell_frame, build_memory_write_frame,
     QCCHeaderRx, QCCHeaderTx, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
-    build_sob_message_body, build_prt_message_body, build_pps_message_body,
+    build_sob_body, build_prt_body, build_pps_body,
     build_header_only_frame,
 )
 from core.rc_settings import (
@@ -663,6 +663,13 @@ class MainWindow(QMainWindow):
             self._qcc_ip_overridden_for_responder = True
             self.qcc_ip_edit.setText("127.0.0.1")
 
+        # Auto-connect to the responder we just stood up, so the user
+        # doesn't have to separately click Connect after opening it - if
+        # already connected, leave that connection alone (it may be to a
+        # different, deliberately-chosen target).
+        if self.worker is None:
+            self._on_connect_clicked()
+
         self._responder_window.show()
         self._responder_window.raise_()
         self._responder_window.activateWindow()
@@ -1078,8 +1085,8 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        command_id = QCCHeaderRx.MODE_EXTERNAL_LOOPBACK if external_loopback else QCCHeaderRx.MODE_INTERNAL_LOOPBACK
-        header = rc_settings.build_header(command_id, message_body=build_sob_message_body(sob_width_us))
+        command_id = QCCHeaderRx.QCC_COMMAND_SOB_BYPASS if external_loopback else QCCHeaderRx.QCC_COMMAND_SOB_INTERNAL_GEN
+        header = rc_settings.build_header(command_id, message_body=build_sob_body(sob_width_us))
         frame = build_header_only_frame(header)
 
         self._awaiting_kind = "timing_sob"
@@ -1094,8 +1101,8 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        command_id = QCCHeaderRx.MODE_EXTERNAL_LOOPBACK if external_loopback else QCCHeaderRx.MODE_INTERNAL_LOOPBACK
-        message_body = build_prt_message_body(prt_count, pri_width_us, prt_width_us)
+        command_id = QCCHeaderRx.QCC_COMMAND_PRT_BYPASS if external_loopback else QCCHeaderRx.QCC_COMMAND_PRT_INTERNAL_GEN
+        message_body = build_prt_body(prt_count, pri_width_us, prt_width_us)
         header = rc_settings.build_header(command_id, message_body=message_body)
         frame = build_header_only_frame(header)
 
@@ -1111,9 +1118,11 @@ class MainWindow(QMainWindow):
         if not self._check_not_busy():
             return
 
-        # PPS is External Loopback only, per the IDD - no loopback choice here.
+        # PPS_INTERNAL_GEN is the only PPS command in the redesigned IDD -
+        # no Bypass counterpart exists (ASSUMPTION: the old spec's "PPS is
+        # External Loopback only" doesn't carry over cleanly; see CLAUDE.md).
         header = rc_settings.build_header(
-            QCCHeaderRx.MODE_EXTERNAL_LOOPBACK, message_body=build_pps_message_body(pps_width_us),
+            QCCHeaderRx.QCC_COMMAND_PPS_INTERNAL_GEN, message_body=build_pps_body(pps_width_us),
         )
         frame = build_header_only_frame(header)
 

@@ -27,18 +27,19 @@ Run directly:  python status_responder_app.py
 """
 
 import socket
+import struct
 import sys
 
 from PySide6.QtCore import QRegularExpression, Qt, QThread, Signal
-from PySide6.QtGui import QRegularExpressionValidator
+from PySide6.QtGui import QGuiApplication, QRegularExpressionValidator
 from PySide6.QtWidgets import (
-    QApplication, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
-    QMainWindow, QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QMainWindow, QPlainTextEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
 from core.packet import (
     QTRMSlot, QCCHeaderTx, QTRM_SLOT_SIZE, NUM_QTRM, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
-    TOTAL_PACKET_SIZE, CMD_RESERVED, CMD_SOFT_RESET,
+    TOTAL_PACKET_SIZE, CMD_RESERVED, CMD_SOFT_RESET, crc8,
     STATUS_TYPE_ACK, STATUS_TYPE_LINK, STATUS_TYPE_HEALTH,
     STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
     DIAGNOSTIC_TYPE_DETAILED_HEALTH, LINK_SENTINEL,
@@ -213,14 +214,14 @@ _mock_header = QCCHeaderTx()
 _mock_header.destination_id = 0x01
 _mock_header.source_id = 0x02
 _mock_header.packet_size = TOTAL_PACKET_SIZE
-_mock_header.command_id = QCCHeaderTx.MODE_NORMAL
+_mock_header.echo_byte = 0
 _mock_header.command_ack = 1
 _mock_header.message_number = 1
 _mock_header.date = 5
 _mock_header.month = 7
 _mock_header.year = 2026
 _mock_header.time_of_day = 0
-_mock_header.command_id_repeat = _mock_header.command_id
+_mock_header.qcc_command = QCCHeaderTx.QCC_COMMAND_DATA_DISTRIBUTION
 _mock_header.fpga_temperature = 42
 _mock_header.board_temperature = 350
 _mock_header.board_humidity = 550
@@ -242,19 +243,125 @@ _MOCK_FIXED_HEADER = _mock_header_bytes[:FIXED_HEADER_SIZE]
 _MOCK_QCC_HEADER = _mock_header_bytes[FIXED_HEADER_SIZE:]
 
 
-def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qcc_header: bytes = None):
+# Per-QTRM fault modes, injected on top of whatever reply would normally be
+# built - lets the main GUI's error-handling paths (dropped-reply timeouts,
+# checksum-reject logic, degraded-health display) be exercised without real
+# faulty hardware. Not part of the IDD itself; these are test-harness-only
+# corruptions layered on an otherwise IDD-correct reply.
+FAULT_NONE = "none"
+FAULT_NO_REPLY = "no_reply"
+FAULT_BAD_CHECKSUM = "bad_checksum"
+FAULT_FORCE_ERROR = "force_error"
+
+_FAULT_MODE_NAMES = {
+    FAULT_NO_REPLY: "No Reply",
+    FAULT_BAD_CHECKSUM: "Bad Checksum",
+    FAULT_FORCE_ERROR: "Forced Error/Fault Flags",
+}
+
+
+def parse_qtrm_index_spec(text: str) -> set:
+    """
+    "3,7-9, 12" -> {3, 7, 8, 9, 12}. Blank/unparseable tokens are ignored
+    (this only feeds a best-effort test fixture, not a protocol field), out-
+    of-range indices are silently dropped by the caller since they'd never
+    match a real slot anyway.
+    """
+    indices = set()
+    for token in text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        if "-" in token:
+            lo, _, hi = token.partition("-")
+            try:
+                lo, hi = int(lo), int(hi)
+            except ValueError:
+                continue
+            indices.update(range(min(lo, hi), max(lo, hi) + 1))
+        else:
+            try:
+                indices.add(int(token))
+            except ValueError:
+                continue
+    return indices
+
+
+def _apply_force_error(status_type: int, reply: bytes) -> bytes:
+    """
+    Overwrite a reply already built for status_type with worst-case values,
+    then re-stamp its checksum so it still validates as a (badly-behaved)
+    QTRM rather than a corrupt one. Only HEALTH/ERR_LOG have a documented
+    "fault" shape to force; other status types have no fault concept in the
+    IDD, so they're left as their normal (already-valid) reply.
+    """
+    body = bytearray(reply)
+    if status_type == STATUS_TYPE_HEALTH:
+        body[4:9] = bytes([255, 255, 255, 0, 0])  # DC/current/temp pegged, RF dead
+    elif status_type == STATUS_TYPE_ERR_LOG:
+        body[4] = 0xFF  # every TRM shutdown flag set
+        body[5] = 1     # Header Error
+        body[6] = 1     # Footer/CRC Error
+        body[7] = 1     # Timeout Error
+        body[8] = 0xFF  # PRT duty/width violation counts maxed
+    else:
+        return reply
+    body[9] = _checksum(bytes(body[:9]))
+    return bytes(body)
+
+
+# Per QCCHeaderRx/QCCHeaderTx's docstrings (docs/idd/packet_spec.yaml), these
+# first 33 bytes of a response (Destination/Source ID swapped, Packet Size
+# fixed, Echo Byte/Message Number/Date/Month/Year/Time Of Day/Reserved0 all
+# echoed unchanged, Command ACK forced to 0x01, QCC_COMMAND echoed) are
+# entirely determined by the command that prompted them - a real QCC has no
+# freedom here. Only bytes 33-89 (the telemetry fields + checksum) are
+# actually up to the QCC to fill in, which is what the editable byte grids
+# are for.
+ECHOED_PREFIX_SIZE = 33
+
+
+def _build_echoed_header_prefix(query_frame: bytes) -> bytes:
+    q = query_frame[:ECHOED_PREFIX_SIZE]
+    out = bytearray(q)
+    out[0], out[1] = q[1], q[0]                      # Destination/Source ID swap
+    out[2:4] = struct.pack("<H", TOTAL_PACKET_SIZE)   # Packet Size - fixed
+    out[5] = 1                                        # Command ACK - 0x01 for a response
+    # bytes 4 (Echo Byte), 6-9 (Message Number), 10-31 (Date/Month/Year/Time
+    # Of Day/Reserved0), 32 (QCC_COMMAND) are already correct via the q copy.
+    return bytes(out)
+
+
+def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qcc_header: bytes = None,
+                               fault_indices: set = None, fault_mode: str = FAULT_NONE,
+                               auto_echo_header: bool = True):
     """
     Returns (response_frame, [(qtrm_index, status_type_name), ...] for every
     QTRM that got a reply). fixed_header/qcc_header default to the fixed
     test-pattern bytes below if not given - pass explicit bytes (e.g. from
     the window's editable hex fields) to send a different 90-byte header.
+    fault_indices/fault_mode apply one of the FAULT_* corruptions above to
+    just those QTRM indices' replies - every other QTRM behaves normally.
+
+    auto_echo_header (default True, matches real QCC behavior): overwrites
+    the response header's first 33 bytes with values derived from the query
+    per the IDD (see _build_echoed_header_prefix) and re-stamps the
+    checksum, rather than sending whatever's in the editable grids for that
+    span - those 33 bytes aren't actually free-form on real hardware. Set
+    False to send the grids' bytes completely as-is (e.g. to deliberately
+    test the main GUI's handling of a QCC that gets these wrong).
     """
     if fixed_header is None:
         fixed_header = _MOCK_FIXED_HEADER
     if qcc_header is None:
         qcc_header = _MOCK_QCC_HEADER
+    if fault_indices is None:
+        fault_indices = ()
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     out = bytearray(fixed_header + qcc_header)
+    if auto_echo_header:
+        out[:ECHOED_PREFIX_SIZE] = _build_echoed_header_prefix(query_frame)
+        out[base - 1] = crc8(bytes(out[: base - 1]))
     replied = []
     for i in range(NUM_QTRM):
         slot = query_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE]
@@ -263,9 +370,23 @@ def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qc
         status_type = slot[3] & 0x0F if valid_header else None
         no_reply = command_type is None or command_type in _NO_REPLY_COMMAND_TYPES
         builder = _REPLY_BUILDERS.get(status_type) if not no_reply else None
+
+        faulty = i in fault_indices and fault_mode != FAULT_NONE
+        if faulty and fault_mode == FAULT_NO_REPLY:
+            out.extend(bytes(QTRM_SLOT_SIZE))
+            continue
+
         if builder is not None:
-            out.extend(builder(i, slot))
-            replied.append((i, _STATUS_TYPE_NAMES.get(status_type, str(status_type))))
+            reply = builder(i, slot)
+            status_name = _STATUS_TYPE_NAMES.get(status_type, str(status_type))
+            if faulty and fault_mode == FAULT_BAD_CHECKSUM:
+                reply = bytes(reply[:-1]) + bytes([reply[-1] ^ 0xFF])
+                status_name += " [bad checksum]"
+            elif faulty and fault_mode == FAULT_FORCE_ERROR:
+                reply = _apply_force_error(status_type, reply)
+                status_name += " [forced error]"
+            out.extend(reply)
+            replied.append((i, status_name))
         else:
             out.extend(bytes(QTRM_SLOT_SIZE))
     return bytes(out), replied
@@ -276,11 +397,16 @@ class ResponderWorker(QThread):
     error = Signal(str)
     status = Signal(str)
 
-    def __init__(self, local_port: int, fixed_header: bytes = None, qcc_header: bytes = None, parent=None):
+    def __init__(self, local_port: int, fixed_header: bytes = None, qcc_header: bytes = None,
+                 fault_indices: set = None, fault_mode: str = FAULT_NONE, auto_echo_header: bool = True,
+                 parent=None):
         super().__init__(parent)
         self.local_port = local_port
         self.fixed_header = fixed_header if fixed_header is not None else _MOCK_FIXED_HEADER
         self.qcc_header = qcc_header if qcc_header is not None else _MOCK_QCC_HEADER
+        self.fault_indices = fault_indices if fault_indices is not None else set()
+        self.fault_mode = fault_mode
+        self.auto_echo_header = auto_echo_header
         self._sock = None
         self._running = False
 
@@ -311,7 +437,10 @@ class ResponderWorker(QThread):
                 self.error.emit(f"Received {len(data)} bytes from {addr}, expected {TOTAL_PACKET_SIZE} - dropped")
                 continue
 
-            response, replied = build_mock_response_frame(data, self.fixed_header, self.qcc_header)
+            response, replied = build_mock_response_frame(
+                data, self.fixed_header, self.qcc_header, self.fault_indices, self.fault_mode,
+                self.auto_echo_header,
+            )
             try:
                 self._sock.sendto(response, addr)
             except OSError as e:
@@ -369,13 +498,29 @@ class ByteGrid(QWidget):
             cell = QLineEdit("00")
             cell.setMaxLength(2)
             cell.setFixedWidth(30)
+            # Fixed height too - the global QLineEdit rule's normal 8px/12px
+            # padding was what gave fields their vertical size; overriding
+            # padding down to fit a 30px-wide cell shrank the computed
+            # sizeHint enough to clip glyphs top/bottom, leaving only their
+            # middle strokes visible (looked like unreadable dashes).
+            cell.setFixedHeight(26)
             cell.setAlignment(Qt.AlignCenter)
             cell.setValidator(self._hex_validator)
             cell.setToolTip(f"Byte {label_index}")
             # The app's global QLineEdit style pads 8px/12px, meant for
             # normal-width fields - on a 30px-wide cell that leaves almost
             # no room for the digits themselves, making them invisible.
-            cell.setStyleSheet("padding: 2px;")
+            # :disabled is set explicitly too - the global stylesheet has no
+            # rule for it, so Qt's default near-black-on-dark disabled text
+            # was unreadable against this app's dark cards.
+            # border-radius overridden too - the global QLineEdit rule's
+            # 12px radius (meant for normal-width fields) eats most of a
+            # 30px-wide cell's corners, squeezing the two digits down to an
+            # unreadable sliver.
+            cell.setStyleSheet(
+                "QLineEdit { padding: 2px; border-radius: 4px; }"
+                "QLineEdit:disabled { color: rgba(238, 238, 238, 0.55); background-color: rgba(255, 255, 255, 0.05); }"
+            )
             cell.textChanged.connect(self.bytes_changed)
 
             # Index and cell side by side (not stacked) - grouped as one
@@ -408,6 +553,11 @@ class ByteGrid(QWidget):
             cell.setText(f"{b:02X}" if self._hex_mode else str(b))
             cell.blockSignals(False)
 
+    def set_cells_enabled(self, count: int, enabled: bool):
+        """Enable/disable the first `count` cells - used to grey out the IDD-mandated echoed prefix when auto-echo is on."""
+        for cell in self._cells[:count]:
+            cell.setEnabled(enabled)
+
     def set_hex_mode(self, hex_mode: bool):
         if hex_mode == self._hex_mode:
             return
@@ -428,18 +578,74 @@ class StatusResponderWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("QCC Status Responder - Mock QTRM")
-        self.resize(900, 600)
+        # Cap to the actual available screen so Qt never requests a window
+        # minimum larger than fits (see main_window.py's identical fix for
+        # the "QWindowsWindow::setGeometry: Unable to set geometry" spam).
+        self.setMinimumSize(600, 400)
+        screen = QGuiApplication.primaryScreen()
+        avail = screen.availableGeometry() if screen else None
+        width = 900 if avail is None else min(900, avail.width() - 40)
+        height = 600 if avail is None else min(600, avail.height() - 60)
+        self.resize(width, height)
 
         self.worker: ResponderWorker | None = None
         self._frame_count = 0
 
+        # The byte grid (90+ small fixed-size cells) doesn't compress - on a
+        # window shorter than its natural height it used to get squeezed by
+        # the plain QVBoxLayout instead, clipping/overlapping every group
+        # below the Listener. Scrolling the whole body lets the window
+        # shrink freely while every group keeps its natural, readable size.
         central = QWidget()
-        self.setCentralWidget(central)
         root = QVBoxLayout(central)
 
         root.addWidget(self._build_listen_group())
+        root.addWidget(self._build_fault_injection_group())
         root.addWidget(self._build_response_header_group())
         root.addWidget(self._build_log_group(), 1)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(central)
+        self.setCentralWidget(scroll)
+
+    def _build_fault_injection_group(self):
+        box, outer = titled_group_box("Fault Injection (test-harness only, not part of the IDD)")
+        row = QHBoxLayout()
+        outer.addLayout(row)
+
+        row.addWidget(QLabel("QTRM indices:"))
+        self.fault_indices_edit = QLineEdit()
+        self.fault_indices_edit.setPlaceholderText("e.g. 3,7-9,12")
+        self.fault_indices_edit.setFixedWidth(160)
+        self.fault_indices_edit.textChanged.connect(self._on_fault_settings_changed)
+        row.addWidget(self.fault_indices_edit)
+
+        row.addWidget(QLabel("Mode:"))
+        self.fault_mode_combo = QComboBox()
+        self.fault_mode_combo.addItem("None", FAULT_NONE)
+        self.fault_mode_combo.addItem(_FAULT_MODE_NAMES[FAULT_NO_REPLY], FAULT_NO_REPLY)
+        self.fault_mode_combo.addItem(_FAULT_MODE_NAMES[FAULT_BAD_CHECKSUM], FAULT_BAD_CHECKSUM)
+        self.fault_mode_combo.addItem(_FAULT_MODE_NAMES[FAULT_FORCE_ERROR], FAULT_FORCE_ERROR)
+        self.fault_mode_combo.currentIndexChanged.connect(self._on_fault_settings_changed)
+        row.addWidget(self.fault_mode_combo)
+        row.addStretch(1)
+
+        return box
+
+    def _current_fault_indices(self) -> set:
+        return parse_qtrm_index_spec(self.fault_indices_edit.text())
+
+    def _current_fault_mode(self) -> str:
+        return self.fault_mode_combo.currentData()
+
+    def _on_fault_settings_changed(self, *_args):
+        # Push edits straight into the already-running worker (if any), same
+        # pattern as _on_header_bytes_changed - takes effect on the very
+        # next reply instead of only at the next Start.
+        if self.worker is not None:
+            self.worker.fault_indices = self._current_fault_indices()
+            self.worker.fault_mode = self._current_fault_mode()
 
     def _build_response_header_group(self):
         box, layout = titled_group_box("Response Header (90 bytes) - edit any byte individually")
@@ -452,6 +658,14 @@ class StatusResponderWindow(QMainWindow):
         top_row.addWidget(self.byte_mode_switch)
         top_row.addStretch(1)
         layout.addLayout(top_row)
+
+        self.auto_echo_checkbox = QCheckBox(
+            f"Auto-echo first {ECHOED_PREFIX_SIZE} bytes from the query (per IDD) - "
+            "greyed cells below aren't actually free-form on real hardware"
+        )
+        self.auto_echo_checkbox.setChecked(True)
+        self.auto_echo_checkbox.toggled.connect(self._on_auto_echo_toggled)
+        layout.addWidget(self.auto_echo_checkbox)
 
         layout.addWidget(QLabel(f"Fixed Header ({FIXED_HEADER_SIZE} bytes):"))
         self.fixed_header_grid = ByteGrid(FIXED_HEADER_SIZE, start_index=1)
@@ -473,7 +687,21 @@ class StatusResponderWindow(QMainWindow):
         reset_row.addWidget(self.reset_header_btn)
         layout.addLayout(reset_row)
 
+        self._update_echoed_prefix_enabled()
+
         return box
+
+    def _update_echoed_prefix_enabled(self):
+        # Whole Fixed Header (32 bytes) + QCC_COMMAND (byte 33, the QCC
+        # Header grid's own byte 0) make up the IDD-mandated echoed prefix.
+        auto = self.auto_echo_checkbox.isChecked()
+        self.fixed_header_grid.set_cells_enabled(FIXED_HEADER_SIZE, not auto)
+        self.qcc_header_grid.set_cells_enabled(1, not auto)
+
+    def _on_auto_echo_toggled(self, *_args):
+        self._update_echoed_prefix_enabled()
+        if self.worker is not None:
+            self.worker.auto_echo_header = self.auto_echo_checkbox.isChecked()
 
     def _on_byte_mode_toggled(self, is_hex: bool):
         self.fixed_header_grid.set_hex_mode(is_hex)
@@ -552,7 +780,11 @@ class StatusResponderWindow(QMainWindow):
         qcc_header = self.qcc_header_grid.get_bytes()
 
         port = self.port_spin.value()
-        self.worker = ResponderWorker(local_port=port, fixed_header=fixed_header, qcc_header=qcc_header)
+        self.worker = ResponderWorker(
+            local_port=port, fixed_header=fixed_header, qcc_header=qcc_header,
+            fault_indices=self._current_fault_indices(), fault_mode=self._current_fault_mode(),
+            auto_echo_header=self.auto_echo_checkbox.isChecked(),
+        )
         self.worker.frame_processed.connect(self._on_frame_processed)
         self.worker.error.connect(self._on_error)
         self.worker.status.connect(self.status_label.setText)

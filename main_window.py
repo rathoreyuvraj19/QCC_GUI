@@ -749,17 +749,27 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Data logging", f"Could not start logging:\n{err}")
             return
         self._log_action.setText("Stop Data Logging")
-        self._on_log_stats_changed(0, 0, 0, 0)
+        self._on_log_stats_changed(0, 0, 0, 0, 0)
         self.logging_indicator_label.setVisible(True)
+        QMessageBox.information(
+            self, "Data logging started",
+            f"Logging to:\n{path}\n\n"
+            "Note: per-QTRM OK/NOT_OK analysis is supported for Link Test "
+            "only - run the burn test with Link Test frames. Other commands "
+            "are still logged (timestamps, delay, result, raw hex) but "
+            "their per-QTRM columns stay empty.",
+        )
 
     def _set_logging_ui_stopped(self):
         self._log_action.setText("Start Data Logging (CSV)…")
         self.logging_indicator_label.setVisible(False)
 
-    def _on_log_stats_changed(self, rows: int, ok: int, missing: int, errors: int):
+    def _on_log_stats_changed(self, rows: int, ok: int, missing: int,
+                              errors: int, qtrm_fails: int):
         name = os.path.basename(self._frame_logger.path or "")
         self.logging_indicator_label.setText(
-            f"⏺ Logging to {name} - {rows} pairs | {ok} OK | {missing} missing | {errors} errors"
+            f"⏺ Logging to {name} - {rows} pairs | {ok} OK | {missing} missing"
+            f" | {errors} errors | {qtrm_fails} QTRM fails"
         )
 
     def _on_logger_error(self, msg: str):

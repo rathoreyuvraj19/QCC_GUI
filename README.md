@@ -31,13 +31,18 @@ Skeleton PySide6 desktop app for building, sending, and receiving the
   tcpdump capture: reads ~0.15-0.25 ms above the kernel wire timestamps,
   a stable one-sided offset, so it tracks Wireshark), command name, a result
   classification (OK / TIMEOUT / CRC_FAIL / MSG_NUM_MISMATCH /
-  UNSOLICITED), and both raw frames as hex. Rows are flushed to disk as
-  they happen so a multi-day run survives a crash; a red indicator in the
-  connection bar shows the live pair/missing counts while active.
+  UNSOLICITED), and both raw frames as hex. Link Test rows additionally
+  get per-QTRM OK/NOT_OK columns (qtrm_00..qtrm_95, validated the same way
+  as the Link Test tab's LEDs) plus qtrm_ok_count/qtrm_not_ok_list
+  summaries - Link Test is the intended burn-test command; other commands
+  log with those columns empty. Rows are flushed to disk as they happen so
+  a multi-day run survives a crash; a red indicator in the connection bar
+  shows the live pair/missing/QTRM-fail counts while active.
 - `apps/plot_qcc_log.py` - offline analysis for those CSVs
   (`python apps/plot_qcc_log.py <log.csv>`, needs `pip install matplotlib`):
-  prints loss %/delay percentiles/msg_number gaps and plots delay-vs-time
-  with timeouts marked, rolling loss %, and the delay histogram.
+  prints loss %/delay percentiles/msg_number gaps/per-QTRM failure ranking
+  and plots delay-vs-time with timeouts marked, rolling loss %, QTRM
+  NOT_OK events vs time, the delay histogram, and NOT_OK count per QTRM.
 - `qtrm_model.py` - `QAbstractTableModel` backing the 96-row QTRM grid
   (QTRM ID is positional - row index + 1 - not a field inside the 30 bytes).
 - `main_window.py` - connection bar, QCC MODE/MSG_ID controls, last-response

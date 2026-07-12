@@ -31,7 +31,9 @@ Skeleton PySide6 desktop app for building, sending, and receiving the
   tcpdump capture: reads ~0.15-0.25 ms above the kernel wire timestamps,
   a stable one-sided offset, so it tracks Wireshark), command name, a result
   classification (OK / TIMEOUT / CRC_FAIL / MSG_NUM_MISMATCH /
-  UNSOLICITED), and both raw frames as hex. Link Test rows additionally
+  UNSOLICITED), and the raw response frame as hex (the query frame is not
+  stored - burn-test Link Test queries are identical every send). Link
+  Test rows additionally
   get per-QTRM OK/NOT_OK columns (qtrm_00..qtrm_95, validated the same way
   as the Link Test tab's LEDs) plus qtrm_ok_count/qtrm_not_ok_list
   summaries - Link Test is the intended burn-test command; other commands

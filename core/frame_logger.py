@@ -51,7 +51,7 @@ _HEADER_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE  # 90
 # queried" set falls out for free (all 96 for Send Link Test, one for an
 # individual-LED click). Per-QTRM OK/NOT_OK analysis is only defined for
 # Link Test frames; every other command's rows leave the qtrm_* columns
-# empty (the raw hex still captures everything for offline re-analysis).
+# empty (the response hex still captures the frame for offline re-analysis).
 _LINK_QUERY_SLOT = build_link_query_slot()
 
 QTRM_OK = "OK"
@@ -77,11 +77,14 @@ RESULT_UNSOLICITED = "UNSOLICITED"
 # QTRM wasn't queried, the row isn't a Link Test, or the whole frame timed
 # out (a TIMEOUT row means NO QTRM answered - count those separately rather
 # than as 96 individual failures).
+# No tx_raw_hex column: the query frame is not stored at all (burn-test
+# Link Test queries are byte-identical every send, ~6 KB/row of dead
+# weight) - tx_timestamp/msg_number/qcc_command capture the send side.
 CSV_COLUMNS = [
     "msg_number", "tx_timestamp", "rx_timestamp", "delay_us",
     "qcc_command", "result", "qtrm_ok_count", "qtrm_not_ok_list",
     *[f"qtrm_{i:02d}" for i in range(NUM_QTRM)],
-    "tx_raw_hex", "rx_raw_hex",
+    "rx_raw_hex",
 ]
 
 _EMPTY_QTRM_COLS = [""] * (2 + NUM_QTRM)
@@ -185,7 +188,6 @@ class FrameLogger(QObject):
             "msg_number": header.message_number,
             "tx_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
             "qcc_command": command_name(header.qcc_command),
-            "tx_raw_hex": raw.hex(),
             # Empty tuple = not a Link Test - the row's qtrm_* columns stay
             # blank. Non-empty = which QTRMs this query addressed, so the
             # response can be marked OK/NOT_OK per queried QTRM.
@@ -209,7 +211,7 @@ class FrameLogger(QObject):
             self._write_row([
                 header.message_number, "", rx_timestamp, delay,
                 command_name(header.qcc_command), RESULT_UNSOLICITED,
-                *_EMPTY_QTRM_COLS, "", raw.hex(),
+                *_EMPTY_QTRM_COLS, raw.hex(),
             ])
             self.errors += 1
             self._emit_stats()
@@ -230,7 +232,7 @@ class FrameLogger(QObject):
             pending["msg_number"], pending["tx_timestamp"], rx_timestamp,
             delay, pending["qcc_command"], result,
             *self._qtrm_columns(pending["link_queried"], raw),
-            pending["tx_raw_hex"], raw.hex(),
+            raw.hex(),
         ])
         self._emit_stats()
 
@@ -270,8 +272,7 @@ class FrameLogger(QObject):
         self.missing += 1
         self._write_row([
             pending["msg_number"], pending["tx_timestamp"], "", "",
-            pending["qcc_command"], result, *_EMPTY_QTRM_COLS,
-            pending["tx_raw_hex"], "",
+            pending["qcc_command"], result, *_EMPTY_QTRM_COLS, "",
         ])
 
     def _write_row(self, row):

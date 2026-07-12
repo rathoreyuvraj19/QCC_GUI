@@ -10,14 +10,16 @@ now - MSG_ID, MODE, and per-QTRM MSG_ID/Frequency ID are not implemented on
 the QCC/QTRM side yet.
 """
 
+import os
 import time
+from datetime import datetime
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel,
-    QGroupBox, QMessageBox, QTabWidget, QInputDialog,
+    QGroupBox, QMessageBox, QTabWidget, QInputDialog, QFileDialog,
 )
 
 from core.packet import (
@@ -36,6 +38,7 @@ from core.rc_settings import (
 )
 from core.command_style import send_button_style
 from connection_settings import connection_settings
+from core.frame_logger import FrameLogger
 from core.udp_worker import UdpWorker
 from ping_worker import PingWorker
 from widgets.header_panel import HeaderPanel
@@ -163,6 +166,14 @@ class MainWindow(QMainWindow):
         self._responder_window: StatusResponderWindow | None = None
         self._qcc_ip_before_responder: str | None = None
         self._qcc_ip_overridden_for_responder = False
+
+        # Burn-test data logger - streams every query/response pair to a
+        # CSV chosen at start time (see _on_log_action_triggered). Lives on
+        # the main window (not the worker) so it survives disconnect/
+        # reconnect cycles during a long run.
+        self._frame_logger = FrameLogger(self)
+        self._frame_logger.stats_changed.connect(self._on_log_stats_changed)
+        self._frame_logger.error.connect(self._on_logger_error)
 
         self._build_ui()
 
@@ -325,6 +336,17 @@ class MainWindow(QMainWindow):
         responder_action.triggered.connect(self._on_open_responder_clicked)
         tools_menu.addAction(responder_action)
 
+        tools_menu.addSeparator()
+
+        # One action that toggles: pick a CSV location and start streaming
+        # every query/response pair to it, or stop the run in progress.
+        # The visible while-logging state lives in the connection bar's
+        # indicator label (see _build_connection_group), not just here in
+        # a closed menu.
+        self._log_action = QAction("Start Data Logging (CSV)…", self)
+        self._log_action.triggered.connect(self._on_log_action_triggered)
+        tools_menu.addAction(self._log_action)
+
     def _on_tab_changed(self, index):
         self.status_tab.reset_to_idle()
         self.rx_cal_tab.reset_to_idle()
@@ -452,8 +474,22 @@ class MainWindow(QMainWindow):
             "border-radius: 8px; padding: 4px 10px; font-weight: 600;"
         )
         self.responder_warning_label.setVisible(False)
+
+        # Always-visible-while-active indicator that a burn-test log is
+        # being written (the Tools menu action that started it is hidden
+        # inside a closed menu) - lives on the same banner row as the
+        # responder warning, updated with live pair/missing counts by
+        # _on_log_stats_changed.
+        self.logging_indicator_label = QLabel("")
+        self.logging_indicator_label.setStyleSheet(
+            "color: #1f2328; background-color: rgb(240, 149, 149);"
+            "border-radius: 8px; padding: 4px 10px; font-weight: 600;"
+        )
+        self.logging_indicator_label.setVisible(False)
+
         warning_row = QHBoxLayout()
         warning_row.addWidget(self.responder_warning_label)
+        warning_row.addWidget(self.logging_indicator_label)
         warning_row.addStretch(1)
 
         # No side column competing for height anymore (the 3 window
@@ -595,6 +631,7 @@ class MainWindow(QMainWindow):
         QMessageBox.warning(self, "UDP Error", msg)
 
     def _on_frame_sent(self, raw: bytes):
+        self._frame_logger.log_tx(raw)  # no-op unless a log run is active
         self._last_sent_frame = raw
         if self._tx_test_window is not None:
             self._tx_test_window.show_frame(raw)
@@ -686,6 +723,50 @@ class MainWindow(QMainWindow):
             # only does so once this flag reads False.
             self._qcc_ip_overridden_for_responder = False
             self.qcc_ip_edit.setText(self._qcc_ip_before_responder or "")
+
+    # -- burn-test data logging --------------------------------------------
+
+    def _on_log_action_triggered(self):
+        if self._frame_logger.active:
+            self._frame_logger.stop()
+            self._set_logging_ui_stopped()
+            QMessageBox.information(
+                self, "Data logging stopped",
+                f"Log saved to:\n{self._frame_logger.path}",
+            )
+            return
+
+        default_name = datetime.now().strftime("qcc_log_%Y%m%d_%H%M%S.csv")
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Save data log as",
+            os.path.join(os.path.expanduser("~"), default_name),
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+        err = self._frame_logger.start(path)
+        if err:
+            QMessageBox.warning(self, "Data logging", f"Could not start logging:\n{err}")
+            return
+        self._log_action.setText("Stop Data Logging")
+        self._on_log_stats_changed(0, 0, 0, 0)
+        self.logging_indicator_label.setVisible(True)
+
+    def _set_logging_ui_stopped(self):
+        self._log_action.setText("Start Data Logging (CSV)…")
+        self.logging_indicator_label.setVisible(False)
+
+    def _on_log_stats_changed(self, rows: int, ok: int, missing: int, errors: int):
+        name = os.path.basename(self._frame_logger.path or "")
+        self.logging_indicator_label.setText(
+            f"⏺ Logging to {name} - {rows} pairs | {ok} OK | {missing} missing | {errors} errors"
+        )
+
+    def _on_logger_error(self, msg: str):
+        # The logger already stopped itself (write failure mid-run) - just
+        # reflect that in the UI and tell the user.
+        self._set_logging_ui_stopped()
+        QMessageBox.warning(self, "Data logging", msg)
 
     # -- response timing / timeout ----------------------------------------
 
@@ -1199,6 +1280,10 @@ class MainWindow(QMainWindow):
         self.remote_prog_ctrl.chunk_timeout_ms = ms
 
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
+        # Fed before elapsed_us's below -1.0 -> None normalization - the
+        # logger does its own "negative means unknown" handling and pairs
+        # the frame with the in-flight query by MESSAGE_NUMBER.
+        self._frame_logger.log_rx(raw, elapsed_us)  # no-op unless logging
         # elapsed_us comes straight from udp_worker.py, timestamped right
         # at the actual sendto()/recvfrom() calls inside the worker thread -
         # not measured here, so it excludes both GUI processing time (RX
@@ -1391,6 +1476,9 @@ class MainWindow(QMainWindow):
         # to update.
 
     def closeEvent(self, event):
+        # Flushes any in-flight query row and closes the CSV cleanly - rows
+        # are already on disk (flushed per-row), this just finalizes.
+        self._frame_logger.stop()
         if self.worker is not None:
             try:
                 self.worker.stop()

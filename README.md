@@ -24,6 +24,18 @@ Skeleton PySide6 desktop app for building, sending, and receiving the
   unit tested standalone.
 - `udp_worker.py` - background `QThread` that owns the UDP socket, so the
   GUI never blocks on send/recv.
+- `core/frame_logger.py` - burn-test data logger (Tools -> Start Data
+  Logging (CSV)… in the main window). Streams one CSV row per query with
+  its paired response side by side: MESSAGE_NUMBER, tx/rx wall-clock
+  timestamps, socket-level round-trip delay in µs, command name, a result
+  classification (OK / TIMEOUT / CRC_FAIL / MSG_NUM_MISMATCH /
+  UNSOLICITED), and both raw frames as hex. Rows are flushed to disk as
+  they happen so a multi-day run survives a crash; a red indicator in the
+  connection bar shows the live pair/missing counts while active.
+- `apps/plot_qcc_log.py` - offline analysis for those CSVs
+  (`python apps/plot_qcc_log.py <log.csv>`, needs `pip install matplotlib`):
+  prints loss %/delay percentiles/msg_number gaps and plots delay-vs-time
+  with timeouts marked, rolling loss %, and the delay histogram.
 - `qtrm_model.py` - `QAbstractTableModel` backing the 96-row QTRM grid
   (QTRM ID is positional - row index + 1 - not a field inside the 30 bytes).
 - `main_window.py` - connection bar, QCC MODE/MSG_ID controls, last-response

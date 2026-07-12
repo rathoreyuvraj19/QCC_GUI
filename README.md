@@ -27,7 +27,9 @@ Skeleton PySide6 desktop app for building, sending, and receiving the
 - `core/frame_logger.py` - burn-test data logger (Tools -> Start Data
   Logging (CSV)… in the main window). Streams one CSV row per query with
   its paired response side by side: MESSAGE_NUMBER, tx/rx wall-clock
-  timestamps, socket-level round-trip delay in µs, command name, a result
+  timestamps, socket-level round-trip delay in µs (verified against a
+  tcpdump capture: reads ~0.15-0.25 ms above the kernel wire timestamps,
+  a stable one-sided offset, so it tracks Wireshark), command name, a result
   classification (OK / TIMEOUT / CRC_FAIL / MSG_NUM_MISMATCH /
   UNSOLICITED), and both raw frames as hex. Rows are flushed to disk as
   they happen so a multi-day run survives a crash; a red indicator in the

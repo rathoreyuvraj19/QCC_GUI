@@ -7,6 +7,22 @@ of truth for the packet layout (derived from `QCC_90Byte_Header_BitTable.docx`
 and the QTRM Message Format IDD). See [README.md](README.md) for setup/run
 instructions and a file-by-file overview.
 
+## Invariants to preserve
+
+- **`delay_us` must stay comparable to Wireshark** (Yuvraj's explicit
+  requirement, 2026-07-12). The query->response delay logged by
+  `core/frame_logger.py` (and shown in the tabs) comes from
+  `core/udp_worker.py`'s `perf_counter()` stamps taken immediately at the
+  `sendto`/`recvfrom` socket calls - never move this timing into GUI code,
+  Qt signal handlers, or anywhere downstream of the worker thread.
+  Verified against tcpdump on loopback (20-pair run, separate-process
+  responder): the logged value reads a consistent +0.14 to +0.26 ms above
+  the kernel/pcap wire delta - one-sided (never below wire time) and
+  stable, dominated by OS thread wake-up after `recvfrom`. That residual
+  is the userland floor; anything that grows it (extra Python work between
+  `recvfrom` and the timestamp, timing in a GUI slot) breaks the
+  requirement.
+
 ## Open issues (flagged 2026-07-06, not yet started)
 
 1. **Ping button stuck / no hover-click feedback** - after one ping it stays

@@ -166,8 +166,12 @@ _SEND_BTN_STYLE = send_button_style()
 
 
 class StatusTab(QWidget):
-    # status_type, sub_status_type, beam_register_address (always 0 - not implemented)
-    send_all_requested = Signal(int, int, int)
+    # status_type, sub_status_type, beam_register_address (always 0 - not
+    # implemented), is_auto_resend - the last flag tells main_window's
+    # handler this send came from the resend QTimer, not a click, so a
+    # still-unanswered previous send must not pop a modal "Busy" warning
+    # every tick (same contract as link_test_tab's send_requested).
+    send_all_requested = Signal(int, int, int, bool)
     # qtrm_index (0-based), status_type, sub_status_type, beam_register_address (always 0)
     individual_send_requested = Signal(int, int, int, int)
 
@@ -578,7 +582,8 @@ class StatusTab(QWidget):
 
         status_type, sub_status_type, beam_register_address = self._current_params()
         interval_s = self.resend_spin.value()
-        self.send_all_requested.emit(status_type, sub_status_type, beam_register_address)
+        self.send_all_requested.emit(status_type, sub_status_type,
+                                     beam_register_address, is_auto_resend)
         if interval_s > 0 and not self._auto_resending:
             self._auto_resending = True
             self.send_btn.setText("Stop")

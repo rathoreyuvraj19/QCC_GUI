@@ -1126,11 +1126,27 @@ class MainWindow(QMainWindow):
         self._begin_wait(self._on_isolation_individual_timeout)
         self._send_frame(frame)
 
-    def _on_status_send_all(self, status_type: int, sub_status_type: int, beam_register_address: int):
+    def _on_status_send_all(self, status_type: int, sub_status_type: int,
+                            beam_register_address: int, is_auto_resend: bool = False):
         if self.worker is None:
-            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            if not is_auto_resend:
+                QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
-        if not self._check_not_busy():
+
+        if is_auto_resend:
+            # Same reasoning as _on_link_test_clicked's auto-resend branch:
+            # the Status tab's QTimer fires regardless of whether the
+            # previous Send All ever got a response - if our own last send
+            # is still unanswered, cancel its wait and send again now (no
+            # modal "Busy" popup per tick on an unattended rig); if
+            # something unrelated is in flight, skip this tick quietly.
+            if self._awaiting_kind not in (None, "status_all"):
+                return
+            self._awaiting_kind = None
+            if self._pending_timer is not None:
+                self._pending_timer.stop()
+                self._pending_timer = None
+        elif not self._check_not_busy():
             return
 
         frame = build_status_frame(

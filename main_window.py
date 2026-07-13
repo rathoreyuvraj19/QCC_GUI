@@ -10,6 +10,7 @@ now - MSG_ID, MODE, and per-QTRM MSG_ID/Frequency ID are not implemented on
 the QCC/QTRM side yet.
 """
 
+import csv
 import os
 import time
 from datetime import datetime
@@ -174,6 +175,12 @@ class MainWindow(QMainWindow):
         self._frame_logger = FrameLogger(self)
         self._frame_logger.stats_changed.connect(self._on_log_stats_changed)
         self._frame_logger.error.connect(self._on_logger_error)
+
+        # Open plot dialogs (Tools -> Plot Log File…) - kept in a list
+        # rather than a single reused reference like the RX/TX/responder
+        # windows above, since comparing two burn-test CSVs side by side
+        # is a normal thing to want. Each entry drops itself on close.
+        self._plot_log_dialogs = []
 
         self._build_ui()
 
@@ -346,6 +353,10 @@ class MainWindow(QMainWindow):
         self._log_action = QAction("Start Data Logging (CSV)…", self)
         self._log_action.triggered.connect(self._on_log_action_triggered)
         tools_menu.addAction(self._log_action)
+
+        plot_action = QAction("Plot Log File (CSV)…", self)
+        plot_action.triggered.connect(self._on_plot_log_action_triggered)
+        tools_menu.addAction(plot_action)
 
     def _on_tab_changed(self, index):
         self.status_tab.reset_to_idle()
@@ -777,6 +788,39 @@ class MainWindow(QMainWindow):
         # reflect that in the UI and tell the user.
         self._set_logging_ui_stopped()
         QMessageBox.warning(self, "Data logging", msg)
+
+    def _on_plot_log_action_triggered(self):
+        start_dir = os.path.dirname(self._frame_logger.path) if self._frame_logger.path \
+            else os.path.expanduser("~")
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Open data log to plot", start_dir,
+            "CSV files (*.csv);;All files (*)",
+        )
+        if not path:
+            return
+        try:
+            # Imported lazily - matplotlib is only needed if the user
+            # actually opens a plot, not at GUI startup.
+            from widgets.plot_log_dialog import PlotLogDialog
+        except ImportError:
+            QMessageBox.warning(
+                self, "Plot log file",
+                "matplotlib is required to plot log files:\n"
+                "pip install matplotlib",
+            )
+            return
+        try:
+            dialog = PlotLogDialog(path, self)
+        except (OSError, csv.Error, KeyError, ValueError) as e:
+            QMessageBox.warning(self, "Plot log file",
+                                f"Could not plot {path}:\n{e}")
+            return
+        dialog.finished.connect(lambda _=None, d=dialog: self._plot_log_dialogs.remove(d)
+                                if d in self._plot_log_dialogs else None)
+        self._plot_log_dialogs.append(dialog)
+        dialog.show()
+        dialog.raise_()
+        dialog.activateWindow()
 
     # -- response timing / timeout ----------------------------------------
 

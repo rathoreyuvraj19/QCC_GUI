@@ -22,10 +22,17 @@ renders one figure:
 Panels 3 and 5 appear only when the log has per-QTRM data (Link Test burn
 runs); logs of other commands fall back to the original 3-panel layout.
 
-Standalone command-line tool, not part of the GUI:
+Command-line tool:
 
     python apps/plot_qcc_log.py qcc_log_20260712_120000.csv
     python apps/plot_qcc_log.py log.csv --window 500 --out fig.png --no-show
+
+`summarize()` and `build_figure()` are also called directly by
+widgets/plot_log_dialog.py (Tools -> Plot Log File… in the main GUI) to
+embed the same figure in a Qt dialog instead of a separate matplotlib
+window - build_figure() takes an already-constructed Figure so either
+caller can supply one from pyplot (this script) or from
+matplotlib.figure.Figure (the Qt-embedded canvas).
 
 Requires matplotlib (not a GUI dependency):  pip install matplotlib
 """
@@ -62,6 +69,15 @@ def not_ok_indices(row):
 
 
 def summarize(rows, path):
+    """Prints the burn-test summary and returns (queries, summary_text) -
+    the same text, joined, for callers (the GUI dialog) that want to show
+    it somewhere other than stdout."""
+    lines = []
+
+    def emit(s=""):
+        lines.append(s)
+        print(s)
+
     queries = [r for r in rows if r["result"] != "UNSOLICITED"]
     by_result = {}
     for r in rows:
@@ -69,14 +85,14 @@ def summarize(rows, path):
     ok_delays = [float(r["delay_us"]) for r in queries
                  if r["result"] == "OK" and r["delay_us"]]
 
-    print(f"\n{path}")
-    print(f"  queries sent:        {len(queries)}")
+    emit(f"{path}")
+    emit(f"  queries sent:        {len(queries)}")
     for result in ("OK", "TIMEOUT", "CRC_FAIL", "MSG_NUM_MISMATCH", "UNSOLICITED"):
         if by_result.get(result):
-            print(f"  {result:<20} {by_result[result]}")
+            emit(f"  {result:<20} {by_result[result]}")
     timeouts = by_result.get("TIMEOUT", 0)
     if queries:
-        print(f"  packet loss:         {100.0 * timeouts / len(queries):.3f} %")
+        emit(f"  packet loss:         {100.0 * timeouts / len(queries):.3f} %")
 
     # msg_number continuity - the GUI increments it on every send, so a
     # skipped number means a send this log never saw (e.g. logging started
@@ -84,15 +100,15 @@ def summarize(rows, path):
     nums = sorted(int(r["msg_number"]) for r in queries if r["msg_number"])
     gaps = [(a, b) for a, b in zip(nums, nums[1:]) if b - a > 1]
     if gaps:
-        print(f"  msg_number gaps:     {len(gaps)} (first: {gaps[0][0]} -> {gaps[0][1]})")
+        emit(f"  msg_number gaps:     {len(gaps)} (first: {gaps[0][0]} -> {gaps[0][1]})")
 
     if ok_delays:
         ok_delays.sort()
         p99 = ok_delays[min(len(ok_delays) - 1, int(0.99 * len(ok_delays)))]
-        print(f"  delay us (OK):       min {ok_delays[0]:.1f} | "
-              f"mean {statistics.fmean(ok_delays):.1f} | "
-              f"median {statistics.median(ok_delays):.1f} | "
-              f"p99 {p99:.1f} | max {ok_delays[-1]:.1f}")
+        emit(f"  delay us (OK):       min {ok_delays[0]:.1f} | "
+             f"mean {statistics.fmean(ok_delays):.1f} | "
+             f"median {statistics.median(ok_delays):.1f} | "
+             f"p99 {p99:.1f} | max {ok_delays[-1]:.1f}")
 
     # Per-QTRM Link Test breakdown - which QTRMs failed to reply, ranked.
     link_rows = [r for r in queries if is_link_row(r)]
@@ -101,21 +117,20 @@ def summarize(rows, path):
         for r in link_rows:
             for q in not_ok_indices(r):
                 fails[q] = fails.get(q, 0) + 1
-        print(f"  link-test rows:      {len(link_rows)} (per-QTRM analyzed)")
+        emit(f"  link-test rows:      {len(link_rows)} (per-QTRM analyzed)")
         if fails:
             total = sum(fails.values())
-            print(f"  QTRM NOT_OK marks:   {total} across {len(fails)} QTRM(s)")
+            emit(f"  QTRM NOT_OK marks:   {total} across {len(fails)} QTRM(s)")
             ranked = sorted(fails.items(), key=lambda kv: (-kv[1], kv[0]))
             for q, n in ranked[:15]:
-                print(f"    QTRM-{q:<3} NOT_OK {n} time(s) "
-                      f"({100.0 * n / len(link_rows):.2f} % of link tests)")
+                emit(f"    QTRM-{q:<3} NOT_OK {n} time(s) "
+                     f"({100.0 * n / len(link_rows):.2f} % of link tests)")
             if len(ranked) > 15:
-                print(f"    ... and {len(ranked) - 15} more (see panel 5)")
+                emit(f"    ... and {len(ranked) - 15} more (see panel 5)")
         else:
-            print("  QTRM NOT_OK marks:   0 - every queried QTRM replied "
-                  "on every answered link test")
-    print()
-    return queries
+            emit("  QTRM NOT_OK marks:   0 - every queried QTRM replied "
+                 "on every answered link test")
+    return queries, "\n".join(lines)
 
 
 def rolling_loss(queries, window):
@@ -130,28 +145,15 @@ def rolling_loss(queries, window):
     return out
 
 
-def main():
-    ap = argparse.ArgumentParser(description="Plot a QCC burn-test CSV log.")
-    ap.add_argument("csv_path")
-    ap.add_argument("--window", type=int, default=200,
-                    help="rolling packet-loss window, in queries (default 200)")
-    ap.add_argument("--out", help="output image path (default: <csv>.png)")
-    ap.add_argument("--no-show", action="store_true", help="save only, no window")
-    args = ap.parse_args()
-
-    try:
-        import matplotlib
-        if args.no_show:
-            matplotlib.use("Agg")
-        import matplotlib.pyplot as plt
-    except ImportError:
-        sys.exit("matplotlib is required for plotting:  pip install matplotlib")
-
-    rows = load_rows(args.csv_path)
-    queries = summarize(rows, args.csv_path)
-    if not queries:
-        sys.exit("No query rows in this log - nothing to plot.")
-
+def build_figure(fig, queries, csv_path, window=200):
+    """
+    Populates an already-constructed (empty) matplotlib Figure with the
+    burn-test panels and returns it. Takes the Figure rather than creating
+    one so either caller can supply the kind it needs: this script's
+    main() uses a pyplot-managed figure (for plt.show()), while
+    widgets/plot_log_dialog.py uses a bare matplotlib.figure.Figure fed
+    straight into a Qt canvas.
+    """
     times = [datetime.strptime(r["tx_timestamp"], TS_FMT) for r in queries]
     ok_t, ok_d = [], []
     for r, t in zip(queries, times):
@@ -173,8 +175,8 @@ def main():
             ev_q.append(q)
             fail_counts[q] += 1
 
+    fig.set_size_inches(12, 12 if has_qtrm_data else 9)
     if has_qtrm_data:
-        fig = plt.figure(figsize=(12, 12), constrained_layout=True)
         gs = fig.add_gridspec(4, 2, height_ratios=[2.6, 1.0, 2.0, 1.5])
         ax1 = fig.add_subplot(gs[0, :])
         ax2 = fig.add_subplot(gs[1, :])
@@ -182,12 +184,9 @@ def main():
         ax3 = fig.add_subplot(gs[3, 0])
         axb = fig.add_subplot(gs[3, 1])
     else:
-        fig, (ax1, ax2, ax3) = plt.subplots(
-            3, 1, figsize=(12, 9), height_ratios=[3, 1.2, 1.5],
-            constrained_layout=True,
-        )
+        (ax1, ax2, ax3) = fig.subplots(3, 1, height_ratios=[3, 1.2, 1.5])
         axq = axb = None
-    fig.suptitle(f"QCC query/response burn test - {args.csv_path}", fontsize=11)
+    fig.suptitle(f"QCC query/response burn test - {csv_path}", fontsize=11)
 
     # Panel 1: delay vs time; timeouts pinned in a band above the data so a
     # missing packet never masquerades as a fast response at y=0.
@@ -200,9 +199,9 @@ def main():
     ax1.legend(loc="upper right", frameon=False, fontsize=9)
 
     # Panel 2: rolling loss, same time axis as panel 1.
-    ax2.plot(times, rolling_loss(queries, args.window),
+    ax2.plot(times, rolling_loss(queries, window),
              color=STATUS_RED, linewidth=1.5)
-    ax2.set_ylabel(f"loss % ({args.window}-query window)", fontsize=9)
+    ax2.set_ylabel(f"loss % ({window}-query window)", fontsize=9)
     ax2.set_ylim(bottom=0)
     ax2.sharex(ax1)
 
@@ -240,6 +239,34 @@ def main():
             continue
         ax.grid(True, alpha=0.25, linewidth=0.5)
         ax.spines[["top", "right"]].set_visible(False)
+
+    return fig
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Plot a QCC burn-test CSV log.")
+    ap.add_argument("csv_path")
+    ap.add_argument("--window", type=int, default=200,
+                    help="rolling packet-loss window, in queries (default 200)")
+    ap.add_argument("--out", help="output image path (default: <csv>.png)")
+    ap.add_argument("--no-show", action="store_true", help="save only, no window")
+    args = ap.parse_args()
+
+    try:
+        import matplotlib
+        if args.no_show:
+            matplotlib.use("Agg")
+        import matplotlib.pyplot as plt
+    except ImportError:
+        sys.exit("matplotlib is required for plotting:  pip install matplotlib")
+
+    rows = load_rows(args.csv_path)
+    queries, _summary_text = summarize(rows, args.csv_path)
+    if not queries:
+        sys.exit("No query rows in this log - nothing to plot.")
+
+    fig = plt.figure(constrained_layout=True)
+    build_figure(fig, queries, args.csv_path, args.window)
 
     out = args.out or args.csv_path + ".png"
     fig.savefig(out, dpi=130)

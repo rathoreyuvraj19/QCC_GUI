@@ -45,6 +45,10 @@ Skeleton PySide6 desktop app for building, sending, and receiving the
   prints loss %/delay percentiles/msg_number gaps/per-QTRM failure ranking
   and plots delay-vs-time with timeouts marked, rolling loss %, QTRM
   NOT_OK events vs time, the delay histogram, and NOT_OK count per QTRM.
+  Also reachable from inside the GUI itself via Tools -> Plot Log File
+  (CSV)… (`widgets/plot_log_dialog.py`), which picks a CSV and shows the
+  same figure and summary text embedded in a dialog - no terminal needed.
+  Several plot dialogs can be open at once to compare runs.
 - `qtrm_model.py` - `QAbstractTableModel` backing the 96-row QTRM grid
   (QTRM ID is positional - row index + 1 - not a field inside the 30 bytes).
 - `main_window.py` - connection bar, QCC MODE/MSG_ID controls, last-response

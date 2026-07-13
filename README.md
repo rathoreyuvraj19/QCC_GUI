@@ -48,7 +48,10 @@ Skeleton PySide6 desktop app for building, sending, and receiving the
   Also reachable from inside the GUI itself via Tools -> Plot Log File
   (CSV)… (`widgets/plot_log_dialog.py`), which picks a CSV and shows the
   same figure and summary text embedded in a dialog - no terminal needed.
-  Several plot dialogs can be open at once to compare runs.
+  Several plot dialogs can be open at once to compare runs. Saved images
+  (script's `--out`-less runs, and the dialog's Save Image… button) default
+  to a `plots/` folder next to wherever the app/script is run from
+  (created if missing).
 - `qtrm_model.py` - `QAbstractTableModel` backing the 96-row QTRM grid
   (QTRM ID is positional - row index + 1 - not a field inside the 30 bytes).
 - `main_window.py` - connection bar, QCC MODE/MSG_ID controls, last-response

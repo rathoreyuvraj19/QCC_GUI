@@ -39,9 +39,17 @@ Requires matplotlib (not a GUI dependency):  pip install matplotlib
 
 import argparse
 import csv
+import os
 import statistics
 import sys
 from datetime import datetime
+
+# Default output location for a saved figure when neither this script's
+# --out nor the GUI's Save Image… dialog is given an explicit path - a
+# plots/ folder next to wherever the tool is run from, so figures land in
+# one predictable place instead of scattered next to whatever CSV they
+# came from.
+DEFAULT_PLOTS_DIR = os.path.join(os.getcwd(), "plots")
 
 # Timeouts/loss wear the status red in every panel; responses wear the one
 # data hue. Timeouts additionally differ by marker shape (x vs dot), so the
@@ -268,7 +276,13 @@ def main():
     fig = plt.figure(constrained_layout=True)
     build_figure(fig, queries, args.csv_path, args.window)
 
-    out = args.out or args.csv_path + ".png"
+    out = args.out
+    if not out:
+        os.makedirs(DEFAULT_PLOTS_DIR, exist_ok=True)
+        out = os.path.join(
+            DEFAULT_PLOTS_DIR,
+            os.path.splitext(os.path.basename(args.csv_path))[0] + ".png",
+        )
     fig.savefig(out, dpi=130)
     print(f"figure saved to {out}")
     if not args.no_show:

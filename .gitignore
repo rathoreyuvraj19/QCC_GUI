@@ -12,3 +12,6 @@ rc_settings.json
 connection_settings.json
 
 .claude/skills/run-qcc-qtrm-control/shots/
+
+# Default save location for Tools -> Plot Log File… / apps/plot_qcc_log.py
+plots/

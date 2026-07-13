@@ -12,12 +12,14 @@ matplotlib is only imported when this dialog is actually opened (not a
 hard GUI dependency at startup) - see _import_matplotlib_qt().
 """
 
+import os
+
 from PySide6.QtWidgets import (
     QDialog, QFileDialog, QHBoxLayout, QMessageBox, QPushButton,
     QTextEdit, QVBoxLayout,
 )
 
-from apps.plot_qcc_log import build_figure, load_rows, summarize
+from apps.plot_qcc_log import DEFAULT_PLOTS_DIR, build_figure, load_rows, summarize
 
 
 def _import_matplotlib_qt():
@@ -75,7 +77,9 @@ class PlotLogDialog(QDialog):
         layout.addWidget(canvas, 1)
 
     def _on_save_clicked(self):
-        default = self._csv_path + ".png"
+        os.makedirs(DEFAULT_PLOTS_DIR, exist_ok=True)
+        default_name = os.path.splitext(os.path.basename(self._csv_path))[0] + ".png"
+        default = os.path.join(DEFAULT_PLOTS_DIR, default_name)
         path, _ = QFileDialog.getSaveFileName(
             self, "Save plot image", default,
             "PNG image (*.png);;All files (*)",

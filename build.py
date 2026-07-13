@@ -69,7 +69,7 @@ def build_exe(onefile: bool = False):
     print()
 
     result = subprocess.run(
-        ["pyinstaller"] + pyinstaller_args,
+        [sys.executable, "-m", "PyInstaller"] + pyinstaller_args,
         cwd=repo_root,
     )
 

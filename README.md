@@ -16,6 +16,27 @@ Skeleton PySide6 desktop app for building, sending, and receiving the
    python main.py
    ```
 
+## Build Standalone .exe (Windows)
+
+To distribute the app without requiring users to install Python:
+
+1. Install PyInstaller:
+   ```
+   pip install pyinstaller
+   ```
+2. Build the package:
+   ```
+   python build.py              # creates dist/qcc_gui/ folder
+   python build.py --onefile    # creates single dist/qcc_gui.exe file
+   ```
+   
+The folder mode (`--onedir`, default) is recommended for end-user
+distribution — smaller and faster to run. The single-file mode
+(`--onefile`) is slower on first launch but easier to copy around.
+
+See `.claude/skills/build-qcc-gui/SKILL.md` for detailed build options
+and troubleshooting.
+
 ## What's here
 
 - `packet.py` - byte-exact struct definitions for the QCC RX/TX headers and

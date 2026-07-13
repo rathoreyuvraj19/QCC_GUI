@@ -5,8 +5,8 @@ __pycache__/
 
 # PyInstaller build output / spec, and the RC Settings tab's local runtime
 # save file - all machine-specific/generated, not source.
-build/
-dist/
+# build/
+# dist/
 *.spec
 rc_settings.json
 connection_settings.json

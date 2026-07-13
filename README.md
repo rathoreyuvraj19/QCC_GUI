@@ -9,7 +9,7 @@ Skeleton PySide6 desktop app for building, sending, and receiving the
 1. Install Python 3.10+ from python.org (check "Add to PATH" during install).
 2. Open a terminal in this folder and install dependencies:
    ```
-   pip install PySide6
+   pip install -r requirements.txt
    ```
 3. Run it:
    ```

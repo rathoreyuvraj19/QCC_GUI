@@ -69,7 +69,10 @@ header:
     - { byte: 12,      name: month,            size: 1,  type: u8,       status: defined, desc: "Month, decimal (not hex). Filled by RC; QCC copies unchanged into Response.", range: [1, 12] }
     - { byte: [13,14], name: year,             size: 2,  type: u16,      status: defined, desc: "Calendar year, decimal (not hex). Lower/Higher byte combine per byte order. Filled by RC; QCC copies unchanged into Response." }
     - { byte: [15,18], name: time_of_day,      size: 4,  type: u32,      status: tbd,     desc: "Filled by RC; QCC copies exactly into Response, unchanged. Exact format/units (ms-since-midnight vs packed HHMMSS) still TBD." }
-    - { byte: [19,31], name: reserved_a,       size: 13, type: "u8[13]", status: defined, desc: "Reserved" }
+    - { byte: [19,22], name: qcc_query_count,  size: 4,  type: u32,      status: defined, desc: "RESPONSE only: count of messages received by QCC (queries). TX: reserved, RC fills with 0x00." }
+    - { byte: [23,26], name: qcc_response_count, size: 4, type: u32,     status: defined, desc: "RESPONSE only: count of messages QCC has responded to. TX: reserved, RC fills with 0x00." }
+    - { byte: 27,      name: qcc_firmware_no,  size: 1,  type: u8,       status: defined, desc: "RESPONSE only: QCC firmware version/build number. TX: reserved, RC fills with 0x00." }
+    - { byte: [28,31], name: reserved_a,       size: 4,  type: "u8[4]",  status: defined, desc: "Reserved" }
     - { byte: 32,      name: reserved_b,       size: 1,  type: u8,       status: defined, desc: "Reserved (previously a standalone XOR checksum - removed; single CRC-8 at byte 90 covers the whole header now)" }
     - { byte: 33,      name: qcc_command,      size: 1,  type: u8,       status: defined, desc: "TX: RC selects the command to execute (see qcc_commands below). RESPONSE: QCC echoes back the qcc_command value from the command that produced this response.", enum_ref: qcc_commands }
     - { byte: [34,89], name: message_body,     size: 56, type: "u8[56]", status: mixed,   desc: "RESPONSE direction: fully defined, see message_body_response below. TX direction: varies per qcc_command, see message_body_tx below." }

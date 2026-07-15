@@ -12,6 +12,7 @@ the QCC/QTRM side yet.
 
 import csv
 import os
+import socket
 import time
 from datetime import datetime
 
@@ -115,6 +116,32 @@ _QUICK_SEND_TOGGLE_STYLE = (
     "QPushButton:pressed { background-color: rgba(0, 173, 181, 0.3); }"
 )
 
+_PORT_SCAN_LIMIT = 200  # how many ports past `preferred` to try before giving up
+
+
+def _find_available_udp_port(preferred: int) -> int:
+    """
+    Returns `preferred` if a UDP socket can actually bind it right now,
+    otherwise the first free port found scanning upward (wrapping at 65535
+    back to 1024, since some other process squatting on `preferred` - e.g.
+    the NI Tagger Service on port 5000 - doesn't mean neighboring ports are
+    taken too). Falls back to `preferred` itself if nothing in the scan
+    range is free, so callers always get *a* port rather than an exception.
+    """
+    for offset in range(_PORT_SCAN_LIMIT + 1):
+        candidate = preferred + offset
+        if candidate > 65535:
+            candidate = 1024 + (candidate - 65536)
+        probe = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        try:
+            probe.bind(("0.0.0.0", candidate))
+            return candidate
+        except OSError:
+            continue
+        finally:
+            probe.close()
+    return preferred
+
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -167,6 +194,8 @@ class MainWindow(QMainWindow):
         self._responder_window: StatusResponderWindow | None = None
         self._qcc_ip_before_responder: str | None = None
         self._qcc_ip_overridden_for_responder = False
+        self._qcc_port_before_responder: int | None = None
+        self._qcc_port_overridden_for_responder = False
 
         # Burn-test data logger - streams every query/response pair to a
         # CSV chosen at start time (see _on_log_action_triggered). Lives on
@@ -587,7 +616,7 @@ class MainWindow(QMainWindow):
         # a real setting the user typed, and gets correctly re-persisted
         # once _on_responder_window_closed restores the real value and
         # fires this same handler again.
-        if not self._qcc_ip_overridden_for_responder:
+        if not (self._qcc_ip_overridden_for_responder or self._qcc_port_overridden_for_responder):
             connection_settings.local_port = self.local_port_edit.value()
             connection_settings.qcc_ip = self.qcc_ip_edit.text().strip()
             connection_settings.qcc_port = self.qcc_port_edit.value()
@@ -683,6 +712,21 @@ class MainWindow(QMainWindow):
             self._responder_window = StatusResponderWindow()
             self._responder_window.closed.connect(self._on_responder_window_closed)
 
+        # The configured QCC Port may already be held by an unrelated
+        # process (e.g. National Instruments' Tagger Service squats on the
+        # 5000 default - WinError 10013 on bind, responder silently stays
+        # "Stopped") - probe for a port that will actually bind before
+        # pointing the responder at it, same remembered-value/restore-on-
+        # close pattern as the QCC IP override below. Only capture on the
+        # first substitution (not every re-click) so re-showing an already-
+        # open responder doesn't overwrite the remembered port with itself.
+        if not self._qcc_port_overridden_for_responder:
+            self._qcc_port_before_responder = self.qcc_port_edit.value()
+            self._qcc_port_overridden_for_responder = True
+            available_port = _find_available_udp_port(self._qcc_port_before_responder)
+            if available_port != self._qcc_port_before_responder:
+                self.qcc_port_edit.setValue(available_port)
+
         # Match whatever QCC Port this GUI is currently configured to send
         # to, so the responder is listening in the right place from the
         # moment it opens - not just whenever the field happens to change
@@ -734,6 +778,12 @@ class MainWindow(QMainWindow):
             # only does so once this flag reads False.
             self._qcc_ip_overridden_for_responder = False
             self.qcc_ip_edit.setText(self._qcc_ip_before_responder or "")
+
+        if self._qcc_port_overridden_for_responder:
+            # Same flip-before-set ordering as the IP restore above.
+            self._qcc_port_overridden_for_responder = False
+            if self._qcc_port_before_responder is not None:
+                self.qcc_port_edit.setValue(self._qcc_port_before_responder)
 
     # -- burn-test data logging --------------------------------------------
 

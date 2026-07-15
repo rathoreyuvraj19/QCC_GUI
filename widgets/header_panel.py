@@ -101,6 +101,7 @@ _FIELD_SECTIONS = [
         "MESSAGE_NUMBER", "CHECKSUM",
     ]),
     ("Timestamp", ["DATE", "MONTH", "YEAR", "TIME_OF_DAY"]),
+    ("QCC Message Counters", ["QCC_QUERY_COUNT", "QCC_RESPONSE_COUNT", "QCC_FIRMWARE_NO"]),
     ("Board Health", ["FPGA_TEMPERATURE", "BOARD_TEMPERATURE", "BOARD_HUMIDITY"]),
     ("SOB / PRT / PPS Counters", [
         "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
@@ -391,6 +392,9 @@ class HeaderPanel(QWidget):
         self._set_field("MONTH", str(h.month))
         self._set_field("YEAR", str(h.year))
         self._set_field("TIME_OF_DAY", str(h.time_of_day))
+        self._set_field("QCC_QUERY_COUNT", str(h.qcc_query_count))
+        self._set_field("QCC_RESPONSE_COUNT", str(h.qcc_response_count))
+        self._set_field("QCC_FIRMWARE_NO", str(h.qcc_firmware_no))
         self._set_field("QCC_COMMAND", _QCC_COMMAND_NAMES.get(h.qcc_command, f"0x{h.qcc_command:02X}"))
         self._set_field("FPGA_TEMPERATURE", str(h.fpga_temperature))
         self._set_field("BOARD_TEMPERATURE", str(h.board_temperature))
@@ -400,13 +404,13 @@ class HeaderPanel(QWidget):
         self._set_field("INPUT_PPS_COUNT", str(h.input_pps_count))
         self._set_field("OUTPUT_PRT_COUNT", str(h.output_prt_count))
         self._set_field("OUTPUT_SOB_COUNT", str(h.output_sob_count))
-        self._set_field("INPUT_SOB_WIDTH_US", str(h.input_sob_width_us))
-        self._set_field("OUTPUT_SOB_WIDTH_US", str(h.output_sob_width_us))
-        self._set_field("INPUT_PRT_WIDTH_US", str(h.input_prt_width_us))
-        self._set_field("OUTPUT_PRT_WIDTH_US", str(h.output_prt_width_us))
-        self._set_field("INPUT_PPS_WIDTH_US", str(h.input_pps_width_us))
-        self._set_field("INPUT_PRT_PRI", str(h.input_prt_pri))
-        self._set_field("OUTPUT_PRT_PRI", str(h.output_prt_pri))
+        self._set_field("INPUT_SOB_WIDTH_US", f"{h.input_sob_width_us} µs")
+        self._set_field("OUTPUT_SOB_WIDTH_US", f"{h.output_sob_width_us} µs")
+        self._set_field("INPUT_PRT_WIDTH_US", f"{h.input_prt_width_us} µs")
+        self._set_field("OUTPUT_PRT_WIDTH_US", f"{h.output_prt_width_us} µs")
+        self._set_field("INPUT_PPS_WIDTH_US", f"{h.input_pps_width_us} µs")
+        self._set_field("INPUT_PRT_PRI", f"{h.input_prt_pri} µs")
+        self._set_field("OUTPUT_PRT_PRI", f"{h.output_prt_pri} µs")
         self._set_field("PPS_COUNTER", str(h.pps_counter))
         gen_status_str = f"SOB={'Internal' if h.sob_is_internal() else 'Bypass'}\nPRT={'Internal' if h.prt_is_internal() else 'Bypass'}"
         self._set_field("GENERATOR_STATUS", gen_status_str)

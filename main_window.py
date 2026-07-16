@@ -66,6 +66,7 @@ from widgets.spin_field import SpinField
 from apps.rx_test_app import RxTestWindow
 from apps.tx_test_window import TxTestWindow
 from apps.status_responder_app import StatusResponderWindow
+from apps.remote_prog_tester_app import RemoteProgTesterWindow
 
 
 RESPONSE_TIMEOUT_MS = 1000
@@ -196,6 +197,11 @@ class MainWindow(QMainWindow):
         self._qcc_ip_overridden_for_responder = False
         self._qcc_port_before_responder: int | None = None
         self._qcc_port_overridden_for_responder = False
+        self._remote_prog_tester_window: RemoteProgTesterWindow | None = None
+        self._rp_tester_ip_before: str | None = None
+        self._rp_tester_ip_overridden = False
+        self._rp_tester_port_before: int | None = None
+        self._rp_tester_port_overridden = False
 
         # Burn-test data logger - streams every query/response pair to a
         # CSV chosen at start time (see _on_log_action_triggered). Lives on
@@ -371,6 +377,10 @@ class MainWindow(QMainWindow):
         responder_action = QAction("Open Status Responder", self)
         responder_action.triggered.connect(self._on_open_responder_clicked)
         tools_menu.addAction(responder_action)
+
+        rp_tester_action = QAction("Open Remote Programming Tester", self)
+        rp_tester_action.triggered.connect(self._on_open_rp_tester_clicked)
+        tools_menu.addAction(rp_tester_action)
 
         tools_menu.addSeparator()
 
@@ -784,6 +794,46 @@ class MainWindow(QMainWindow):
             self._qcc_port_overridden_for_responder = False
             if self._qcc_port_before_responder is not None:
                 self.qcc_port_edit.setValue(self._qcc_port_before_responder)
+
+    def _on_open_rp_tester_clicked(self):
+        # Same one-shared-instance pattern as the status responder - only
+        # one active tester window at a time.
+        if self._remote_prog_tester_window is None:
+            self._remote_prog_tester_window = RemoteProgTesterWindow()
+            self._remote_prog_tester_window.closed.connect(self._on_rp_tester_window_closed)
+
+        # Same port-probing + auto-connect-on-open pattern as status responder.
+        if not self._rp_tester_port_overridden:
+            self._rp_tester_port_before = self.qcc_port_edit.value()
+            self._rp_tester_port_overridden = True
+            available_port = _find_available_udp_port(self._rp_tester_port_before)
+            if available_port != self._rp_tester_port_before:
+                self.qcc_port_edit.setValue(available_port)
+
+        self._remote_prog_tester_window.set_listen_port(self.qcc_port_edit.value())
+        self._remote_prog_tester_window.start_listening()
+
+        if not self._rp_tester_ip_overridden:
+            self._rp_tester_ip_before = self.qcc_ip_edit.text()
+            self._rp_tester_ip_overridden = True
+            self.qcc_ip_edit.setText("127.0.0.1")
+
+        if self.worker is None:
+            self._on_connect_clicked()
+
+        self._remote_prog_tester_window.show()
+        self._remote_prog_tester_window.raise_()
+        self._remote_prog_tester_window.activateWindow()
+
+    def _on_rp_tester_window_closed(self):
+        if self._rp_tester_ip_overridden:
+            self._rp_tester_ip_overridden = False
+            self.qcc_ip_edit.setText(self._rp_tester_ip_before or "")
+
+        if self._rp_tester_port_overridden:
+            self._rp_tester_port_overridden = False
+            if self._rp_tester_port_before is not None:
+                self.qcc_port_edit.setValue(self._rp_tester_port_before)
 
     # -- burn-test data logging --------------------------------------------
 

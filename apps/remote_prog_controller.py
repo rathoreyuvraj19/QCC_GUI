@@ -37,8 +37,8 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 import apps.bootloader_packet as bl
 from core.packet import (
-    NUM_QTRM, RP_FRAME_SIZE, RP_PAYLOAD_SIZE, build_header_only_frame,
-    build_remote_programming_frame, extract_rp_slots,
+    NUM_QTRM, RP_FRAME_SIZE, RP_PAYLOAD_SIZE, build_broadcast_bootloader_frame,
+    build_header_only_frame, build_remote_programming_frame, extract_rp_slots,
 )
 from core.rc_settings import COMMAND_ID_REMOTE_PROGRAMMING, rc_settings
 
@@ -188,10 +188,18 @@ class RemoteProgController(QObject):
         if self.busy:
             return
         self._start(OP_MODE_STEP1, MODE_STEP_TIMEOUT_MS, self._on_simple_timeout)
-        self._send_rp(
-            bl.build_mode_change_command(bl.BSN_MSS_CONTROL),
-            summary="Mode Change -> QTRMs to low-speed (bsn_mode=MSS_CONTROL)",
+        # Standard 2970-byte frame, NOT the 4196-byte RP frame - see
+        # build_broadcast_bootloader_frame's docstring. QTRMs are still in
+        # normal per-QTRM-addressed mode at this point, so the mode-change
+        # command is replicated into every one of the 96 30-byte slots
+        # rather than sent once for the QCC to broadcast (that broadcast
+        # path only exists once QTRMs are already in low-speed mode).
+        header = rc_settings.build_header(COMMAND_ID_REMOTE_PROGRAMMING)
+        frame = build_broadcast_bootloader_frame(
+            header, bl.build_mode_change_command(bl.BSN_MSS_CONTROL)
         )
+        self._send_fn(frame)
+        self.log_frame.emit(frame, True, "Mode Change -> QTRMs to low-speed (bsn_mode=MSS_CONTROL)")
 
     def start_mode_step2(self):
         if self.busy:
@@ -407,9 +415,22 @@ class RemoteProgController(QObject):
             return
         self._got_any_frame = True
 
-        if self._op == OP_MODE_STEP2:
-            # QCC's own response - no QTRM slots to demux for this step.
+        if self._op == OP_MODE_STEP1:
+            # Mode Step 1 - latch on first response, don't wait for timeout
             self.log_frame.emit(raw, False, "QCC mode-change response")
+            self.mode_step1_done = True
+            self.step_result.emit(OP_MODE_STEP1, True, "Response received")
+            self.gate_changed.emit(self.gate_open)
+            self._finish(True, "Step complete")
+            return
+
+        if self._op == OP_MODE_STEP2:
+            # QCC's own response - latch immediately, don't wait for timeout
+            self.log_frame.emit(raw, False, "QCC mode-change response")
+            self.mode_step2_done = True
+            self.step_result.emit(OP_MODE_STEP2, True, "Response received")
+            self.gate_changed.emit(self.gate_open)
+            self._finish(True, "Step complete")
             return
 
         context = (bl.CONTEXT_BITSTREAM

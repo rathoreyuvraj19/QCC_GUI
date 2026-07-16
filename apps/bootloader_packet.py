@@ -28,19 +28,22 @@ Byte numbering below follows the spec's 1-based convention (byte 1 =
 index 0 of the Python bytes object).
 
 === OPEN ITEMS carried over verbatim from bootloader_packet_spec.yaml ===
- 1. Command Type 0x35 is used for BOTH the Firmware Update Command
-    (RC->LRU) and the Bitstream Packet Acknowledgement (LRU->RC). No field
-    observed in either table distinguishes which meaning applies --
-    direction alone might disambiguate in practice (RC never receives its
-    own commands echoed), but this needs explicit confirmation from
-    whoever owns the original document, not an assumption baked into a
-    parser. [This module disambiguates on receive purely by which
-    operation the GUI has in flight - see parse_slot(context=...).]
- 2. Checksum algorithm is never specified anywhere in the photographed
-    source (unlike packet_spec, which explicitly names CRC-8/CCITT with
-    poly/init/check-value). Every packet ends with a 'Footer/Check Sum'
-    byte at byte 10, but HOW it's computed is unknown. [Provisionally XOR
-    here per Yuvraj 2026-07-08 - see bootloader_checksum().]
+ 1. RESOLVED 2026-07-16: confirmed independently against both the QTRM
+    firmware source (user_common_include.h: CMD_TYPE_FW_UPDATE_COMMAND =
+    0x36) and the LabVIEW reference GUI's block diagram (Authenticate/
+    Program/Verify all build command_type 0x36, subtype 0x01/0x02/0x03
+    in byte 6). The Firmware Update Command (RC->LRU) uses its OWN opcode,
+    0x36 - it does NOT share 0x35. 0x35 (TYPE_ACK_MSG) is still shared
+    on the RECEIVE side between the Firmware Update Command's response and
+    the Bitstream Packet Acknowledgement (confirmed by firmware's
+    iap_authenticate()/iap_verify(), which both reply with byte[2]=0x35),
+    so parse_slot(context=...)'s disambiguation-by-in-flight-operation is
+    still required and correct for parsing responses.
+ 2. RESOLVED 2026-07-16: checksum confirmed via firmware's getCheckSum()
+    (plain XOR of bytes 1-9, stored in byte 10) and independently via
+    the LabVIEW reference GUI's Checksum.vi block diagram (XOR-accumulate
+    loop over the array). Matches this module's bootloader_checksum()
+    exactly - no longer provisional.
  3. Bitstream Data Packet (0x34): the visible table ends at
     DATA[fw_packet_length-1] with no checksum byte shown afterward.
     Unclear whether a trailing checksum exists for this packet type.
@@ -65,6 +68,13 @@ index 0 of the Python bytes object).
 10. [GUI-side] Get LRU Info's request layout is NOT in the spec at all -
     build_lru_info_request() mirrors link_request's minimal shape as an
     ASSUMPTION flagged with Yuvraj.
+11. RESOLVED 2026-07-16: Mode Change Command's command_type is 0x33, not
+    0x32 as originally transcribed - confirmed by Yuvraj against a byte-level
+    reference (AA 00 33 00 00 03 00 00 00 9A for BSN_MSS_CONTROL). This value
+    is intentionally shared with CT_BITSTREAM_RECEIVE (also 0x33) - a
+    QTRM-state-dependent overload, not a transcription collision: pre-MSS it
+    means "switch to MSS/low-speed", post-MSS it means "prepare to receive
+    bitstream". See CT_MODE_CHANGE's comment for detail.
 """
 
 from dataclasses import dataclass, field
@@ -78,10 +88,22 @@ PSI_BITSTREAM = 0xBB    # byte 2 for the Bitstream Data Packet only
 # Command Type values (byte 3 of every packet)
 CT_LINK = 0x30                   # Link Request (RC->LRU) / MSS Link Response (LRU->RC)
 CT_LRU_STATUS = 0x31             # RF LRU Status Response (LRU->RC)
-CT_MODE_CHANGE = 0x32            # Mode Change Command (RC->LRU)
-CT_BITSTREAM_RECEIVE = 0x33      # Bitstream Receive Command (RC->LRU)
+# CT_MODE_CHANGE and CT_BITSTREAM_RECEIVE intentionally share 0x33 - confirmed
+# by Yuvraj 2026-07-16 (byte-level reference: AA 00 33 00 00 03 00 00 00 9A for
+# Mode Change -> MSS_CONTROL). This is a QTRM-state-dependent overload, not a
+# collision: 0x33 means "switch to MSS/low-speed" while the QTRM is still in
+# normal/high-speed fabric mode, and means "prepare to receive bitstream" once
+# the QTRM is already in MSS mode - the QTRM disambiguates by its own current
+# state, never both at once. The GUI always knows which phase it's sending in,
+# so no runtime disambiguation is needed here either.
+CT_MODE_CHANGE = 0x33            # Mode Change Command (RC->LRU) - pre-MSS only
+CT_BITSTREAM_RECEIVE = 0x33      # Bitstream Receive Command (RC->LRU) - post-MSS only
 CT_BITSTREAM_DATA = 0x34         # Bitstream Data Packet (RC->LRU)
-CT_FW_UPDATE_OR_BS_ACK = 0x35    # AMBIGUOUS in spec - see open item 1
+CT_FW_UPDATE_OR_BS_ACK = 0x35    # Firmware Update Command RESPONSE / Bitstream
+                                 # Packet Ack (LRU->RC only) - shared, see open item 1
+CT_FW_UPDATE_CMD = 0x36          # Firmware Update Command REQUEST (RC->LRU) -
+                                 # confirmed distinct from 0x35 via firmware's
+                                 # user_common_include.h and the LabVIEW reference GUI
 CT_ERROR = 0x3F                  # Error Msg Format (LRU->RC)
 
 # bsn_mode values (mode_change_command byte 6, bits B06-B01)
@@ -187,7 +209,8 @@ def build_lru_info_request(status_type: int = 0, sub_status_type: int = 0) -> by
 
 
 def build_mode_change_command(bsn_mode: int) -> bytes:
-    """command_type 0x32: bsn_mode in byte 6 bits B06-B01 (top 2 bits reserved)."""
+    """command_type 0x33 (shared with Bitstream Receive - see CT_MODE_CHANGE):
+    bsn_mode in byte 6 bits B06-B01 (top 2 bits reserved)."""
     pkt = bytearray(9)
     pkt[0] = BL_HEADER
     pkt[1] = PSI_FIXED
@@ -212,11 +235,13 @@ def build_bitstream_receive_command(fw_packet_size: int, fw_packet_count: int,
 
 
 def build_firmware_update_command(iap_mode: int, image_is_golden: bool = False) -> bytes:
-    """command_type 0x35 (RC->LRU meaning): IAP AUTHENTICATE/PROGRAM/VERIFY."""
+    """command_type 0x36: IAP AUTHENTICATE/PROGRAM/VERIFY (confirmed against
+    firmware's CMD_TYPE_FW_UPDATE_COMMAND and the LabVIEW reference GUI -
+    NOT 0x35, which is response-only and shared with the Bitstream Ack)."""
     pkt = bytearray(9)
     pkt[0] = BL_HEADER
     pkt[1] = PSI_FIXED
-    pkt[2] = CT_FW_UPDATE_OR_BS_ACK
+    pkt[2] = CT_FW_UPDATE_CMD
     pkt[3] = 1 if image_is_golden else 0
     pkt[5] = iap_mode & 0xFF
     return _finish(pkt)
@@ -265,8 +290,13 @@ class MssLinkResponse(SlotBase):
 
 @dataclass
 class LruStatusResponse(SlotBase):
-    lm_id: int = 0
+    # Confirmed 2026-07-16 against firmware's LRU_info_response_type_def
+    # (user_functions.h): byte 6 is mfg_id_and_part_number, a single byte
+    # packing (mfg_id<<4)|part_no - NOT a separate lm_id byte. There is no
+    # lm_id field in this response at all; firmware's LRU_info_type_def has
+    # an lm_id member but it's never packed into send_LRU_info()'s output.
     mfg_id: int = 0
+    part_no: int = 0
     serial_num: int = 0
     fw_version: int = 0
 
@@ -352,10 +382,15 @@ def parse_slot(raw10: bytes, context: str = CONTEXT_FW_UPDATE):
     if ct == CT_LINK:
         return MssLinkResponse(**base, b1_b4=bytes(raw10[5:9]))
     if ct == CT_LRU_STATUS:
+        # byte index 4 (0-based) is msg_counter, not part of the payload -
+        # the packed mfg_id/part_no byte starts at index 5. See
+        # LruStatusResponse's docstring note for the firmware struct this
+        # mirrors.
+        mfg_id_and_part = raw10[5]
         return LruStatusResponse(
             **base,
-            lm_id=raw10[4],
-            mfg_id=raw10[5],
+            mfg_id=(mfg_id_and_part >> 4) & 0x0F,
+            part_no=mfg_id_and_part & 0x0F,
             serial_num=raw10[6] | (raw10[7] << 8),
             fw_version=raw10[8],
         )

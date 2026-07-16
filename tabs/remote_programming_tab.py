@@ -433,7 +433,7 @@ class RemoteProgrammingTab(QWidget):
         self.results_stack.addWidget(placeholder)
 
         # Page 1: LRU Info table
-        self.lru_table = self._make_table(["QTRM", "LM_ID", "MFG_ID", "Serial", "FW Version"])
+        self.lru_table = self._make_table(["QTRM", "MFG_ID", "Part No", "Serial", "FW Version"])
         self.results_stack.addWidget(self.lru_table)
 
         # Page 2: Authenticate/Verify - LedMatrix + detail table side by side
@@ -676,8 +676,8 @@ class RemoteProgrammingTab(QWidget):
                 self.lru_table.item(q, c).setText("—")
 
     def on_lru_row(self, q: int, resp):
-        self.lru_table.item(q, 1).setText(str(resp.lm_id))
-        self.lru_table.item(q, 2).setText(str(resp.mfg_id))
+        self.lru_table.item(q, 1).setText(str(resp.mfg_id))
+        self.lru_table.item(q, 2).setText(str(resp.part_no))
         self.lru_table.item(q, 3).setText(str(resp.serial_num))
         self.lru_table.item(q, 4).setText(str(resp.fw_version))
 

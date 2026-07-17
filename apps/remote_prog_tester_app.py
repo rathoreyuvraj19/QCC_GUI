@@ -115,7 +115,7 @@ class MockBootloaderResponder(QThread):
             base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
             slot0_cmd = query[base: base + RP_INNER_CMD_SIZE]
             if len(slot0_cmd) == RP_INNER_CMD_SIZE and slot0_cmd[2] == bl.CT_MODE_CHANGE:
-                bsn_mode = slot0_cmd[5] & 0x3F if len(slot0_cmd) > 5 else 0
+                bsn_mode = slot0_cmd[5] & 0x0F if len(slot0_cmd) > 5 else 0
                 mode_name = {
                     0: "INITIALISATION", 1: "OPERATION",
                     2: "MAINTENANCE", 3: "MSS_CONTROL",
@@ -141,7 +141,7 @@ class MockBootloaderResponder(QThread):
             # Try to parse as known commands (see bootloader_packet.py)
             # Mode Change Command (0x32)
             if cmd_type == bl.CT_MODE_CHANGE:
-                bsn_mode = inner_cmd[5] & 0x3F if len(inner_cmd) > 5 else 0
+                bsn_mode = inner_cmd[5] & 0x0F if len(inner_cmd) > 5 else 0
                 mode_name = {
                     0: "INITIALISATION",
                     1: "OPERATION",

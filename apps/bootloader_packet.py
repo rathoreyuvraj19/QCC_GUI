@@ -65,9 +65,10 @@ index 0 of the Python bytes object).
  9. fw_update_status_code_bits' association with
     bitstream_packet_acknowledgement's pass_fail byte is inferred purely
     from layout proximity in the source document.
-10. [GUI-side] Get LRU Info's request layout is NOT in the spec at all -
-    build_lru_info_request() mirrors link_request's minimal shape as an
-    ASSUMPTION flagged with Yuvraj.
+10. RESOLVED 2026-07-16: Get LRU Info's request layout (RF_LRU_STATUS_ENQUIRY,
+    command_type 0x31, reserved body) is confirmed by the "Remote Programming
+    MSG format - updated" audit doc - it already matches what
+    build_lru_info_request() sends.
 11. RESOLVED 2026-07-16: Mode Change Command's command_type is 0x33, not
     0x32 as originally transcribed - confirmed by Yuvraj against a byte-level
     reference (AA 00 33 00 00 03 00 00 00 9A for BSN_MSS_CONTROL). This value
@@ -75,6 +76,29 @@ index 0 of the Python bytes object).
     QTRM-state-dependent overload, not a transcription collision: pre-MSS it
     means "switch to MSS/low-speed", post-MSS it means "prepare to receive
     bitstream". See CT_MODE_CHANGE's comment for detail.
+12. RESOLVED 2026-07-16: BSN_MODE (mode_change_command byte 6) is a 4-bit
+    field, bits B04-B01 only (B08-B05 reserved) - per the audit doc, not the
+    6-bit B06-B01 this module previously masked with. Only values 0-3 are
+    ever used so this was harmless in practice, but build_mode_change_command()
+    now masks with 0x0F to match the document.
+
+=== Items the 2026-07-16 audit FLAGGED but deliberately left unchanged ===
+(cross-checked against QTRM firmware source and a LabVIEW reference GUI -
+see "Remote Programming MSG format - updated.docx" for full detail; these
+are either firmware/doc-only discrepancies or too invasive to fix blind
+without a way to visually re-render the document)
+ a. MSS Link Response's command_type: firmware's sendLinkRes() sets 0x34
+    (colliding with Bitstream Data Packet), not the documented 0x30. Likely
+    a firmware bug - not changed here.
+ b. RF_LRU_STATUS_RESPONSE's command_type: firmware's send_LRU_info() sets
+    0x30 (colliding with MSS Link Response), not the documented 0x31. Likely
+    a firmware bug - not changed here.
+ c. FwUpdateResponse/ErrorMsg wire layout: the source document shows these
+    as bit-packed single bytes, but firmware treats iap_mode/iap_status and
+    header_error/crc_error/timeout_error as separate whole bytes. This
+    module's parse_slot() already matches firmware (see FwUpdateResponse/
+    ErrorMsg below) - only the Word document's tables need restructuring,
+    which is out of scope for this environment (no doc renderer available).
 """
 
 from dataclasses import dataclass, field
@@ -106,7 +130,9 @@ CT_FW_UPDATE_CMD = 0x36          # Firmware Update Command REQUEST (RC->LRU) -
                                  # user_common_include.h and the LabVIEW reference GUI
 CT_ERROR = 0x3F                  # Error Msg Format (LRU->RC)
 
-# bsn_mode values (mode_change_command byte 6, bits B06-B01)
+# bsn_mode values (mode_change_command byte 6, bits B04-B01 - confirmed
+# 2026-07-16 against the "Remote Programming MSG format" audit doc; B08-B05
+# are reserved, not part of the field)
 BSN_INITIALISATION = 0
 BSN_OPERATION = 1
 BSN_MAINTENANCE = 2
@@ -210,12 +236,12 @@ def build_lru_info_request(status_type: int = 0, sub_status_type: int = 0) -> by
 
 def build_mode_change_command(bsn_mode: int) -> bytes:
     """command_type 0x33 (shared with Bitstream Receive - see CT_MODE_CHANGE):
-    bsn_mode in byte 6 bits B06-B01 (top 2 bits reserved)."""
+    bsn_mode in byte 6 bits B04-B01 (top 4 bits reserved)."""
     pkt = bytearray(9)
     pkt[0] = BL_HEADER
     pkt[1] = PSI_FIXED
     pkt[2] = CT_MODE_CHANGE
-    pkt[5] = bsn_mode & 0x3F
+    pkt[5] = bsn_mode & 0x0F
     return _finish(pkt)
 
 

@@ -33,7 +33,7 @@ add directly to the whole window's minimum size.
 from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QFontMetrics
 from PySide6.QtWidgets import (
-    QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel,
+    QFormLayout, QFrame, QGroupBox, QHBoxLayout, QLabel, QMessageBox,
     QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
@@ -133,6 +133,19 @@ _QUERY_BTN_ACTIVE_STYLE = (
     f"QPushButton:pressed {{ background-color: rgba(0, 173, 181, 0.7); }}"
 )
 
+# QCC Reset is a real hardware action (not a read-only query like Status),
+# so it gets a visually distinct warm/red outline rather than the accent
+# teal - same shape/padding as the query button so the two sit flush in
+# the same row, just recolored to read as "this one does something."
+_DANGER = "#e05a5a"
+_RESET_BTN_STYLE = (
+    f"QPushButton {{ background-color: transparent; color: {_DANGER};"
+    f"border: 1px solid {_DANGER}; border-radius: 8px; padding: 5px 8px; font-weight: 600; }}"
+    f"QPushButton:hover {{ background-color: rgba(224, 90, 90, 0.15); }}"
+    f"QPushButton:pressed {{ background-color: rgba(224, 90, 90, 0.3); }}"
+    f"QPushButton:disabled {{ color: rgba(238, 238, 238, 0.35); border-color: rgba(238, 238, 238, 0.2); }}"
+)
+
 
 def _hex_full(data: bytes) -> str:
     return " ".join(f"{b:02X}" for b in data) or "-"
@@ -149,6 +162,7 @@ class HeaderPanel(QWidget):
     """
 
     query_status_requested = Signal(bool)          # is_auto_resend
+    qcc_reset_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -207,11 +221,22 @@ class HeaderPanel(QWidget):
             "click again (button reads \"Stop\") to turn it off."
         )
         self.query_btn.clicked.connect(self._on_query_btn_clicked)
+
+        self.reset_btn = QPushButton("QCC Reset")
+        self.reset_btn.setStyleSheet(_RESET_BTN_STYLE)
+        self.reset_btn.setToolTip(
+            "Sends QCC_RESET - resets the QCC's own FPGA-side buffers/counters\n"
+            "via PIO pin (QCC-level action, distinct from Soft Reset's\n"
+            "QTRM-targeted command). Asks for confirmation before sending."
+        )
+        self.reset_btn.clicked.connect(self._on_reset_btn_clicked)
+
         # Normal button size, not stretched to the panel's full width - a
-        # stretched single-word pill reads as a section header, not a
-        # clickable action. Centered with a stretch on both sides.
+        # stretched pill reads as a section header, not a clickable action.
+        # Both buttons sit in the same row, centered as a pair.
         query_row.addStretch(1)
         query_row.addWidget(self.query_btn)
+        query_row.addWidget(self.reset_btn)
         query_row.addStretch(1)
         layout.addLayout(query_row)
 
@@ -325,6 +350,16 @@ class HeaderPanel(QWidget):
             self.query_btn.setText("◉ Resending - click to Stop")
             self._resend_timer.start(int(interval_s * 1000))
 
+    def _on_reset_btn_clicked(self) -> None:
+        resp = QMessageBox.question(
+            self, "Confirm QCC Reset",
+            "Send QCC_RESET now?\n\n"
+            "This resets the QCC's own FPGA-side buffers/counters via PIO pin.",
+        )
+        if resp != QMessageBox.Yes:
+            return
+        self.qcc_reset_requested.emit()
+
     def _make_value_label(self, name: str) -> QLabel:
         value_label = QLabel("-")
         value_label.setStyleSheet(_VALUE_NORMAL_STYLE)
@@ -426,6 +461,7 @@ class HeaderPanel(QWidget):
 
         self.header_hex_label.setText(_hex_full(header_raw))
         self.query_btn.setEnabled(True)
+        self.reset_btn.setEnabled(True)
         self.query_status_label.setText("")
 
     def mark_query_pending(self):
@@ -434,6 +470,14 @@ class HeaderPanel(QWidget):
 
     def mark_query_no_response(self):
         self.query_btn.setEnabled(True)
+        self.query_status_label.setText("No response")
+
+    def mark_reset_pending(self):
+        self.reset_btn.setEnabled(False)
+        self.query_status_label.setText("Resetting...")
+
+    def mark_reset_no_response(self):
+        self.reset_btn.setEnabled(True)
         self.query_status_label.setText("No response")
 
     def clear(self):

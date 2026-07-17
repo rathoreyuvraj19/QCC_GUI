@@ -37,6 +37,7 @@ from core.rc_settings import (
     rc_settings, COMMAND_ID_DWELL, COMMAND_ID_LINK_TEST, COMMAND_ID_STATUS,
     COMMAND_ID_RX_CAL, COMMAND_ID_TX_CAL, COMMAND_ID_ISOLATION,
     COMMAND_ID_SOFT_RESET, COMMAND_ID_MEMORY_OPERATION, COMMAND_ID_QCC_STATUS,
+    COMMAND_ID_QCC_RESET,
 )
 from core.command_style import send_button_style
 from connection_settings import connection_settings
@@ -345,10 +346,12 @@ class MainWindow(QMainWindow):
         footer.setStyleSheet("color: #9a9aa0; font-size: 8pt; padding: 2px 6px;")
         root.addWidget(footer)
 
-        # The single global HeaderPanel - its "Query QCC Status" button
-        # isn't tied to any one tab anymore, so it's wired here just once.
+        # The single global HeaderPanel - its "Query QCC Status" and
+        # "QCC Reset" buttons aren't tied to any one tab anymore, so they're
+        # wired here just once.
         self.header_panel = HeaderPanel()
         self.header_panel.query_status_requested.connect(self._on_query_qcc_status)
+        self.header_panel.qcc_reset_requested.connect(self._on_qcc_reset)
 
         columns.addWidget(left_column, 1)
         columns.addWidget(self.header_panel)
@@ -1103,6 +1106,28 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = None
         self.header_panel.mark_query_no_response()
 
+    def _on_qcc_reset(self):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        # QCC_RESET, like QCC Status, is header-only - no message body.
+        header = rc_settings.build_header(COMMAND_ID_QCC_RESET)
+        frame = build_header_only_frame(header)
+
+        self._awaiting_kind = "qcc_reset"
+        self.header_panel.mark_reset_pending()
+        self._begin_wait(self._on_qcc_reset_timeout)
+        self._send_frame(frame)
+
+    def _on_qcc_reset_timeout(self):
+        if self._awaiting_kind != "qcc_reset":
+            return
+        self._awaiting_kind = None
+        self.header_panel.mark_reset_no_response()
+
     def _on_dwell_send(self):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
@@ -1493,6 +1518,9 @@ class MainWindow(QMainWindow):
         self.header_panel.show_frame(raw)
 
         if kind == "qcc_status":
+            return
+
+        if kind == "qcc_reset":
             return
 
         if kind == "link_test":

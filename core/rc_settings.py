@@ -81,6 +81,10 @@ COMMAND_ID_REMOTE_PROGRAMMING = QCCHeaderRx.QCC_COMMAND_REMOTE_PROGRAMMING
 # COMMAND_ID_STATUS above, which is the per-QTRM Status tab's
 # DATA_DISTRIBUTION command.
 COMMAND_ID_QCC_STATUS = QCCHeaderRx.QCC_COMMAND_QCC_STATUS
+# The HeaderPanel's "QCC Reset" button - resets the QCC's own FPGA-side
+# buffers/counters via PIO pin (QCC-level action, distinct from Soft
+# Reset's QTRM-targeted command above - see module docstring).
+COMMAND_ID_QCC_RESET = QCCHeaderRx.QCC_COMMAND_QCC_RESET
 
 
 class RCSettings:

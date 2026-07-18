@@ -15,3 +15,10 @@ connection_settings.json
 
 # Default save location for Tools -> Plot Log File… / apps/plot_qcc_log.py
 plots/
+
+# QTRM firmware reference (Eclipse SoftConsole project, kept as a sanity
+# check against the GUI's protocol implementation) - workspace metadata and
+# build output are machine-specific/generated, not source.
+QTRM_REMOTE_PROG_CODE/**/.metadata/
+QTRM_REMOTE_PROG_CODE/**/Debug/
+QTRM_REMOTE_PROG_CODE/**/Release/

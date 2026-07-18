@@ -118,6 +118,22 @@ instructions and a file-by-file overview.
    updated to match. `docs/idd/QCC_Protocol.docx`'s Remote Programming
    table (byte 33/34 remarks) reflects the SubCommand scheme.
 
+   **Single-QTRM targeting (added 2026-07-19 per Yuvraj):** header byte 35
+   (`QTRM_SELECT`, message_body offset 1) in the SubCommand `0x01`/`0x02`
+   frames picks which QTRM(s) the low-speed session addresses - `0x00`-`0x5F`
+   = one QTRM (0-based id 0-95), `0xFF` = broadcast to all 96. QCC latches
+   it into its `remote_prog_LRU_select` mux at mode-change time, so every
+   subsequent SubCommand `0x00` frame reaches only the selected QTRM, and
+   QCC zero-fills the 95 non-selected slots in its 2970-byte responses.
+   Mode Step 1 mirrors this GUI-side (QTRMs are still per-slot addressed
+   there): a single-QTRM session puts the mode-change command in only the
+   target's 30-byte slot, the other 95 slots all-zero. The Remote
+   Programming tab's "Target" combo drives it
+   (`RemoteProgController.target_qtrm`,
+   `core/packet.py`'s `RP_QTRM_SELECT_BROADCAST`); the selector locks
+   while the gate is open so the value can't drift mid-session, and the
+   mock responder latches/zero-fills the same way the real QCC will.
+
 6. **GENERATOR_STATUS bit 2 (QCC Mode)** - header byte 82
    (`GENERATOR_STATUS`, response direction) gained a third status bit per
    Yuvraj: bit 0 `SOB_STATE`, bit 1 `PRT_STATE` (unchanged), and now bit 2

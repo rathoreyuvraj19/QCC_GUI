@@ -14,17 +14,24 @@ Lives on the GUI thread; all timing is QTimer-based (sends are already
 non-blocking via udp_worker's socket thread), so no extra threads.
 
 Operation flow (per the IDD + decisions with Yuvraj 2026-07-08/18):
-  1. Mode Step 1 - broadcast mode_change_command(MSS_CONTROL) to all QTRMs
-     ("switch to the low-speed 115200 bootloader link") - decoded by the
-     fabric RTL (control_to_mss_proc), which raises the MUX flag the MSS
-     polls to take the UART.
+  1. Mode Step 1 - send mode_change_command(MSS_CONTROL) to the targeted
+     QTRM(s) ("switch to the low-speed 115200 bootloader link") - decoded
+     by the fabric RTL (control_to_mss_proc), which raises the MUX flag
+     the MSS polls to take the UART. Broadcast session: the command is
+     replicated into all 96 slots; single-QTRM session (target_qtrm
+     0-95): only the target's slot carries it, the other 95 slots are
+     all-zero so only that QTRM drops to low-speed.
   2. Mode Step 2 - tell QCC itself to switch to low-speed: a bare 90-byte
      header-only frame (RE-DECIDED 2026-07-19 - was a 2970-byte
      header-only frame before) with byte 34 (SubCommand) =
      QCC_BODY_SWITCH_LOW_SPEED (0x01). Byte 34 of every Remote Programming
      frame is a SubCommand selector QCC itself reads and acts on - 0x00
      Broadcast (fan the rest of the frame out to all 96 QTRMs), 0x01 QCC
-     -> Low-Speed, 0x02 QCC -> High-Speed.
+     -> Low-Speed, 0x02 QCC -> High-Speed. Byte 35 (QTRM_SELECT) rides
+     along in the 0x01/0x02 frames: QCC latches it into its LRU-select
+     mux for the whole low-speed session, so every subsequent SubCommand
+     0x00 frame reaches only the selected QTRM (0-95) or all 96 (0xFF),
+     and QCC zero-fills the non-selected slots in its 2970-byte responses.
   3. Link Check - broadcast a Link Request (0x30); each QTRM's processor
      answers with its 0x34-tagged link response (B1 B2 B3 B4 body).
   4. Get LRU Info / Upload bitstream / Authenticate / Program / Verify -
@@ -76,7 +83,8 @@ from PySide6.QtCore import QObject, QTimer, Signal
 import apps.bootloader_packet as bl
 from core.packet import (
     NUM_QTRM, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_PAYLOAD_SIZE,
-    RP_QCC_LEVEL_FRAME_SIZE, build_broadcast_bootloader_frame,
+    RP_QCC_LEVEL_FRAME_SIZE, RP_QTRM_SELECT_BROADCAST,
+    build_broadcast_bootloader_frame,
     build_qcc_level_frame, build_remote_programming_cmd_frame,
     build_remote_programming_frame, extract_rp_slots,
 )
@@ -94,6 +102,8 @@ QCC_BODY_SWITCH_LOW_SPEED = 0x01  # Mode Step 2: QCC -> Low-Speed
 QCC_BODY_SWITCH_HIGH_SPEED = 0x02  # QCC -> High-Speed - value 0x02 (not
                                    # 0x00) so 0x00 is reserved exclusively
                                    # for RP_SUBCMD_BROADCAST.
+# Byte 35 (message_body offset 1) in the 0x01/0x02 frames is QTRM_SELECT -
+# see target_qtrm below and core/packet.py's RP_QTRM_SELECT_BROADCAST.
 
 MODE_STEP_TIMEOUT_MS = 3000
 LRU_INFO_TIMEOUT_MS = 3000
@@ -174,6 +184,12 @@ class RemoteProgController(QObject):
         # Authenticate/Verify/Program reply-collection window - the tab
         # exposes a seconds SpinField for it (per Yuvraj 2026-07-18).
         self.iap_window_ms = IAP_POLL_WINDOW_MS
+        # Which QTRM(s) the next low-speed session targets: 0-95 = one
+        # QTRM, RP_QTRM_SELECT_BROADCAST (0xFF) = all 96. Drives Mode Step
+        # 1's slot filling and rides in byte 35 of the Mode Step 2 / QCC ->
+        # High Speed frames; the tab locks its selector while the gate is
+        # open, so the value can't drift mid-session.
+        self.target_qtrm = RP_QTRM_SELECT_BROADCAST
 
         self.mode_step1_done = False
         self.mode_step2_done = False
@@ -262,6 +278,12 @@ class RemoteProgController(QObject):
 
     # -- mode-change sequence (two separate steps, mandatory order) ---------
 
+    def target_desc(self) -> str:
+        """Human-readable form of target_qtrm for log summaries and UI."""
+        if self.target_qtrm == RP_QTRM_SELECT_BROADCAST:
+            return "all 96 QTRMs"
+        return f"QTRM {self.target_qtrm} only"
+
     def start_mode_step1(self):
         if self.busy:
             return
@@ -269,15 +291,19 @@ class RemoteProgController(QObject):
         # Standard 2970-byte frame, NOT the 4196-byte RP frame - see
         # build_broadcast_bootloader_frame's docstring. QTRMs are still in
         # normal per-QTRM-addressed mode at this point, so the mode-change
-        # command is replicated into every one of the 96 30-byte slots
-        # rather than sent once for the QCC to broadcast (that broadcast
-        # path only exists once QTRMs are already in low-speed mode).
+        # command rides in the addressed slot(s) rather than being sent
+        # once for the QCC to broadcast (that broadcast path only exists
+        # once QTRMs are already in low-speed mode): every slot when
+        # targeting all 96, only the target's slot (others all-zero) for a
+        # single-QTRM session.
         header = rc_settings.build_header(COMMAND_ID_REMOTE_PROGRAMMING)
         frame = build_broadcast_bootloader_frame(
-            header, bl.build_mode_change_command(bl.BSN_MSS_CONTROL)
+            header, bl.build_mode_change_command(bl.BSN_MSS_CONTROL),
+            target_qtrm=self.target_qtrm,
         )
         self._send_fn(frame)
-        self.log_frame.emit(frame, True, "Mode Change -> QTRMs to low-speed (bsn_mode=MSS_CONTROL)")
+        self.log_frame.emit(frame, True,
+                            f"Mode Change -> {self.target_desc()} to low-speed (bsn_mode=MSS_CONTROL)")
 
     def start_mode_step2(self):
         if self.busy:
@@ -286,16 +312,18 @@ class RemoteProgController(QObject):
         # See module docstring. Bare 90-byte header, no inner
         # command/payload (RE-DECIDED 2026-07-19: this is QCC's own
         # self-directed UART switch, not a QTRM-targeted bootloader
-        # command); byte 34 carries the SubCommand
-        # "QCC: switch your own UART to 115200".
-        body = bytes([QCC_BODY_SWITCH_LOW_SPEED])
+        # command); byte 34 carries the SubCommand "QCC: switch your own
+        # UART to 115200" and byte 35 the QTRM_SELECT QCC latches into its
+        # LRU-select mux for the whole low-speed session.
+        body = bytes([QCC_BODY_SWITCH_LOW_SPEED, self.target_qtrm & 0xFF])
         header = rc_settings.build_header(
             COMMAND_ID_REMOTE_PROGRAMMING, message_body=body,
             packet_size=RP_QCC_LEVEL_FRAME_SIZE,
         )
         frame = build_qcc_level_frame(header)
         self._send_fn(frame)
-        self.log_frame.emit(frame, True, "QCC self mode change -> low-speed (SubCommand 0x01)")
+        self.log_frame.emit(frame, True,
+                            f"QCC self mode change -> low-speed (SubCommand 0x01, target {self.target_desc()})")
 
     def _on_simple_timeout(self):
         # Shared by the mode steps, Link Check, Get LRU Info, and Return to
@@ -383,7 +411,7 @@ class RemoteProgController(QObject):
             return
         self._start(OP_QTRM_HIGH_SPEED, QTRM_HIGH_SPEED_WINDOW_MS, self._on_simple_timeout)
         self._send_rp(bl.build_mode_change_mss_to_fab(),
-                      summary="Mode Change MSS->Fabric (0x32) broadcast -> QTRMs to high-speed")
+                      summary=f"Mode Change MSS->Fabric (0x32) -> {self.target_desc()} to high-speed")
 
     def start_mode_back(self):
         """QCC -> High Speed: mirrors Mode Step 2, QCC's own self-directed
@@ -396,14 +424,17 @@ class RemoteProgController(QObject):
         if self.busy or not self.gate_open:
             return
         self._start(OP_MODE_BACK, MODE_BACK_WINDOW_MS, self._on_simple_timeout)
-        body = bytes([QCC_BODY_SWITCH_HIGH_SPEED])
+        # Byte 35 carries the same QTRM_SELECT the session was opened with
+        # (the tab locks its selector while the gate is open).
+        body = bytes([QCC_BODY_SWITCH_HIGH_SPEED, self.target_qtrm & 0xFF])
         header = rc_settings.build_header(
             COMMAND_ID_REMOTE_PROGRAMMING, message_body=body,
             packet_size=RP_QCC_LEVEL_FRAME_SIZE,
         )
         frame = build_qcc_level_frame(header)
         self._send_fn(frame)
-        self.log_frame.emit(frame, True, "QCC self mode change -> high-speed (SubCommand 0x02)")
+        self.log_frame.emit(frame, True,
+                            f"QCC self mode change -> high-speed (SubCommand 0x02, target {self.target_desc()})")
 
     # -- Authenticate / Verify (30 s live-grid polls) + one-shot Program ------
 

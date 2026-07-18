@@ -32,10 +32,10 @@ from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView, QLabel,
-    QMessageBox, QPlainTextEdit, QProgressBar, QPushButton, QScrollArea,
-    QSizePolicy, QStackedWidget, QTableWidget, QTableWidgetItem, QVBoxLayout,
-    QWidget,
+    QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
+    QLabel, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
+    QScrollArea, QSizePolicy, QStackedWidget, QTableWidget, QTableWidgetItem,
+    QVBoxLayout, QWidget,
 )
 
 import apps.bootloader_packet as bl
@@ -52,7 +52,7 @@ from core.command_style import (
     send_button_style,
 )
 from tabs.link_test_tab import LedMatrix
-from core.packet import NUM_QTRM, RP_PAYLOAD_SIZE
+from core.packet import NUM_QTRM, RP_PAYLOAD_SIZE, RP_QTRM_SELECT_BROADCAST
 from apps.remote_prog_controller import (
     OP_AUTHENTICATE, OP_LINK_CHECK, OP_LRU_INFO, OP_MODE_BACK, OP_MODE_STEP1,
     OP_MODE_STEP2, OP_PROGRAM, OP_QTRM_HIGH_SPEED, OP_UPLOAD, OP_VERIFY,
@@ -178,6 +178,8 @@ def hex_dump(raw: bytes, bytes_per_row: int = 16) -> str:
 
 
 class RemoteProgrammingTab(QWidget):
+    # 0-95 = single QTRM, RP_QTRM_SELECT_BROADCAST (0xFF) = all 96
+    target_qtrm_changed = Signal(int)
     mode_step1_requested = Signal()
     mode_step2_requested = Signal()
     link_check_requested = Signal()
@@ -245,9 +247,25 @@ class RemoteProgrammingTab(QWidget):
         box, form = _section_box("Link Setup")
 
         form.addWidget(_muted_note(
-            "Mandatory order: broadcast low-speed mode to all 96 QTRMs first, "
-            "then switch QCC itself. Operations unlock once both complete."
+            "Mandatory order: send low-speed mode to the target QTRM(s) "
+            "first, then switch QCC itself. Operations unlock once both "
+            "complete."
         ))
+
+        # Target selector: which QTRM(s) the whole low-speed session
+        # addresses. Sent as byte 35 (QTRM_SELECT) of the Mode Step 2 /
+        # QCC -> High Speed frames and latched by QCC, so it locks while
+        # the gate is open - change it only between sessions.
+        target_grid = QGridLayout()
+        target_grid.setHorizontalSpacing(18)
+        target_grid.setColumnStretch(0, 1)
+        self.target_combo = QComboBox()
+        self.target_combo.addItem("All 96 QTRMs (broadcast)")
+        for q in range(NUM_QTRM):
+            self.target_combo.addItem(f"QTRM {q} only")
+        self.target_combo.currentIndexChanged.connect(self._on_target_changed)
+        _field_row(target_grid, 0, "Target", self.target_combo)
+        form.addLayout(target_grid)
 
         self.step1_btn = QPushButton("1.  QTRMs → Low-Speed (115200)")
         self.step1_btn.setFixedHeight(38)
@@ -266,8 +284,11 @@ class RemoteProgrammingTab(QWidget):
         form.addWidget(self.step2_status)
 
         form.addWidget(_muted_note(
-            "Byte 34 (SubCommand) selects the action: 0x00 = Broadcast to all "
-            "96 QTRMs, 0x01 = QCC → Low-Speed, 0x02 = QCC → High-Speed."
+            "Byte 34 (SubCommand) selects the action: 0x00 = Broadcast, "
+            "0x01 = QCC → Low-Speed, 0x02 = QCC → High-Speed. Byte 35 "
+            "(QTRM_SELECT, in the 0x01/0x02 frames) picks the target: "
+            "0–95 = one QTRM, 0xFF = all 96 — QCC latches it for the whole "
+            "session."
         ))
 
         self.link_check_btn = QPushButton("3.  Check Link (all 96 QTRMs)")
@@ -573,6 +594,32 @@ class RemoteProgrammingTab(QWidget):
 
         return box
 
+    # -- Target QTRM selector ----------------------------------------------------
+
+    @property
+    def target_qtrm(self) -> int:
+        """0-95 for a single QTRM, RP_QTRM_SELECT_BROADCAST for all 96."""
+        idx = self.target_combo.currentIndex()
+        return RP_QTRM_SELECT_BROADCAST if idx <= 0 else idx - 1
+
+    def _target_scope_text(self) -> str:
+        return ("all 96 QTRMs" if self.target_qtrm == RP_QTRM_SELECT_BROADCAST
+                else f"QTRM {self.target_qtrm} only")
+
+    def _on_target_changed(self, _idx: int):
+        # Retitle the target-scoped buttons so the addressed QTRM(s) are
+        # always visible right on the action itself.
+        if self.target_qtrm == RP_QTRM_SELECT_BROADCAST:
+            self.step1_btn.setText("1.  QTRMs → Low-Speed (115200)")
+            self.link_check_btn.setText("3.  Check Link (all 96 QTRMs)")
+            self.qtrm_high_speed_btn.setText("QTRM → High Speed")
+        else:
+            q = self.target_qtrm
+            self.step1_btn.setText(f"1.  QTRM {q} → Low-Speed (115200)")
+            self.link_check_btn.setText(f"3.  Check Link (QTRM {q})")
+            self.qtrm_high_speed_btn.setText(f"QTRM {q} → High Speed")
+        self.target_qtrm_changed.emit(self.target_qtrm)
+
     # -- Golden/Current toggle ---------------------------------------------------
 
     @property
@@ -645,9 +692,10 @@ class RemoteProgrammingTab(QWidget):
         n_chunks = (len(self._image) + RP_PAYLOAD_SIZE - 1) // RP_PAYLOAD_SIZE
         confirm = QMessageBox.question(
             self, "Upload bitstream",
-            f"Broadcast {self._file_name} ({len(self._image):,} bytes, "
-            f"{n_chunks} chunks) to all 96 QTRMs?\n\n"
-            f"Target: {scope} image region (SPI flash write on every QTRM).",
+            f"Send {self._file_name} ({len(self._image):,} bytes, "
+            f"{n_chunks} chunks) to {self._target_scope_text()}?\n\n"
+            f"Target: {scope} image region (SPI flash write on each "
+            "addressed QTRM).",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if confirm == QMessageBox.Yes:
@@ -658,10 +706,10 @@ class RemoteProgrammingTab(QWidget):
         scope = "GOLDEN" if golden else "CURRENT"
         confirm = QMessageBox.question(
             self, "Program firmware",
-            f"Command all 96 QTRMs to reprogram their FPGA from the "
+            f"Command {self._target_scope_text()} to reprogram from the "
             f"already-uploaded {scope} SPI image?\n\n"
-            "Each SmartFusion2 flashes itself and may reboot — no replies "
-            "are expected while devices reprogram.",
+            "Each addressed SmartFusion2 flashes itself and may reboot — "
+            "no replies are expected while devices reprogram.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if confirm == QMessageBox.Yes:
@@ -683,6 +731,13 @@ class RemoteProgrammingTab(QWidget):
         self.cancel_btn.setEnabled(self._session_active)
         self.step1_btn.setEnabled(not self._session_active)
         self.step2_btn.setEnabled(not self._session_active)
+        # QCC latches the target when Mode Step 2 opens the low-speed
+        # session, so switching it while the gate is open would silently
+        # disagree with what QCC is routing (and QCC -> High Speed must
+        # carry the same latched value) - locked until the gate re-locks.
+        # While the gate is still closed it stays changeable, so a failed
+        # step can be retried against a different target.
+        self.target_combo.setEnabled(not self._session_active and not self._gate_open)
         self.gate_label.setText(
             "Link ready — operations unlocked" if self._gate_open
             else "Complete both steps to unlock operations"

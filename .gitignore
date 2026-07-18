@@ -16,6 +16,10 @@ connection_settings.json
 # Default save location for Tools -> Plot Log File… / apps/plot_qcc_log.py
 plots/
 
+# Word owner/lock files left while a docx is open in Word
+~$*.docx
+**/~$*.docx
+
 # QTRM firmware reference (Eclipse SoftConsole project, kept as a sanity
 # check against the GUI's protocol implementation) - workspace metadata and
 # build output are machine-specific/generated, not source.

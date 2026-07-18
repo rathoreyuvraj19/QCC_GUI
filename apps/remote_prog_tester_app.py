@@ -31,7 +31,8 @@ import apps.bootloader_packet as bl
 from apps.remote_prog_controller import QCC_BODY_SWITCH_HIGH_SPEED, QCC_BODY_SWITCH_LOW_SPEED
 from core.packet import (
     NUM_QTRM, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_PAYLOAD_SIZE, RP_INNER_CMD_SIZE,
-    RP_QCC_LEVEL_FRAME_SIZE, FIXED_HEADER_SIZE, QCC_HEADER_SIZE, crc8,
+    RP_QCC_LEVEL_FRAME_SIZE, RP_QTRM_SELECT_BROADCAST,
+    FIXED_HEADER_SIZE, QCC_HEADER_SIZE, crc8,
     QTRM_SLOT_SIZE, TOTAL_PACKET_SIZE,
 )
 from core.rc_settings import COMMAND_ID_REMOTE_PROGRAMMING
@@ -54,6 +55,12 @@ class MockBootloaderResponder(QThread):
         self._running = False
         self._simulate_failures = False
         self._chunk_ack_delay_pct = 0  # 0-100% of QTRMs delay each chunk ack
+        # Mirror of the real QCC's remote-programming LRU-select mux:
+        # latched from byte 35 (QTRM_SELECT) of every SubCommand 0x01/0x02
+        # frame. 0xFF = all 96 QTRMs; 0-95 = only that QTRM sees the
+        # low-speed traffic, so responses carry its slot alone and the
+        # other 95 slots are zero-filled (as the real QCC does).
+        self._lru_select = RP_QTRM_SELECT_BROADCAST
 
     def run(self):
         try:
@@ -121,14 +128,30 @@ class MockBootloaderResponder(QThread):
         if len(query) == TOTAL_PACKET_SIZE:
             query_header = query[:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
             base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
-            slot0_cmd = query[base: base + RP_INNER_CMD_SIZE]
-            if len(slot0_cmd) == RP_INNER_CMD_SIZE and slot0_cmd[2] == bl.CT_MODE_CHANGE:
-                bsn_mode = slot0_cmd[5] & 0x0F if len(slot0_cmd) > 5 else 0
+            # QTRMs are per-slot addressed here - only the slots that
+            # actually carry a Mode Change command respond (a single-QTRM
+            # Mode Step 1 fills one slot and leaves the other 95 all-zero,
+            # so slot 0 alone is NOT a reliable place to look).
+            addressed = []
+            bsn_mode = 0
+            for i in range(NUM_QTRM):
+                slot_cmd = query[base + i * QTRM_SLOT_SIZE:
+                                 base + i * QTRM_SLOT_SIZE + RP_INNER_CMD_SIZE]
+                if (len(slot_cmd) == RP_INNER_CMD_SIZE
+                        and slot_cmd[0] == bl.BL_HEADER
+                        and slot_cmd[2] == bl.CT_MODE_CHANGE):
+                    addressed.append(i)
+                    bsn_mode = slot_cmd[5] & 0x0F
+            if addressed:
                 mode_name = {
                     0: "INITIALISATION", 1: "OPERATION",
                     2: "MAINTENANCE", 3: "MSS_CONTROL",
                 }.get(bsn_mode, f"UNKNOWN({bsn_mode})")
-                return self._respond_mode_change(query_header), f"Mode Step 1 ({mode_name})"
+                scope = ("all 96 QTRMs" if len(addressed) == NUM_QTRM
+                         else f"QTRM {addressed[0]} only" if len(addressed) == 1
+                         else f"{len(addressed)} QTRMs")
+                return (self._respond_mode_change(query_header, addressed),
+                        f"Mode Step 1 ({mode_name}, {scope})")
             # Unrecognized 2970-byte frame - ignore
             return None, ""
 
@@ -140,10 +163,18 @@ class MockBootloaderResponder(QThread):
             if query[32] != COMMAND_ID_REMOTE_PROGRAMMING:
                 return None, ""
             sub_cmd = query[33] if len(query) > 33 else None
-            if sub_cmd == QCC_BODY_SWITCH_LOW_SPEED:
-                return self._respond_qcc_level(query), "Mode Step 2 (QCC self low-speed, SubCommand 0x01)"
-            if sub_cmd == QCC_BODY_SWITCH_HIGH_SPEED:
-                return self._respond_qcc_level(query), "QCC self mode change -> high-speed (SubCommand 0x02)"
+            if sub_cmd in (QCC_BODY_SWITCH_LOW_SPEED, QCC_BODY_SWITCH_HIGH_SPEED):
+                # Byte 35 (index 34) is QTRM_SELECT - latch it exactly as
+                # the real QCC latches its LRU-select mux, so every
+                # subsequent SubCommand 0x00 response carries only the
+                # selected QTRM's slot (0xFF = all 96).
+                self._lru_select = query[34] if len(query) > 34 else RP_QTRM_SELECT_BROADCAST
+                target = ("all 96 QTRMs" if self._lru_select == RP_QTRM_SELECT_BROADCAST
+                          else f"QTRM {self._lru_select} only")
+                direction = ("Mode Step 2 (QCC self low-speed, SubCommand 0x01"
+                             if sub_cmd == QCC_BODY_SWITCH_LOW_SPEED
+                             else "QCC self mode change -> high-speed (SubCommand 0x02")
+                return self._respond_qcc_level(query), f"{direction}, target {target})"
             return None, ""
 
         if len(query) not in (RP_CMD_FRAME_SIZE, RP_FRAME_SIZE):
@@ -238,12 +269,26 @@ class MockBootloaderResponder(QThread):
         header[RP_QCC_LEVEL_FRAME_SIZE - 1] = crc8(bytes(header[:RP_QCC_LEVEL_FRAME_SIZE - 1]))
         return bytes(header)
 
-    def _build_response_frame(self, query_header: bytes, build_slots_fn) -> bytes:
+    def _build_response_frame(self, query_header: bytes, build_slots_fn,
+                              respond_slots=None) -> bytes:
         """
         Build a 2970-byte response frame by echoing the query header and
         filling QTRM slots using build_slots_fn (a callable that returns
         the 30-byte slot data for each QTRM index).
+
+        respond_slots limits which slots are populated: None derives it
+        from the latched LRU-select mux (SubCommand 0x00 traffic reaches
+        only the selected QTRM, so only its slot answers), an explicit
+        iterable overrides that (Mode Step 1's per-slot addressing). Every
+        non-responding slot is zero-filled, as the real QCC does.
         """
+        if respond_slots is None:
+            if self._lru_select == RP_QTRM_SELECT_BROADCAST:
+                respond_slots = range(NUM_QTRM)
+            else:
+                respond_slots = [self._lru_select] if self._lru_select < NUM_QTRM else []
+        responding = set(respond_slots)
+
         # Start with query header, swap source/destination IDs
         header = bytearray(query_header)
         header[0], header[1] = query_header[1], query_header[0]
@@ -251,10 +296,12 @@ class MockBootloaderResponder(QThread):
         # Build response frame
         resp_body = bytearray(header)
 
-        # Fill each of 96 QTRM slots
+        # Fill each of 96 QTRM slots (zeros for non-responding QTRMs)
         for i in range(NUM_QTRM):
-            slot_data = build_slots_fn(i)
-            resp_body.extend(slot_data)
+            if i in responding:
+                resp_body.extend(build_slots_fn(i))
+            else:
+                resp_body.extend(bytes(QTRM_SLOT_SIZE))
 
         # Recalculate header checksum (last byte of header)
         header_end = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
@@ -262,8 +309,10 @@ class MockBootloaderResponder(QThread):
 
         return bytes(resp_body)
 
-    def _respond_mode_change(self, query_header: bytes) -> bytes:
-        """Mode Change Command acknowledgment."""
+    def _respond_mode_change(self, query_header: bytes, addressed) -> bytes:
+        """Mode Change Command acknowledgment - only the slots that were
+        actually addressed in the query answer (per-slot addressing, the
+        LRU-select mux plays no part in Mode Step 1)."""
         def build_slot(i: int) -> bytes:
             slot = bytearray(QTRM_SLOT_SIZE)
             slot[0] = bl.BL_HEADER
@@ -275,7 +324,8 @@ class MockBootloaderResponder(QThread):
             # Remaining 20 bytes are reserved/unused
             return bytes(slot)
 
-        return self._build_response_frame(query_header, build_slot)
+        return self._build_response_frame(query_header, build_slot,
+                                          respond_slots=addressed)
 
     def _respond_lru_info(self, query_header: bytes) -> bytes:
         """
@@ -607,9 +657,19 @@ class RemoteProgTesterWindow(QMainWindow):
                 QCC_BODY_SWITCH_LOW_SPEED: "switch to LOW-SPEED (Mode Step 2)",
                 QCC_BODY_SWITCH_HIGH_SPEED: "switch to HIGH-SPEED (QCC -> High Speed)",
             }.get(sub_cmd, f"UNKNOWN sub-command 0x{sub_cmd:02X}" if sub_cmd is not None else "(missing)")
+            qtrm_select = query[34] if len(query) > 34 else None
+            if qtrm_select is None:
+                target = "(missing)"
+            elif qtrm_select == RP_QTRM_SELECT_BROADCAST:
+                target = "0xFF - broadcast, all 96 QTRMs"
+            elif qtrm_select < NUM_QTRM:
+                target = f"0x{qtrm_select:02X} - QTRM {qtrm_select} only"
+            else:
+                target = f"0x{qtrm_select:02X} - INVALID (expected 0x00-0x5F or 0xFF)"
             self.analysis_view.setPlainText(
                 "QCC-level command only (no inner QTRM command, no payload).\n"
-                f"SubCommand (byte 34): {direction}")
+                f"SubCommand (byte 34): {direction}\n"
+                f"QTRM_SELECT (byte 35): {target}")
 
         elif len(query) == TOTAL_PACKET_SIZE:
             # Mode Step 1 / per-QTRM broadcast frame: 96 individually-

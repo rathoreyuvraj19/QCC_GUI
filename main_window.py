@@ -331,6 +331,7 @@ class MainWindow(QMainWindow):
         rp_tab.cancel_requested.connect(rp_ctrl.cancel)
         rp_tab.chunk_timeout_changed.connect(self._on_rp_chunk_timeout_changed)
         rp_tab.iap_timeout_changed.connect(self._on_rp_iap_timeout_changed)
+        rp_tab.target_qtrm_changed.connect(self._on_rp_target_qtrm_changed)
 
         rp_ctrl.step_result.connect(rp_tab.on_step_result)
         rp_ctrl.gate_changed.connect(rp_tab.on_gate_changed)
@@ -1552,6 +1553,12 @@ class MainWindow(QMainWindow):
 
     def _on_rp_chunk_timeout_changed(self, ms: int):
         self.remote_prog_ctrl.chunk_timeout_ms = ms
+
+    def _on_rp_target_qtrm_changed(self, target: int):
+        # 0-95 = single QTRM, RP_QTRM_SELECT_BROADCAST (0xFF) = all 96 -
+        # drives Mode Step 1's slot filling and byte 35 (QTRM_SELECT) of
+        # the Mode Step 2 / QCC -> High Speed frames.
+        self.remote_prog_ctrl.target_qtrm = target
 
     def _on_rp_iap_timeout_changed(self, seconds: int):
         self.remote_prog_ctrl.iap_window_ms = seconds * 1000

@@ -48,6 +48,8 @@ TOTAL_PACKET_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + QTRM_BLOCK_SIZE  # 297
 #      QCC itself reads and acts on - see
 #      QCC_BODY_SWITCH_LOW_SPEED (0x01) / QCC_BODY_SWITCH_HIGH_SPEED (0x02)
 #      in remote_prog_controller.py - see build_qcc_level_frame() below.
+#      Byte 35 (message_body offset 1) is QTRM_SELECT: which QTRM(s) the
+#      low-speed session targets - see RP_QTRM_SELECT_BROADCAST below.
 #   3. Every QTRM-targeted command once QTRMs+QCC are in low-speed mode
 #      (Link Check, Get LRU Info, Authenticate/Verify/Program, Bitstream
 #      Receive announce, QTRM -> High Speed) carries no payload of its own -
@@ -71,6 +73,15 @@ RP_INNER_CMD_SIZE = 10
 RP_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + RP_PAYLOAD_SIZE + RP_INNER_CMD_SIZE  # 4196
 RP_CMD_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + RP_INNER_CMD_SIZE  # 100
 RP_QCC_LEVEL_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE  # 90 - Mode Step 2 / Mode Back only
+
+# Header byte 35 (message_body offset 1) in the SubCommand 0x01/0x02
+# QCC-level frames: which QTRM(s) the low-speed session targets. QCC
+# latches it into its remote-programming LRU-select mux at mode-change
+# time - 0-95 routes every subsequent SubCommand 0x00 frame to that one
+# QTRM (QCC zero-fills the other 95 slots in its responses), 0xFF fans
+# out to all 96. See docs/idd/packet_spec.yaml's remote_programming
+# sections.
+RP_QTRM_SELECT_BROADCAST = 0xFF
 
 # ---------------------------------------------------------------------------
 # CRC-8 / CCITT  (poly 0x07, init 0x00, no reflect, xorout 0x00)
@@ -902,24 +913,35 @@ def extract_rp_slots(raw: bytes) -> list:
     ]
 
 
-def build_broadcast_bootloader_frame(header: bytes, inner_cmd: bytes) -> bytes:
+def build_broadcast_bootloader_frame(header: bytes, inner_cmd: bytes,
+                                     target_qtrm: int = RP_QTRM_SELECT_BROADCAST) -> bytes:
     """
     Standard 2970-byte frame (90-byte header + 96 x 30-byte QTRM slots) used
     ONLY for Mode Step 1 (QTRMs -> Low-Speed): per Yuvraj 2026-07-16, QTRMs
     are still in normal per-QTRM-addressed mode when this command goes out
     (they haven't switched to the QCC's shared low-speed broadcast FIFO
-    yet), so the same 10-byte bootloader mode-change command is replicated
-    into the first 10 bytes of every one of the 96 slots, with the
-    remaining 20 bytes per slot zero-padded - the TX-side mirror of
-    extract_rp_slots()'s RX-side assumption (first 10 bytes of each 30-byte
-    slot carry the bootloader command).
+    yet), so the 10-byte bootloader mode-change command rides in the first
+    10 bytes of the addressed slot(s), with the remaining 20 bytes per slot
+    zero-padded - the TX-side mirror of extract_rp_slots()'s RX-side
+    assumption (first 10 bytes of each 30-byte slot carry the bootloader
+    command).
+
+    target_qtrm RP_QTRM_SELECT_BROADCAST (0xFF): the command is replicated
+    into every one of the 96 slots. target_qtrm 0-95: only that QTRM's
+    slot carries the command and the other 95 slots are all-zero, so only
+    the target drops to low-speed while the rest stay in normal operation.
     """
     assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     assert len(inner_cmd) == RP_INNER_CMD_SIZE
+    assert target_qtrm == RP_QTRM_SELECT_BROADCAST or 0 <= target_qtrm < NUM_QTRM
     slot = bytes(inner_cmd) + bytes(QTRM_SLOT_SIZE - RP_INNER_CMD_SIZE)
+    empty_slot = bytes(QTRM_SLOT_SIZE)
     out = bytearray(header)
-    for _ in range(NUM_QTRM):
-        out.extend(slot)
+    for i in range(NUM_QTRM):
+        if target_qtrm == RP_QTRM_SELECT_BROADCAST or i == target_qtrm:
+            out.extend(slot)
+        else:
+            out.extend(empty_slot)
     assert len(out) == TOTAL_PACKET_SIZE
     return bytes(out)
 

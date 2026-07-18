@@ -42,7 +42,7 @@ This greps `.py`/`.md` across the repo (skipping `build/`/`dist/`) and groups hi
 - QCC header total is 90 bytes (`FIXED_HEADER_SIZE` 32 + `QCC_HEADER_SIZE` 58); `QCCHeaderTx`'s checksum is CRC-8/CCITT (poly 0x07) over bytes 0-88, stored at byte 89. `QCCHeaderRx` (RC->QCC) is the older, not-yet-updated 58-byte-only layout — don't assume the two headers share a byte layout.
 - QTRM slot is 30 bytes; its checksum is XOR of bytes 0-28 (not CRC-8), generated/verified GUI-side, not QCC-side.
 - `message_length(packet_size_id) == packet_size_id * 5 + 10` (IDD Section 4) — a field whose presence depends on packet size needs this checked, not just the raw struct.
-- Full frame is 2970 bytes (90-byte header + 96 x 30-byte QTRM block), **except** Remote Programming (Mode 5) TX frames, which are 4196 bytes (90 + 4096-byte payload + 10-byte inner bootloader command) — if your IDD change is about Mode 5, check `bootloader_packet.py` instead of/in addition to `core/packet.py`.
+- Full frame is 2970 bytes (90-byte header + 96 x 30-byte QTRM block), **except** Remote Programming (`QCC_COMMAND` 0xFF) TX frames, whose size varies by the byte-34 SubCommand: 90 bytes for the QCC-level speed switches (SubCommand 0x01/0x02 — byte 35 is QTRM_SELECT, 0-95 = one QTRM / 0xFF = all 96), 100 bytes for QTRM-targeted commands (90 + 10-byte inner bootloader command), 4196 bytes for bitstream DATA chunks only (90 + 10 + 4096-byte payload), and 2970 for Mode Step 1's per-slot frame. See `remote_programming_framing` in `packet_spec.yaml`; if your IDD change is about Remote Programming, check `bootloader_packet.py` instead of/in addition to `core/packet.py`.
 
 ## Docx updates for bitfield definitions
 

@@ -13,17 +13,56 @@ session_finished fires.
 Lives on the GUI thread; all timing is QTimer-based (sends are already
 non-blocking via udp_worker's socket thread), so no extra threads.
 
-Operation flow (per the IDD + decisions with Yuvraj 2026-07-08):
+Operation flow (per the IDD + decisions with Yuvraj 2026-07-08/18):
   1. Mode Step 1 - broadcast mode_change_command(MSS_CONTROL) to all QTRMs
-     ("switch to the low-speed 115200 bootloader link").
-  2. Mode Step 2 - tell QCC itself to switch to low-speed. PROVISIONAL,
-     UNCONFIRMED wire format: a standard 2970-byte header-only Mode 5
-     frame with message_body[0] = 0x01 - the Mode 5 message body is
-     undefined in the doc, this layout is a placeholder agreed with
-     Yuvraj until the IDD owner confirms the real one.
-  3. Only after both steps: Get LRU Info / Authenticate / Program / Verify.
+     ("switch to the low-speed 115200 bootloader link") - decoded by the
+     fabric RTL (control_to_mss_proc), which raises the MUX flag the MSS
+     polls to take the UART.
+  2. Mode Step 2 - tell QCC itself to switch to low-speed: a bare 90-byte
+     header-only frame (RE-DECIDED 2026-07-19 - was a 2970-byte
+     header-only frame before) with byte 34 (SubCommand) =
+     QCC_BODY_SWITCH_LOW_SPEED (0x01). CONFIRMED 2026-07-18 per Yuvraj:
+     byte 34 of every Remote Programming frame is a SubCommand selector
+     QCC itself reads and acts on - 0x00 Broadcast (fan the rest of the
+     frame out to all 96 QTRMs), 0x01 QCC -> Low-Speed, 0x02 QCC ->
+     High-Speed.
+  3. Link Check - broadcast a Link Request (0x30); each QTRM's processor
+     answers with its 0x34-tagged link response (B1 B2 B3 B4 body).
+  4. Get LRU Info / Upload bitstream / Authenticate / Program / Verify -
+     the image-scoped operations all carry the tab's Golden/Current flag.
+  5. QTRM -> High Speed - broadcast the bootloader's Mode Change
+     MSS->Fabric command (0x32, CT_MODE_CHANGE_MSS_TO_FAB) to all 96
+     QTRMs via the normal SubCommand 0x00 broadcast path (100-byte frame,
+     same shape as Link Check/LRU Info). Added 2026-07-18: QTRMs already
+     auto-return to high speed on their own after Programming completes,
+     but this button lets the operator force it explicitly (e.g. after an
+     aborted session). Does not touch the gate - QCC itself is still on
+     the low-speed link until step 6.
+  6. QCC -> High Speed - QCC's own self-directed UART switch back to
+     high speed (RE-DECIDED 2026-07-19: mirrors Mode Step 2, NOT the
+     QTRM-targeted 0x32 bootloader command - that's now step 5's separate
+     button), same bare 90-byte frame shape with byte 34 (SubCommand) =
+     QCC_BODY_SWITCH_HIGH_SPEED (0x02); the gate re-locks (steps 1-2 must
+     be redone to return).
 
-Program chunk-advance rule: send the next 4096-byte chunk as soon as ANY
+Upload vs Program (split 2026-07-18 to match the firmware): Upload is the
+bitstream TRANSFER - one Bitstream Receive announce (0x33: golden flag,
+packet size 4096, packet count) followed by the 0x34 data chunks, each
+acked per-QTRM into the ack matrix (firmware recieve_bit_stream()).
+Program is a standalone one-shot IAP command (0x36 mode 2) telling the
+SmartFusion2 to flash itself from the ALREADY-uploaded SPI image
+(firmware iap_program()) - it does not stream anything, and the firmware
+busy-waits without replying, so no response is treated as normal.
+
+Wire framing (RE-DECIDED 2026-07-19 per Yuvraj): once QTRMs+QCC are in
+low-speed mode, every RP command except the bitstream DATA chunks sends
+just [90-byte header][10-byte inner command] = 100 bytes, no payload
+padding - see _send_rp() and core/packet.py's build_remote_programming_cmd_frame().
+Only the actual 0x34 DATA chunks (the real file-upload payload) still use
+the full [90-byte header][10-byte command][4096-byte payload] = 4196-byte
+frame via build_remote_programming_frame().
+
+Upload chunk-advance rule: send the next 4096-byte chunk as soon as ANY
 ONE of the 96 QTRMs acks the current one - never wait for all 96. A full
 96 x N ack matrix is maintained in the background from every ack that does
 arrive (including late acks for earlier chunks), and after the transfer a
@@ -37,18 +76,39 @@ from PySide6.QtCore import QObject, QTimer, Signal
 
 import apps.bootloader_packet as bl
 from core.packet import (
-    NUM_QTRM, RP_FRAME_SIZE, RP_PAYLOAD_SIZE, build_broadcast_bootloader_frame,
-    build_header_only_frame, build_remote_programming_frame, extract_rp_slots,
+    NUM_QTRM, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_PAYLOAD_SIZE,
+    RP_QCC_LEVEL_FRAME_SIZE, build_broadcast_bootloader_frame,
+    build_qcc_level_frame, build_remote_programming_cmd_frame,
+    build_remote_programming_frame, extract_rp_slots,
 )
 from core.rc_settings import COMMAND_ID_REMOTE_PROGRAMMING, rc_settings
 
-# Provisional Mode Step 2 message body sub-command (see module docstring).
-QCC_BODY_SWITCH_LOW_SPEED = 0x01
+# Remote Programming SubCommand values (header byte 34 / message_body offset
+# 0) - CONFIRMED 2026-07-18 per Yuvraj (see module docstring). QCC_COMMAND
+# byte 33 = REMOTE_PROGRAMMING selects a Remote Programming session; this
+# SubCommand byte tells QCC what to do with the rest of the frame.
+RP_SUBCMD_BROADCAST = 0x00        # QCC fans the rest of the frame out to all
+                                   # 96 QTRMs - the default, since
+                                   # rc_settings.build_header() leaves
+                                   # message_body all-zero unless overridden.
+QCC_BODY_SWITCH_LOW_SPEED = 0x01  # Mode Step 2: QCC -> Low-Speed
+QCC_BODY_SWITCH_HIGH_SPEED = 0x02  # QCC -> High-Speed - VALUE CHANGED
+                                   # 2026-07-18 from 0x00 to 0x02 so 0x00 is
+                                   # reserved exclusively for RP_SUBCMD_BROADCAST.
 
 MODE_STEP_TIMEOUT_MS = 3000
 LRU_INFO_TIMEOUT_MS = 3000
-IAP_POLL_WINDOW_MS = 30_000          # Authenticate / Verify collection window
-PROGRAM_START_ACK_MS = 3000          # informational window after IAP PROGRAM
+LINK_CHECK_WINDOW_MS = 3000          # Link Request response collection window
+IAP_POLL_WINDOW_MS = 30_000          # Authenticate/Verify/Program window DEFAULT -
+                                     # operator-adjustable via the tab's
+                                     # "Op timeout (s)" field (iap_window_ms)
+MODE_BACK_WINDOW_MS = 2000           # QCC self return-to-high-speed settle window
+                                     # (a reply, if any, is bonus - the settle window
+                                     # is what actually gates completion, see on_frame())
+QTRM_HIGH_SPEED_WINDOW_MS = 2000     # QTRM -> High Speed settle window - firmware's
+                                     # CT_MODE_CHANGE_MSS_TO_FAB handler only toggles
+                                     # GPIOs and exits, no UART reply, so (like Mode
+                                     # Back) a reply is bonus, not required
 CHUNK_TIMEOUT_MS_DEFAULT = 2000      # per-chunk watchdog (tab exposes a SpinField)
 CHUNK_MAX_ATTEMPTS = 3
 TRAILING_ACK_GRACE_MS = 3000         # collect late acks after the final chunk
@@ -58,10 +118,14 @@ CHUNK_PAD_BYTE = 0xFF  # erased-flash state; final chunk reports its REAL length
 # Session/operation identifiers (also used by the tab for display switching)
 OP_MODE_STEP1 = "mode_step1"
 OP_MODE_STEP2 = "mode_step2"
+OP_LINK_CHECK = "link_check"
 OP_LRU_INFO = "lru_info"
 OP_AUTHENTICATE = "authenticate"
 OP_VERIFY = "verify"
-OP_PROGRAM = "program"
+OP_UPLOAD = "upload"                 # bitstream transfer (0x33 announce + 0x34 chunks)
+OP_PROGRAM = "program"               # one-shot IAP PROGRAM (0x36 mode 2)
+OP_QTRM_HIGH_SPEED = "qtrm_high_speed"  # broadcast bootloader 0x32 to all QTRMs
+OP_MODE_BACK = "mode_back"           # QCC -> High Speed (SubCommand 0x02)
 
 
 def split_chunks(image: bytes) -> list:
@@ -87,16 +151,17 @@ class RemoteProgController(QObject):
     gate_changed = Signal(bool)
     # (qtrm_index, LruStatusResponse)
     lru_row_updated = Signal(int, object)
-    # (operation, qtrm_index, parsed-slot object) during Authenticate/Verify
+    # (operation, qtrm_index, parsed-slot object) during Link Check /
+    # Authenticate / Program / Verify
     op_row_updated = Signal(str, int, object)
-    # (operation,) - 30s window expired; rows still pending are No Response
+    # (operation,) - collection window expired; rows still pending are No Response
     op_window_closed = Signal(str)
     # (chunk_index, chunk_count, attempt) - chunk was (re)sent
     chunk_progress = Signal(int, int, int)
     # (qtrm_index, chunk_index, ok) - one ack recorded into the matrix
     ack_recorded = Signal(int, int, bool)
-    # (missing_count, failed_count) - transfer pass done, gaps computed
-    program_finished = Signal(int, int)
+    # (missing_count, failed_count) - upload transfer pass done, gaps computed
+    upload_finished = Signal(int, int)
     # (operation, ok, text) fired exactly once when the whole session ends -
     # main_window clears its busy-lock on this.
     session_finished = Signal(str, bool, str)
@@ -107,6 +172,9 @@ class RemoteProgController(QObject):
         super().__init__(parent)
         self._send_fn = send_fn          # main_window._send_frame
         self.chunk_timeout_ms = CHUNK_TIMEOUT_MS_DEFAULT
+        # Authenticate/Verify/Program reply-collection window - the tab
+        # exposes a seconds SpinField for it (per Yuvraj 2026-07-18).
+        self.iap_window_ms = IAP_POLL_WINDOW_MS
 
         self.mode_step1_done = False
         self.mode_step2_done = False
@@ -121,14 +189,15 @@ class RemoteProgController(QObject):
         self._timer.setSingleShot(True)
         self._timer_connected = False
 
-        # Program state
+        # Upload (bitstream transfer) state
         self._chunks = []                # [(padded_data, real_len), ...]
         self._chunk_count = 0
         self._current_chunk = None       # index being streamed, None outside streaming
         self._chunk_attempt = 0
         self._retry_queue = []           # chunk indices for the stragglers pass
         self._in_retry_pass = False
-        self._program_phase = None       # "iap" | "stream" | "grace"
+        self._upload_phase = None        # "stream" | "grace"
+        self._image_is_golden = False    # tab toggle at upload start
         # 96 x N matrix: per QTRM, {chunk_index: True(pass)/False(TRANSFER_FAILED)}
         self.ack_matrix = [dict() for _ in range(NUM_QTRM)]
 
@@ -142,13 +211,23 @@ class RemoteProgController(QObject):
     def gate_open(self) -> bool:
         return self.mode_step1_done and self.mode_step2_done
 
-    def _rp_header(self) -> bytes:
+    def _rp_header(self, packet_size: int) -> bytes:
         return rc_settings.build_header(
-            COMMAND_ID_REMOTE_PROGRAMMING, packet_size=RP_FRAME_SIZE
+            COMMAND_ID_REMOTE_PROGRAMMING, packet_size=packet_size
         )
 
     def _send_rp(self, inner_cmd: bytes, payload: bytes = b"", summary: str = ""):
-        frame = build_remote_programming_frame(self._rp_header(), inner_cmd, payload)
+        # Only the bitstream DATA chunks carry a real payload - everything
+        # else (Link Check, Get LRU Info, Mode Back, Authenticate/Verify/
+        # Program, Bitstream Receive announce) sends just its 10-byte
+        # command with no payload padding (decided 2026-07-19, see
+        # core/packet.py's RP_CMD_FRAME_SIZE comment).
+        if payload:
+            frame = build_remote_programming_frame(
+                self._rp_header(RP_FRAME_SIZE), inner_cmd, payload)
+        else:
+            frame = build_remote_programming_cmd_frame(
+                self._rp_header(RP_CMD_FRAME_SIZE), inner_cmd)
         self._send_fn(frame)
         self.log_frame.emit(frame, True, summary)
 
@@ -172,7 +251,7 @@ class RemoteProgController(QObject):
     def _finish(self, ok: bool, text: str):
         op, self._op = self._op, None
         self._timer.stop()
-        self._program_phase = None
+        self._upload_phase = None
         self._current_chunk = None
         self.session_finished.emit(op or "", ok, text)
 
@@ -205,17 +284,23 @@ class RemoteProgController(QObject):
         if self.busy:
             return
         self._start(OP_MODE_STEP2, MODE_STEP_TIMEOUT_MS, self._on_simple_timeout)
-        # PROVISIONAL wire format - see module docstring. Standard 2970-byte
-        # header-only frame; the Mode 5 body's first byte carries the
-        # placeholder "QCC: switch your own UART to 115200" sub-command.
+        # CONFIRMED 2026-07-18 wire format - see module docstring. Bare
+        # 90-byte header, no inner command/payload (RE-DECIDED 2026-07-19:
+        # this is QCC's own self-directed UART switch, not a QTRM-targeted
+        # bootloader command); byte 34 carries the SubCommand
+        # "QCC: switch your own UART to 115200".
         body = bytes([QCC_BODY_SWITCH_LOW_SPEED])
-        header = rc_settings.build_header(COMMAND_ID_REMOTE_PROGRAMMING, message_body=body)
-        frame = build_header_only_frame(header)
+        header = rc_settings.build_header(
+            COMMAND_ID_REMOTE_PROGRAMMING, message_body=body,
+            packet_size=RP_QCC_LEVEL_FRAME_SIZE,
+        )
+        frame = build_qcc_level_frame(header)
         self._send_fn(frame)
-        self.log_frame.emit(frame, True, "QCC self mode change -> low-speed (PROVISIONAL format)")
+        self.log_frame.emit(frame, True, "QCC self mode change -> low-speed (SubCommand 0x01)")
 
     def _on_simple_timeout(self):
-        # Shared by both mode steps and Get LRU Info: the window closed.
+        # Shared by the mode steps, Link Check, Get LRU Info, and Return to
+        # High Speed: the collection window closed.
         op = self._op
         if op in (OP_MODE_STEP1, OP_MODE_STEP2):
             if self._got_any_frame:
@@ -229,18 +314,49 @@ class RemoteProgController(QObject):
             else:
                 self.step_result.emit(op, False, "No response — link may be down")
                 self._finish(False, "No response")
+        elif op == OP_LINK_CHECK:
+            self.op_window_closed.emit(op)
+            if self._got_any_frame:
+                self._finish(True, "Link check window closed")
+            else:
+                self.step_result.emit(op, False, "No response — link may be down")
+                self._finish(False, "No response")
         elif op == OP_LRU_INFO:
             if self._got_any_frame:
                 self._finish(True, "LRU info received")
             else:
                 self.step_result.emit(op, False, "No response — link may be down")
                 self._finish(False, "No response")
+        elif op == OP_QTRM_HIGH_SPEED:
+            # Firmware's 0x32 handler never replies (GPIO toggle + exit) -
+            # the settle window just lets it happen. Doesn't touch the
+            # gate; QCC itself is still on the low-speed link.
+            self._finish(True, "QTRM high-speed broadcast sent")
+        elif op == OP_MODE_BACK:
+            # A reply isn't required to consider this done (unconfirmed
+            # whether QCC acks its own self-directed switch) - the window
+            # simply lets it settle. Always re-lock the gate: the QTRMs are
+            # back at high speed either way.
+            self.mode_step1_done = False
+            self.mode_step2_done = False
+            self.gate_changed.emit(False)
+            self._finish(True, "Returned to high speed — gate re-locked")
 
     def reset_gate(self):
         """E.g. after a link change - operations re-lock until redone."""
         self.mode_step1_done = False
         self.mode_step2_done = False
         self.gate_changed.emit(False)
+
+    # -- Link Check (step 3) -------------------------------------------------
+
+    def start_link_check(self):
+        """Broadcast a Link Request (0x30); every QTRM's processor answers
+        with its 0x34-tagged link response (B1 B2 B3 B4 body)."""
+        if self.busy or not self.gate_open:
+            return
+        self._start(OP_LINK_CHECK, LINK_CHECK_WINDOW_MS, self._on_simple_timeout)
+        self._send_rp(bl.build_link_request(), summary="Link Request (0x30) broadcast")
 
     # -- Get LRU Info --------------------------------------------------------
 
@@ -251,21 +367,72 @@ class RemoteProgController(QObject):
         self._send_rp(bl.build_lru_info_request(),
                       summary="Get LRU Info request (layout ASSUMED, 0x31)")
 
-    # -- Authenticate / Verify (30 s live-grid polls) -------------------------
+    # -- QTRM -> High Speed / QCC -> High Speed (return-to-normal pair) -----
 
-    def start_authenticate(self):
-        self._start_iap_poll(OP_AUTHENTICATE, bl.IAP_AUTHENTICATE)
-
-    def start_verify(self):
-        self._start_iap_poll(OP_VERIFY, bl.IAP_VERIFY)
-
-    def _start_iap_poll(self, op: str, iap_mode: int):
+    def start_qtrm_high_speed(self):
+        """QTRM -> High Speed: broadcasts the bootloader's Mode Change
+        MSS->Fabric command (0x32, CT_MODE_CHANGE_MSS_TO_FAB) to all 96
+        QTRMs via the normal SubCommand 0x00 broadcast path - same 100-byte
+        frame shape as Link Check/Get LRU Info. Added 2026-07-18 per
+        Yuvraj: QTRMs already auto-return to high speed on their own after
+        Programming completes, but this lets the operator force it
+        explicitly (e.g. after an aborted session). Firmware's handler for
+        0x32 only toggles GPIOs and exits - no UART reply, so (like QCC ->
+        High Speed) a reply is bonus, not required. Does not touch the
+        gate; QCC itself is still on the low-speed link until QCC -> High
+        Speed is sent separately."""
         if self.busy or not self.gate_open:
             return
-        self._start(op, IAP_POLL_WINDOW_MS, self._on_iap_window_closed)
+        self._start(OP_QTRM_HIGH_SPEED, QTRM_HIGH_SPEED_WINDOW_MS, self._on_simple_timeout)
+        self._send_rp(bl.build_mode_change_mss_to_fab(),
+                      summary="Mode Change MSS->Fabric (0x32) broadcast -> QTRMs to high-speed")
+
+    def start_mode_back(self):
+        """QCC -> High Speed: mirrors Mode Step 2, QCC's own self-directed
+        UART switch back to high speed - RE-DECIDED 2026-07-19 per Yuvraj,
+        NOT the QTRM-targeted 0x32 bootloader command (that's now the
+        separate QTRM -> High Speed button/start_qtrm_high_speed()). Bare
+        90-byte header, CONFIRMED 2026-07-18 wire format, same shape as
+        Mode Step 2 (see build_qcc_level_frame's docstring); the gate
+        re-locks when the settle window closes."""
+        if self.busy or not self.gate_open:
+            return
+        self._start(OP_MODE_BACK, MODE_BACK_WINDOW_MS, self._on_simple_timeout)
+        body = bytes([QCC_BODY_SWITCH_HIGH_SPEED])
+        header = rc_settings.build_header(
+            COMMAND_ID_REMOTE_PROGRAMMING, message_body=body,
+            packet_size=RP_QCC_LEVEL_FRAME_SIZE,
+        )
+        frame = build_qcc_level_frame(header)
+        self._send_fn(frame)
+        self.log_frame.emit(frame, True, "QCC self mode change -> high-speed (SubCommand 0x02)")
+
+    # -- Authenticate / Verify (30 s live-grid polls) + one-shot Program ------
+
+    def start_authenticate(self, image_is_golden: bool = False):
+        self._start_iap_poll(OP_AUTHENTICATE, bl.IAP_AUTHENTICATE, image_is_golden,
+                             self.iap_window_ms)
+
+    def start_verify(self, image_is_golden: bool = False):
+        self._start_iap_poll(OP_VERIFY, bl.IAP_VERIFY, image_is_golden,
+                             self.iap_window_ms)
+
+    def start_program(self, image_is_golden: bool = False):
+        """One-shot IAP PROGRAM (0x36 mode 2) - tells the SmartFusion2 to
+        flash itself from the already-uploaded SPI image. The firmware
+        busy-waits without replying, so a silent window is NOT a failure."""
+        self._start_iap_poll(OP_PROGRAM, bl.IAP_PROGRAM, image_is_golden,
+                             self.iap_window_ms)
+
+    def _start_iap_poll(self, op: str, iap_mode: int, image_is_golden: bool,
+                        window_ms: int):
+        if self.busy or not self.gate_open:
+            return
+        self._start(op, window_ms, self._on_iap_window_closed)
         self._send_rp(
-            bl.build_firmware_update_command(iap_mode),
-            summary=f"Firmware Update Command IAP_MODE={bl.IAP_MODE_NAMES[iap_mode]}",
+            bl.build_firmware_update_command(iap_mode, image_is_golden),
+            summary=f"Firmware Update Command IAP_MODE={bl.IAP_MODE_NAMES[iap_mode]}"
+                    f" ({'GOLDEN' if image_is_golden else 'CURRENT'} image)",
         )
 
     def _on_iap_window_closed(self):
@@ -273,13 +440,17 @@ class RemoteProgController(QObject):
         self.op_window_closed.emit(op)
         if self._got_any_frame:
             self._finish(True, "Poll window closed")
+        elif op == OP_PROGRAM:
+            # iap_program() never replies (busy-wait loop; the FPGA
+            # reprograms and reboots) - silence is the expected outcome.
+            self._finish(True, "PROGRAM sent — no replies (normal: devices reprogram)")
         else:
             self.step_result.emit(op, False, "No response — link may be down")
             self._finish(False, "No response")
 
-    # -- Program (chunk streaming) --------------------------------------------
+    # -- Upload (bitstream transfer: 0x33 announce + 0x34 chunk streaming) ----
 
-    def start_program(self, image: bytes):
+    def start_upload(self, image: bytes, image_is_golden: bool = False):
         if self.busy or not self.gate_open or not image:
             return
         self._chunks = split_chunks(image)
@@ -287,12 +458,24 @@ class RemoteProgController(QObject):
         self.ack_matrix = [dict() for _ in range(NUM_QTRM)]
         self._in_retry_pass = False
         self._retry_queue = []
-        self._program_phase = "iap"
-        self._start(OP_PROGRAM, PROGRAM_START_ACK_MS, self._on_program_phase_timeout)
+        self._image_is_golden = image_is_golden
+        self._op = OP_UPLOAD
+        self._got_any_frame = False
+        self._upload_phase = "stream"
+        # Bitstream Receive announce (0x33): the QTRM enters
+        # recieve_bit_stream(count, 4096, golden) and starts reading
+        # packets. It sends no ack for the announce itself, so chunk 0
+        # follows immediately - its watchdog covers a lost announce too
+        # (no acks -> retries -> abort).
         self._send_rp(
-            bl.build_firmware_update_command(bl.IAP_PROGRAM),
-            summary="Firmware Update Command IAP_MODE=PROGRAM",
+            bl.build_bitstream_receive_command(
+                RP_PAYLOAD_SIZE, self._chunk_count, image_is_golden),
+            summary=f"Bitstream Receive announce (0x33, "
+                    f"{'GOLDEN' if image_is_golden else 'CURRENT'} image, "
+                    f"{self._chunk_count} x {RP_PAYLOAD_SIZE}B)",
         )
+        self._current_chunk = None
+        self._send_next_chunk(first=True)
 
     def start_retry_pass(self):
         """Re-broadcast only the chunks some QTRM is still missing."""
@@ -301,27 +484,15 @@ class RemoteProgController(QObject):
         gaps = self.missing_chunk_indices()
         if not gaps:
             return
-        self._op = OP_PROGRAM
+        self._op = OP_UPLOAD
         self._got_any_frame = False
         self._in_retry_pass = True
         self._retry_queue = gaps
-        self._program_phase = "stream"
+        self._upload_phase = "stream"
         self._send_next_chunk(first=True)
 
-    def _on_program_phase_timeout(self):
-        if self._program_phase == "iap":
-            # Informational only - QTRMs may or may not ack the IAP PROGRAM
-            # command itself before the bitstream starts; begin streaming
-            # either way, but tell the operator what happened.
-            self.step_result.emit(
-                OP_PROGRAM, self._got_any_frame,
-                "PROGRAM command acknowledged" if self._got_any_frame
-                else "No ack to PROGRAM command — streaming anyway",
-            )
-            self._program_phase = "stream"
-            self._current_chunk = None
-            self._send_next_chunk(first=True)
-        elif self._program_phase == "stream":
+    def _on_upload_phase_timeout(self):
+        if self._upload_phase == "stream":
             # Per-chunk watchdog: nobody acked the current chunk in time.
             if self._chunk_attempt < CHUNK_MAX_ATTEMPTS:
                 self._send_current_chunk(retry=True)
@@ -332,8 +503,8 @@ class RemoteProgController(QObject):
                     f"Chunk {idx} got no ack from any QTRM after "
                     f"{CHUNK_MAX_ATTEMPTS} attempts — aborted",
                 )
-        elif self._program_phase == "grace":
-            self._close_program_pass()
+        elif self._upload_phase == "grace":
+            self._close_upload_pass()
 
     def _send_next_chunk(self, first: bool = False):
         if self._in_retry_pass:
@@ -363,16 +534,16 @@ class RemoteProgController(QObject):
                     f" ({real_len} bytes{', retry' if retry else ''})",
         )
         self.chunk_progress.emit(idx, self._chunk_count, self._chunk_attempt)
-        self._retarget_timer(self._on_program_phase_timeout, self.chunk_timeout_ms)
+        self._retarget_timer(self._on_upload_phase_timeout, self.chunk_timeout_ms)
 
     def _enter_grace(self):
-        self._program_phase = "grace"
-        self._retarget_timer(self._on_program_phase_timeout, TRAILING_ACK_GRACE_MS)
+        self._upload_phase = "grace"
+        self._retarget_timer(self._on_upload_phase_timeout, TRAILING_ACK_GRACE_MS)
 
-    def _close_program_pass(self):
+    def _close_upload_pass(self):
         missing = self.missing_chunk_indices()
         failed = self.failed_pairs()
-        self.program_finished.emit(len(missing), len(failed))
+        self.upload_finished.emit(len(missing), len(failed))
         self._finish(
             not missing and not failed,
             "Transfer complete — all QTRMs acked every chunk" if not missing and not failed
@@ -433,8 +604,18 @@ class RemoteProgController(QObject):
             self._finish(True, "Step complete")
             return
 
+        if self._op == OP_MODE_BACK:
+            # QCC's own response (if any) to its self-directed high-speed
+            # switch - RE-DECIDED 2026-07-19, same bare 90-byte shape as
+            # Mode Step 2, so it can't go through extract_rp_slots() below
+            # (which assumes the standard 2970-byte RP response). Just log
+            # it; _on_simple_timeout's OP_MODE_BACK branch always finishes
+            # on the settle window regardless of whether a reply arrived.
+            self.log_frame.emit(raw, False, "QCC mode-change response")
+            return
+
         context = (bl.CONTEXT_BITSTREAM
-                   if self._op == OP_PROGRAM and self._program_phase in ("stream", "grace")
+                   if self._op == OP_UPLOAD and self._upload_phase in ("stream", "grace")
                    else bl.CONTEXT_FW_UPDATE)
         slots = extract_rp_slots(raw)
         decoded_any = False
@@ -461,12 +642,9 @@ class RemoteProgController(QObject):
                 self.lru_row_updated.emit(q, parsed)
             else:
                 self.op_row_updated.emit(op, q, parsed)
-        elif op in (OP_AUTHENTICATE, OP_VERIFY):
+        elif op in (OP_LINK_CHECK, OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
             self.op_row_updated.emit(op, q, parsed)
-        elif op == OP_PROGRAM:
-            if self._program_phase == "iap":
-                self.op_row_updated.emit(op, q, parsed)
-                return
+        elif op == OP_UPLOAD:
             if not isinstance(parsed, bl.BitstreamAck):
                 self.op_row_updated.emit(op, q, parsed)
                 return
@@ -484,5 +662,5 @@ class RemoteProgController(QObject):
             # moves streaming forward - never wait for all 96.
             current = (self._retry_queue[0] if self._in_retry_pass and self._retry_queue
                        else self._current_chunk)
-            if (self._program_phase == "stream" and ok and idx == current):
+            if (self._upload_phase == "stream" and ok and idx == current):
                 self._send_next_chunk()

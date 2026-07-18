@@ -1,22 +1,33 @@
 """
 remote_programming_tab.py
 
-"Remote Programming" - pushes a firmware bitstream from the host PC to all
-96 QTRMs via QCC and drives the firmware-update state machine (mode change
--> LRU info -> authenticate -> program -> verify). Pure view: every action
-is a Signal out to main_window (which delegates to RemoteProgController,
-the session state machine in remote_prog_controller.py), every display
-change is a slot the controller's signals feed.
+"Remote Programming" - pushes a firmware bitstream (.spi) from the host PC
+to all 96 QTRMs via QCC and drives the firmware-update state machine
+(mode change -> link check -> LRU info -> upload -> authenticate ->
+program -> verify -> return to high speed). Pure view: every action is a
+Signal out to main_window (which delegates to RemoteProgController, the
+session state machine in remote_prog_controller.py), every display change
+is a slot the controller's signals feed.
 
 Layout mirrors timing_tab.py's three side-by-side section columns
 (Link Setup | Firmware Image | Operations), with the per-operation results
-area (LRU table / live IAP grid / Program ack matrix) and a collapsible
-raw-frame log underneath.
+area (Link grid / LRU table / live IAP grid / Upload ack matrix) and a
+collapsible raw-frame log underneath.
 
 The whole tab is gated: nothing but the two mode-change steps is enabled
 until BOTH steps have completed, per the IDD's mandatory sequence (first
 switch all 96 QTRMs to the low-speed 115200 link, then switch QCC itself).
+
+A Golden/Current segmented toggle scopes every image operation (Upload /
+Authenticate / Program / Verify) to the golden or current-image flash
+region - it drives the image_is_golden flag on the wire, and recolors
+Upload/Authenticate/Verify amber-gold while Golden is selected so the
+target region is always visually unmistakable (Program keeps its
+destructive red in both modes).
 """
+
+import csv
+from datetime import datetime
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
@@ -43,9 +54,10 @@ from core.command_style import (
 from tabs.link_test_tab import LedMatrix
 from core.packet import NUM_QTRM, RP_PAYLOAD_SIZE
 from apps.remote_prog_controller import (
-    OP_AUTHENTICATE, OP_LRU_INFO, OP_MODE_STEP1, OP_MODE_STEP2, OP_PROGRAM,
-    OP_VERIFY,
+    OP_AUTHENTICATE, OP_LINK_CHECK, OP_LRU_INFO, OP_MODE_BACK, OP_MODE_STEP1,
+    OP_MODE_STEP2, OP_PROGRAM, OP_QTRM_HIGH_SPEED, OP_UPLOAD, OP_VERIFY,
 )
+from widgets.segmented_control import SegmentedControl
 from widgets.spin_field import SpinField
 
 _ACCENT = "#00adb5"
@@ -57,10 +69,23 @@ _CARD_BG = "#393e46"
 
 _SEND_BTN_STYLE = send_button_style(radius=12, font_size_px=14, padding="10px")
 # Program writes flash - use Memory Operation's destructive-action red so it
-# never reads as a routine send.
+# never reads as a routine send. Deliberately NOT swapped to golden when the
+# Golden toggle is on (per Yuvraj's list: Upload/Authenticate/Verify recolor;
+# the destructive-red cue on Program is kept in both modes).
 _PROGRAM_BTN_STYLE = send_button_style(
     color=WRITE_COLOR, hover=WRITE_HOVER_COLOR, pressed=WRITE_PRESSED_COLOR,
     radius=12, font_size_px=14, padding="10px",
+)
+# Golden-image mode restyle for the image-scoped buttons (Upload /
+# Authenticate / Verify) - an unmistakable amber/gold so the operator always
+# sees which flash region the click targets. Same full selector-block
+# pattern as send_button_style (hover/pressed/disabled all restated).
+_GOLDEN_COLOR = "#d4a017"
+_GOLDEN_HOVER = "#c0910f"
+_GOLDEN_PRESSED = "#a87d0e"
+_GOLDEN_BTN_STYLE = send_button_style(
+    color=_GOLDEN_COLOR, hover=_GOLDEN_HOVER, pressed=_GOLDEN_PRESSED,
+    radius=12, font_size_px=14, padding="10px", text_color="#1f2328",
 )
 
 _IDLE_QCOLOR = QColor(*IDLE_MATRIX_RGB)
@@ -152,61 +177,21 @@ def hex_dump(raw: bytes, bytes_per_row: int = 16) -> str:
     return "\n".join(lines)
 
 
-def parse_intel_hex(text: str) -> bytes:
-    """
-    Minimal Intel HEX reader (record types 00 data / 01 EOF / 04 extended
-    linear address / 02 extended segment address; 03/05 start-address
-    records are ignored - they don't contribute image bytes). Returns the
-    contiguous image from the lowest used address, gaps filled 0xFF (the
-    erased-flash value, same as the final-chunk padding).
-    """
-    mem = {}
-    upper = 0
-    for line_no, line in enumerate(text.splitlines(), 1):
-        line = line.strip()
-        if not line:
-            continue
-        if not line.startswith(":"):
-            raise ValueError(f"line {line_no}: missing ':' record mark")
-        try:
-            rec = bytes.fromhex(line[1:])
-        except ValueError:
-            raise ValueError(f"line {line_no}: invalid hex characters")
-        if len(rec) < 5:
-            raise ValueError(f"line {line_no}: record too short")
-        count, addr_hi, addr_lo, rtype = rec[0], rec[1], rec[2], rec[3]
-        data, csum = rec[4:-1], rec[-1]
-        if len(data) != count:
-            raise ValueError(f"line {line_no}: length mismatch")
-        if (sum(rec[:-1]) + csum) & 0xFF != 0:
-            raise ValueError(f"line {line_no}: bad record checksum")
-        if rtype == 0x00:
-            base = upper + (addr_hi << 8) + addr_lo
-            for i, b in enumerate(data):
-                mem[base + i] = b
-        elif rtype == 0x01:
-            break
-        elif rtype == 0x04:
-            upper = ((data[0] << 8) | data[1]) << 16
-        elif rtype == 0x02:
-            upper = ((data[0] << 8) | data[1]) << 4
-        # 0x03/0x05 start-address records: no image bytes, skip
-    if not mem:
-        raise ValueError("no data records found")
-    lo, hi = min(mem), max(mem)
-    return bytes(mem.get(a, 0xFF) for a in range(lo, hi + 1))
-
-
 class RemoteProgrammingTab(QWidget):
     mode_step1_requested = Signal()
     mode_step2_requested = Signal()
+    link_check_requested = Signal()
     lru_info_requested = Signal()
-    authenticate_requested = Signal()
-    verify_requested = Signal()
-    program_requested = Signal(bytes)     # the full firmware image
+    qtrm_high_speed_requested = Signal()  # bootloader 0x32 broadcast -> QTRMs to high speed
+    mode_back_requested = Signal()        # QCC -> High Speed (SubCommand 0x02)
+    authenticate_requested = Signal(bool)  # image_is_golden
+    verify_requested = Signal(bool)        # image_is_golden
+    upload_requested = Signal(bytes, bool)  # (.spi image bytes, image_is_golden)
+    program_requested = Signal(bool)       # image_is_golden (IAP from uploaded image)
     retry_requested = Signal()
     cancel_requested = Signal()
     chunk_timeout_changed = Signal(int)   # milliseconds
+    iap_timeout_changed = Signal(int)     # seconds (Authenticate/Verify/Program window)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -219,6 +204,7 @@ class RemoteProgrammingTab(QWidget):
         self._qtrm_acked = [0] * NUM_QTRM  # successful-ack count per QTRM
         self._qtrm_failed = [False] * NUM_QTRM
         self._have_gaps = False
+        self._lru_has_data = False         # gates the Export CSV button
         self._controller = None            # read-only gap queries, set by main_window
 
         content = QWidget()
@@ -280,9 +266,18 @@ class RemoteProgrammingTab(QWidget):
         form.addWidget(self.step2_status)
 
         form.addWidget(_muted_note(
-            "Step 2 wire format is provisional — Mode 5 message body byte 0 = 0x01; "
-            "unconfirmed against the IDD."
+            "Byte 34 (SubCommand) selects the action: 0x00 = Broadcast to all "
+            "96 QTRMs, 0x01 = QCC → Low-Speed, 0x02 = QCC → High-Speed. "
+            "Confirmed by Yuvraj 2026-07-18."
         ))
+
+        self.link_check_btn = QPushButton("3.  Check Link (all 96 QTRMs)")
+        self.link_check_btn.setFixedHeight(38)
+        self.link_check_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.link_check_btn.clicked.connect(self.link_check_requested.emit)
+        form.addWidget(self.link_check_btn)
+        self.link_status = _status_pill()
+        form.addWidget(self.link_status)
 
         form.addStretch(1)
 
@@ -292,12 +287,53 @@ class RemoteProgrammingTab(QWidget):
         self.gate_label.setStyleSheet(f"color: {_MUTED}; font-size: 12px; background: transparent;")
         form.addWidget(self.gate_label)
 
+        form.addWidget(_muted_note(
+            "Return to Normal — QTRMs auto-return to high speed on their own "
+            "after Programming completes, but this can force it explicitly. "
+            "QCC always requires the manual step below."
+        ))
+
+        self.qtrm_high_speed_btn = QPushButton("QTRM → High Speed")
+        self.qtrm_high_speed_btn.setFixedHeight(34)
+        self.qtrm_high_speed_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.qtrm_high_speed_btn.setToolTip(
+            "Broadcasts the bootloader's Mode Change MSS->Fabric command "
+            "(0x32) to all 96 QTRMs (SubCommand 0x00 broadcast). QTRMs "
+            "already do this automatically after Programming — use this to "
+            "force it (e.g. after an aborted session). Doesn't touch the "
+            "gate; QCC itself stays on the low-speed link until QCC → High "
+            "Speed below is sent."
+        )
+        self.qtrm_high_speed_btn.clicked.connect(self.qtrm_high_speed_requested.emit)
+        form.addWidget(self.qtrm_high_speed_btn)
+        self.qtrm_high_speed_status = _status_pill()
+        form.addWidget(self.qtrm_high_speed_status)
+
+        self.mode_back_btn = QPushButton("QCC → High Speed")
+        self.mode_back_btn.setFixedHeight(34)
+        self.mode_back_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.mode_back_btn.setToolTip(
+            "QCC's own self-directed UART switch back to high speed (mirrors "
+            "Mode Step 2, SubCommand 0x02). The gate re-locks; redo steps "
+            "1–2 to come back."
+        )
+        self.mode_back_btn.clicked.connect(self.mode_back_requested.emit)
+        form.addWidget(self.mode_back_btn)
+        self.mode_back_status = _status_pill()
+        form.addWidget(self.mode_back_status)
+
         return box
 
     def _build_firmware_section(self):
         box, form = _section_box("Firmware Image")
 
-        self.choose_file_btn = QPushButton("Choose File…")
+        # Golden/Current scope toggle - drives image_is_golden on every
+        # image operation and the amber restyle of Upload/Auth/Verify.
+        self.image_toggle = SegmentedControl("Current Image", "Golden Image")
+        self.image_toggle.toggled.connect(self._on_image_toggle)
+        form.addWidget(self.image_toggle)
+
+        self.choose_file_btn = QPushButton("Choose Current .spi File…")
         self.choose_file_btn.setFixedHeight(34)
         self.choose_file_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.choose_file_btn.clicked.connect(self._on_choose_file)
@@ -313,18 +349,15 @@ class RemoteProgrammingTab(QWidget):
         self.file_label.setWordWrap(True)
         grid.addWidget(self.file_label, 0, 0, 1, 2)
 
-        self.format_label = QLabel("—")
-        _field_row(grid, 1, "Format", self.format_label)
-        self.format_label.setStyleSheet(f"color: {_TEXT}; font-size: 13px; background: transparent;")
         self.size_label = QLabel("—")
-        _field_row(grid, 2, "Total size", self.size_label)
+        _field_row(grid, 1, "Total size", self.size_label)
         self.size_label.setStyleSheet(f"color: {_TEXT}; font-size: 13px; background: transparent;")
         self.chunk_count_label = QLabel("—")
-        _field_row(grid, 3, "4K chunks", self.chunk_count_label)
+        _field_row(grid, 2, "4K chunks", self.chunk_count_label)
         self.chunk_count_label.setStyleSheet(f"color: {_TEXT}; font-size: 13px; background: transparent;")
 
         self.chunk_timeout_spin = SpinField(200, 30_000, 2000, field_width=90)
-        _field_row(grid, 4, "Chunk ack timeout (ms)", self.chunk_timeout_spin)
+        _field_row(grid, 3, "Chunk ack timeout (ms)", self.chunk_timeout_spin)
         self.chunk_timeout_spin.spin.valueChanged.connect(self.chunk_timeout_changed.emit)
         form.addLayout(grid)
 
@@ -342,11 +375,11 @@ class RemoteProgrammingTab(QWidget):
 
         form.addStretch(1)
 
-        self.program_btn = QPushButton("Program")
-        self.program_btn.setFixedHeight(38)
-        self.program_btn.setStyleSheet(_PROGRAM_BTN_STYLE)
-        self.program_btn.clicked.connect(self._on_program_clicked)
-        form.addWidget(self.program_btn)
+        self.upload_btn = QPushButton("Upload Current Image")
+        self.upload_btn.setFixedHeight(38)
+        self.upload_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.upload_btn.clicked.connect(self._on_upload_clicked)
+        form.addWidget(self.upload_btn)
 
         row = QHBoxLayout()
         self.retry_btn = QPushButton("Retry Stragglers")
@@ -366,28 +399,62 @@ class RemoteProgrammingTab(QWidget):
         row.addWidget(self.cancel_btn)
         form.addLayout(row)
 
-        self.program_status = _status_pill()
-        form.addWidget(self.program_status)
+        self.upload_status = _status_pill()
+        form.addWidget(self.upload_status)
 
         return box
 
     def _build_operations_section(self):
         box, form = _section_box("Operations")
 
+        lru_row = QHBoxLayout()
         self.lru_btn = QPushButton("Get LRU Info")
-        self.auth_btn = QPushButton("Authenticate")
-        self.verify_btn = QPushButton("Verify")
-        for btn, sig in ((self.lru_btn, self.lru_info_requested),
-                         (self.auth_btn, self.authenticate_requested),
+        self.lru_btn.setFixedHeight(38)
+        self.lru_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.lru_btn.clicked.connect(self.lru_info_requested.emit)
+        lru_row.addWidget(self.lru_btn, 1)
+        self.export_lru_btn = QPushButton("Export CSV")
+        self.export_lru_btn.setFixedHeight(38)
+        self.export_lru_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.export_lru_btn.setToolTip("Save the LRU Info table below to a CSV file")
+        self.export_lru_btn.clicked.connect(self._on_export_lru_clicked)
+        lru_row.addWidget(self.export_lru_btn)
+        form.addLayout(lru_row)
+
+        self.auth_btn = QPushButton("Authenticate Current Image")
+        self.verify_btn = QPushButton("Verify Current Image")
+        for btn, sig in ((self.auth_btn, self.authenticate_requested),
                          (self.verify_btn, self.verify_requested)):
             btn.setFixedHeight(38)
             btn.setStyleSheet(_SEND_BTN_STYLE)
-            btn.clicked.connect(sig.emit)
+            btn.clicked.connect(
+                lambda _=False, s=sig: s.emit(self.image_is_golden))
             form.addWidget(btn)
 
+        self.program_btn = QPushButton("Program Current Image")
+        self.program_btn.setFixedHeight(38)
+        self.program_btn.setStyleSheet(_PROGRAM_BTN_STYLE)
+        self.program_btn.setToolTip(
+            "One-shot IAP PROGRAM (0x36): each SmartFusion2 flashes itself "
+            "from the SPI image already uploaded. Devices reprogram and may "
+            "not reply — silence is normal."
+        )
+        self.program_btn.clicked.connect(self._on_program_clicked)
+        form.addWidget(self.program_btn)
+
+        timeout_grid = QGridLayout()
+        timeout_grid.setHorizontalSpacing(18)
+        timeout_grid.setColumnStretch(0, 1)
+        self.iap_timeout_spin = SpinField(1, 600, 30, field_width=90)
+        _field_row(timeout_grid, 0, "Op timeout (s)", self.iap_timeout_spin)
+        self.iap_timeout_spin.spin.valueChanged.connect(self.iap_timeout_changed.emit)
+        form.addLayout(timeout_grid)
+
         form.addWidget(_muted_note(
-            "Authenticate / Verify poll for 30 s — replies arrive per-QTRM "
-            "and light up the grid below as they land."
+            "Authenticate / Verify / Program poll for the timeout above — "
+            "replies arrive per-QTRM and light up the grid below as they "
+            "land. Program flashes from the already-uploaded image and "
+            "expects no replies."
         ))
 
         form.addStretch(1)
@@ -447,7 +514,7 @@ class RemoteProgrammingTab(QWidget):
         iap_row.addWidget(self.iap_table, 1)
         self.results_stack.addWidget(iap_page)
 
-        # Page 3: Program - LedMatrix + gaps table
+        # Page 3: Upload - LedMatrix + gaps table
         prog_page = QWidget()
         prog_row = QHBoxLayout(prog_page)
         prog_row.setContentsMargins(0, 0, 0, 0)
@@ -457,6 +524,17 @@ class RemoteProgrammingTab(QWidget):
         self.gaps_table = self._make_table(["QTRM", "Acked", "Failed chunks", "Missing chunks"])
         prog_row.addWidget(self.gaps_table, 1)
         self.results_stack.addWidget(prog_page)
+
+        # Page 4: Link Check - LedMatrix + per-QTRM response bytes
+        link_page = QWidget()
+        link_row = QHBoxLayout(link_page)
+        link_row.setContentsMargins(0, 0, 0, 0)
+        link_row.setSpacing(12)
+        self.link_matrix = LedMatrix(clickable=False)
+        link_row.addWidget(self.link_matrix, 1)
+        self.link_table = self._make_table(["QTRM", "State", "Response"])
+        link_row.addWidget(self.link_table, 1)
+        self.results_stack.addWidget(link_page)
 
         return self.results_stack
 
@@ -496,12 +574,41 @@ class RemoteProgrammingTab(QWidget):
 
         return box
 
+    # -- Golden/Current toggle ---------------------------------------------------
+
+    @property
+    def image_is_golden(self) -> bool:
+        return self.image_toggle.isChecked()
+
+    def _on_image_toggle(self, golden: bool):
+        """Recolor the image-scoped buttons (Upload/Auth/Verify go amber-gold
+        in Golden mode) and rename them so the target region is explicit.
+        Program keeps its destructive red but is renamed too."""
+        scope = "Golden" if golden else "Current"
+        style = _GOLDEN_BTN_STYLE if golden else _SEND_BTN_STYLE
+        self.choose_file_btn.setText(f"Choose {scope} .spi File…")
+        self.upload_btn.setText(f"Upload {scope} Image")
+        self.auth_btn.setText(f"Authenticate {scope} Image")
+        self.verify_btn.setText(f"Verify {scope} Image")
+        self.program_btn.setText(f"Program {scope} Image")
+        for btn in (self.choose_file_btn, self.upload_btn, self.auth_btn,
+                    self.verify_btn):
+            btn.setStyleSheet(style)
+        if golden:
+            # The toggle's own selected segment goes gold too - runs after
+            # SegmentedControl._select's default restyle, so this wins.
+            self.image_toggle.right_btn.setStyleSheet(
+                f"QPushButton {{ background-color: {_GOLDEN_COLOR}; color: #1f2328;"
+                "border: none; border-radius: 10px; font-weight: 600; padding: 8px 12px; }"
+            )
+
     # -- file handling -----------------------------------------------------------
 
     def _on_choose_file(self):
+        scope = "Golden" if self.image_is_golden else "Current"
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose Firmware Image", "",
-            "Firmware Images (*.bin *.hex);;All Files (*)",
+            self, f"Choose {scope} SPI Bitstream", "",
+            "SPI Bitstream (*.spi)",
         )
         if not path:
             return
@@ -515,30 +622,11 @@ class RemoteProgrammingTab(QWidget):
             QMessageBox.warning(self, "File error", "File is empty.")
             return
 
+        # .spi is the raw SPI-flash programming image (Libero export) -
+        # loaded verbatim, no container parsing.
         self._raw_file = raw
         self._file_name = path.split("/")[-1].split("\\")[-1]
-
-        # Auto-detect Intel HEX: every non-blank line starts with ':' and the
-        # first record parses. Anything else is treated as raw binary.
-        is_hex = False
-        try:
-            text = raw.decode("ascii")
-            stripped = [ln for ln in text.splitlines() if ln.strip()]
-            is_hex = bool(stripped) and all(ln.strip().startswith(":") for ln in stripped)
-        except UnicodeDecodeError:
-            pass
-
-        if is_hex:
-            try:
-                self._image = parse_intel_hex(text)
-                self.format_label.setText("Intel HEX")
-            except ValueError as e:
-                QMessageBox.warning(self, "Intel HEX error", f"Failed to parse HEX file:\n{e}")
-                self._image = b""
-                return
-        else:
-            self._image = raw
-            self.format_label.setText("Binary")
+        self._image = raw
 
         n_chunks = (len(self._image) + RP_PAYLOAD_SIZE - 1) // RP_PAYLOAD_SIZE
         self.file_label.setText(self._file_name)
@@ -549,28 +637,50 @@ class RemoteProgrammingTab(QWidget):
         self.progress_bar.setFormat("ready")
         self._apply_gate()
 
-    def _on_program_clicked(self):
+    def _on_upload_clicked(self):
         if not self._image:
-            QMessageBox.warning(self, "No image", "Choose a firmware image first.")
+            QMessageBox.warning(self, "No image", "Choose a .spi bitstream file first.")
             return
+        golden = self.image_is_golden
+        scope = "GOLDEN" if golden else "CURRENT"
         n_chunks = (len(self._image) + RP_PAYLOAD_SIZE - 1) // RP_PAYLOAD_SIZE
         confirm = QMessageBox.question(
-            self, "Program firmware",
+            self, "Upload bitstream",
             f"Broadcast {self._file_name} ({len(self._image):,} bytes, "
-            f"{n_chunks} chunks) to all 96 QTRMs?\n\nThis writes flash on every QTRM.",
+            f"{n_chunks} chunks) to all 96 QTRMs?\n\n"
+            f"Target: {scope} image region (SPI flash write on every QTRM).",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if confirm == QMessageBox.Yes:
-            self.program_requested.emit(self._image)
+            self.upload_requested.emit(self._image, golden)
+
+    def _on_program_clicked(self):
+        golden = self.image_is_golden
+        scope = "GOLDEN" if golden else "CURRENT"
+        confirm = QMessageBox.question(
+            self, "Program firmware",
+            f"Command all 96 QTRMs to reprogram their FPGA from the "
+            f"already-uploaded {scope} SPI image?\n\n"
+            "Each SmartFusion2 flashes itself and may reboot — no replies "
+            "are expected while devices reprogram.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if confirm == QMessageBox.Yes:
+            self.program_requested.emit(golden)
 
     # -- gate / enable state -------------------------------------------------------
 
     def _apply_gate(self):
         ops_ok = self._gate_open and not self._session_active
-        for btn in (self.lru_btn, self.auth_btn, self.verify_btn):
+        for btn in (self.link_check_btn, self.lru_btn, self.auth_btn,
+                    self.verify_btn, self.program_btn,
+                    self.qtrm_high_speed_btn, self.mode_back_btn):
             btn.setEnabled(ops_ok)
-        self.program_btn.setEnabled(ops_ok and bool(self._image))
+        self.upload_btn.setEnabled(ops_ok and bool(self._image))
         self.retry_btn.setEnabled(ops_ok and self._have_gaps)
+        # Export needs actual LRU data, not the gate - the table stays
+        # valid after Return to High Speed re-locks operations.
+        self.export_lru_btn.setEnabled(self._lru_has_data and not self._session_active)
         self.cancel_btn.setEnabled(self._session_active)
         self.step1_btn.setEnabled(not self._session_active)
         self.step2_btn.setEnabled(not self._session_active)
@@ -594,17 +704,23 @@ class RemoteProgrammingTab(QWidget):
 
     # -- session lifecycle (driven by main_window / controller) ---------------------
 
-    def mark_session_started(self, op: str):
-        self._session_active = True
-        pill_map = {
+    def _pill_for_op(self, op: str):
+        return {
             OP_MODE_STEP1: self.step1_status,
             OP_MODE_STEP2: self.step2_status,
+            OP_LINK_CHECK: self.link_status,
+            OP_QTRM_HIGH_SPEED: self.qtrm_high_speed_status,
+            OP_MODE_BACK: self.mode_back_status,
             OP_LRU_INFO: self.op_status,
             OP_AUTHENTICATE: self.op_status,
             OP_VERIFY: self.op_status,
-            OP_PROGRAM: self.program_status,
-        }
-        pill = pill_map.get(op)
+            OP_PROGRAM: self.op_status,
+            OP_UPLOAD: self.upload_status,
+        }.get(op)
+
+    def mark_session_started(self, op: str):
+        self._session_active = True
+        pill = self._pill_for_op(op)
         if pill is not None:
             pill.setText("Sending...")
             pill.setStyleSheet(_indicator_style(_PENDING_COLOR))
@@ -613,57 +729,48 @@ class RemoteProgrammingTab(QWidget):
         if op == OP_LRU_INFO:
             self.results_stack.setCurrentIndex(1)
             self._reset_lru_table()
-        elif op in (OP_AUTHENTICATE, OP_VERIFY):
+        elif op in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
             self.results_stack.setCurrentIndex(2)
             self._reset_iap_grid()
-        elif op == OP_PROGRAM:
+        elif op == OP_UPLOAD:
             self.results_stack.setCurrentIndex(3)
             self._reset_program_view()
+        elif op == OP_LINK_CHECK:
+            self.results_stack.setCurrentIndex(4)
+            self._reset_link_grid()
         self._apply_gate()
 
     def mark_retry_started(self):
-        """Like mark_session_started(OP_PROGRAM) but keeps the ack matrix -
+        """Like mark_session_started(OP_UPLOAD) but keeps the ack matrix -
         the stragglers pass fills gaps in the existing state, it doesn't
         start a fresh transfer."""
         self._session_active = True
         self.results_stack.setCurrentIndex(3)
-        self.program_status.setText("Retrying stragglers...")
-        self.program_status.setStyleSheet(_indicator_style(_PENDING_COLOR))
+        self.upload_status.setText("Retrying stragglers...")
+        self.upload_status.setStyleSheet(_indicator_style(_PENDING_COLOR))
         self.progress_bar.setFormat("retrying… %v / %m")
         self._apply_gate()
 
     def on_session_finished(self, op: str, ok: bool, text: str):
         self._session_active = False
-        pill_map = {
-            OP_MODE_STEP1: self.step1_status,
-            OP_MODE_STEP2: self.step2_status,
-            OP_LRU_INFO: self.op_status,
-            OP_AUTHENTICATE: self.op_status,
-            OP_VERIFY: self.op_status,
-            OP_PROGRAM: self.program_status,
-        }
-        pill = pill_map.get(op)
+        pill = self._pill_for_op(op)
         if pill is not None:
             pill.setText(text)
             pill.setStyleSheet(_indicator_style(_OK_COLOR if ok else _FAIL_COLOR))
         self._apply_gate()
 
     def on_step_result(self, op: str, ok: bool, text: str):
-        # Interim per-step feedback (e.g. Program's IAP window closing) -
+        # Interim per-step feedback (e.g. a window closing with no replies) -
         # the final pill state still comes from on_session_finished.
-        if op == OP_MODE_STEP1:
-            self.step1_status.setText(text)
-            self.step1_status.setStyleSheet(_indicator_style(_OK_COLOR if ok else _FAIL_COLOR))
-        elif op == OP_MODE_STEP2:
-            self.step2_status.setText(text)
-            self.step2_status.setStyleSheet(_indicator_style(_OK_COLOR if ok else _FAIL_COLOR))
-        elif op == OP_PROGRAM:
-            self.program_status.setText(text)
-            self.program_status.setStyleSheet(
-                _indicator_style(_PENDING_COLOR if ok else _FAIL_COLOR))
+        pill = self._pill_for_op(op)
+        if pill is None:
+            return
+        if op == OP_UPLOAD:
+            pill.setText(text)
+            pill.setStyleSheet(_indicator_style(_PENDING_COLOR if ok else _FAIL_COLOR))
         else:
-            self.op_status.setText(text)
-            self.op_status.setStyleSheet(_indicator_style(_OK_COLOR if ok else _FAIL_COLOR))
+            pill.setText(text)
+            pill.setStyleSheet(_indicator_style(_OK_COLOR if ok else _FAIL_COLOR))
 
     def show_response_time(self, microseconds: float):
         self.op_response_time_label.setText(f"{microseconds:.0f} µs")
@@ -671,17 +778,52 @@ class RemoteProgrammingTab(QWidget):
     # -- LRU Info ---------------------------------------------------------------------
 
     def _reset_lru_table(self):
+        self._lru_has_data = False
         for q in range(NUM_QTRM):
             for c in range(1, 5):
                 self.lru_table.item(q, c).setText("—")
 
     def on_lru_row(self, q: int, resp):
+        self._lru_has_data = True
         self.lru_table.item(q, 1).setText(str(resp.mfg_id))
         self.lru_table.item(q, 2).setText(str(resp.part_no))
         self.lru_table.item(q, 3).setText(str(resp.serial_num))
         self.lru_table.item(q, 4).setText(str(resp.fw_version))
 
-    # -- Authenticate / Verify live grid -------------------------------------------------
+    def _on_export_lru_clicked(self):
+        """Dump the LRU Info table exactly as displayed ('—' rows included,
+        so a gap in the export is visible rather than silently dropped)."""
+        default_name = f"lru_info_{datetime.now():%Y%m%d_%H%M%S}.csv"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export LRU Info", default_name, "CSV Files (*.csv)")
+        if not path:
+            return
+        if not path.lower().endswith(".csv"):
+            path += ".csv"
+        headers = [self.lru_table.horizontalHeaderItem(c).text()
+                   for c in range(self.lru_table.columnCount())]
+        try:
+            with open(path, "w", newline="", encoding="utf-8") as f:
+                writer = csv.writer(f)
+                writer.writerow(headers)
+                for q in range(NUM_QTRM):
+                    writer.writerow([self.lru_table.item(q, c).text()
+                                     for c in range(self.lru_table.columnCount())])
+        except OSError as e:
+            QMessageBox.warning(self, "Export failed", f"Could not write '{path}':\n{e}")
+            return
+        self.op_response_time_label.setText(
+            f"Exported to {path.split('/')[-1].split(chr(92))[-1]}")
+
+    # -- Link Check live grid --------------------------------------------------------
+
+    def _reset_link_grid(self):
+        self.link_matrix.set_all(_PENDING_QCOLOR)
+        for q in range(NUM_QTRM):
+            self.link_table.item(q, 1).setText("Pending")
+            self.link_table.item(q, 2).setText("—")
+
+    # -- Authenticate / Verify / Program live grid -----------------------------------
 
     def _reset_iap_grid(self):
         self.iap_matrix.set_all(_PENDING_QCOLOR)
@@ -690,7 +832,19 @@ class RemoteProgrammingTab(QWidget):
             self.iap_table.item(q, 2).setText("—")
 
     def on_op_row(self, op: str, q: int, parsed):
-        if op not in (OP_AUTHENTICATE, OP_VERIFY):
+        if op == OP_LINK_CHECK:
+            if isinstance(parsed, bl.MssLinkResponse):
+                self.link_matrix.set_one(q, _OK_QCOLOR)
+                self.link_table.item(q, 1).setText("Linked")
+                self.link_table.item(q, 2).setText(
+                    " ".join(f"{b:02X}" for b in parsed.b1_b4))
+            else:
+                self.link_matrix.set_one(q, _FAIL_QCOLOR)
+                self.link_table.item(q, 1).setText("Unexpected")
+                self.link_table.item(q, 2).setText(
+                    f"cmd_type=0x{parsed.command_type:02X}")
+            return
+        if op not in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
             return
         if isinstance(parsed, bl.FwUpdateResponse):
             ok = parsed.iap_status == 0
@@ -704,12 +858,21 @@ class RemoteProgrammingTab(QWidget):
                 f"hdr={parsed.header_error} crc={parsed.crc_error} tmo={parsed.timeout_error}")
 
     def on_op_window_closed(self, op: str):
-        if op not in (OP_AUTHENTICATE, OP_VERIFY):
+        if op == OP_LINK_CHECK:
+            for q in range(NUM_QTRM):
+                if self.link_table.item(q, 1).text() == "Pending":
+                    self.link_table.item(q, 1).setText("No Response")
+                    self.link_matrix.set_one(q, _FAIL_QCOLOR)
             return
+        if op not in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
+            return
+        no_reply_ok = op == OP_PROGRAM  # devices reprogram, silence is normal
         for q in range(NUM_QTRM):
             if self.iap_table.item(q, 1).text() == "Pending":
-                self.iap_table.item(q, 1).setText("No Response")
-                self.iap_matrix.set_one(q, _FAIL_QCOLOR)
+                self.iap_table.item(q, 1).setText(
+                    "No Reply (normal)" if no_reply_ok else "No Response")
+                if not no_reply_ok:
+                    self.iap_matrix.set_one(q, _FAIL_QCOLOR)
 
     # -- Program ---------------------------------------------------------------------------
 
@@ -767,7 +930,7 @@ class RemoteProgrammingTab(QWidget):
         parts.append(f"{start}-{prev}" if prev > start else str(start))
         return ", ".join(parts)
 
-    def on_program_finished(self, missing_count: int, failed_count: int):
+    def on_upload_finished(self, missing_count: int, failed_count: int):
         self.progress_bar.setFormat("done — %v / %m")
         if self._controller is None:
             return
@@ -798,7 +961,9 @@ class RemoteProgrammingTab(QWidget):
     # -- tab-change reset (only called when no session is active) ---------------------------------
 
     def reset_to_idle(self):
-        for pill in (self.op_status, self.program_status):
+        for pill in (self.op_status, self.upload_status,
+                     self.link_status, self.qtrm_high_speed_status,
+                     self.mode_back_status):
             pill.setText("Not sent yet")
             pill.setStyleSheet(_indicator_style())
         self.op_response_time_label.setText("")

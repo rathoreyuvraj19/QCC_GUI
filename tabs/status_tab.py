@@ -575,9 +575,7 @@ class StatusTab(QWidget):
 
     def _on_send_all_clicked(self, is_auto_resend: bool = False):
         if self._auto_resending and not is_auto_resend:
-            self._resend_timer.stop()
-            self._auto_resending = False
-            self.send_btn.setText("Send All")
+            self.stop_auto_resend()
             return
 
         status_type, sub_status_type, beam_register_address = self._current_params()
@@ -588,6 +586,13 @@ class StatusTab(QWidget):
             self._auto_resending = True
             self.send_btn.setText("Stop")
             self._resend_timer.start(int(interval_s * 1000))
+
+    def stop_auto_resend(self):
+        """Stop the auto-resend timer if active - safe to call unconditionally
+        (e.g. on disconnect) even when no resend is in progress."""
+        self._resend_timer.stop()
+        self._auto_resending = False
+        self.send_btn.setText("Send All")
 
     def reset_to_idle(self):
         """

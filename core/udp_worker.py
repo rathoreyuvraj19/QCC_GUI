@@ -20,11 +20,19 @@ import time
 
 from PySide6.QtCore import QThread, Signal
 
-from core.packet import RP_FRAME_SIZE, TOTAL_PACKET_SIZE
+from core.packet import (
+    RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_QCC_LEVEL_FRAME_SIZE, TOTAL_PACKET_SIZE,
+)
 
-# Every TX frame is 2970 bytes except Remote Programming's 4196-byte
-# [header + 4096 payload + 10 inner command] frames. RX is always 2970.
-_VALID_TX_SIZES = (TOTAL_PACKET_SIZE, RP_FRAME_SIZE)
+# Every TX frame is 2970 bytes except Remote Programming, which has three
+# shapes of its own (see core/packet.py's RP_CMD_FRAME_SIZE comment): 90
+# bytes [header only] for Mode Step 2/Mode Back (QCC's own self-directed
+# UART switch), 100 bytes [header + 10-byte command, no payload] for every
+# other RP command except bitstream DATA chunks, and 4196 bytes [header +
+# 10-byte command + 4096-byte payload] for those chunks (the real
+# file-upload data). RX is always 2970 except Mode Step 2/Mode Back
+# responses, which echo the bare 90-byte frame back.
+_VALID_TX_SIZES = (TOTAL_PACKET_SIZE, RP_QCC_LEVEL_FRAME_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE)
 
 
 class UdpWorker(QThread):
@@ -72,9 +80,14 @@ class UdpWorker(QThread):
                     self.error.emit(f"Socket error while receiving: {e}")
                 break
 
-            if len(data) != TOTAL_PACKET_SIZE:
+            # RX is always the standard 2970-byte frame, EXCEPT Mode Step 2/
+            # Mode Back responses, which echo back the bare 90-byte
+            # QCC-level frame they were sent as (see core/packet.py's
+            # RP_QCC_LEVEL_FRAME_SIZE comment).
+            if len(data) not in (TOTAL_PACKET_SIZE, RP_QCC_LEVEL_FRAME_SIZE):
                 self.error.emit(
-                    f"Received {len(data)} bytes from {addr}, expected {TOTAL_PACKET_SIZE} - dropped"
+                    f"Received {len(data)} bytes from {addr}, expected "
+                    f"{TOTAL_PACKET_SIZE} or {RP_QCC_LEVEL_FRAME_SIZE} - dropped"
                 )
                 continue
 
@@ -87,6 +100,7 @@ class UdpWorker(QThread):
 
         if self._sock:
             self._sock.close()
+            self._sock = None
         self.status.emit("Stopped")
 
     def send_frame(self, frame: bytes):

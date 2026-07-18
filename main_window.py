@@ -55,8 +55,9 @@ from tabs.memory_tab import MemoryTab
 from tabs.timing_tab import TimingTab
 from tabs.remote_programming_tab import RemoteProgrammingTab
 from apps.remote_prog_controller import (
-    RemoteProgController, OP_AUTHENTICATE, OP_LRU_INFO, OP_MODE_STEP1,
-    OP_MODE_STEP2, OP_PROGRAM, OP_VERIFY,
+    RemoteProgController, OP_AUTHENTICATE, OP_LINK_CHECK, OP_LRU_INFO,
+    OP_MODE_BACK, OP_MODE_STEP1, OP_MODE_STEP2, OP_PROGRAM,
+    OP_QTRM_HIGH_SPEED, OP_UPLOAD, OP_VERIFY,
 )
 from tabs.rc_settings_tab import RCSettingsTab
 
@@ -78,27 +79,34 @@ RESPONSE_TIMEOUT_MS = 1000
 # used previously meant the button never had any hover/pressed feedback at
 # all, in any state. Every state gets its own (subtle) hover/pressed shade so
 # the button always looks responsive, not just while idle.
+#
+# padding/border-radius deliberately match theme.py's global QPushButton
+# rule (11px 24px / 16px) - Ping Test sits directly beside Connect in the
+# same row and previously used a much smaller 6px/8px pair, so it rendered
+# visibly undersized next to every other button (fix 2026-07-18). These
+# constants are also reused for connect_btn's transient success/failure
+# flash, so fixing them here fixes both.
 _PING_IDLE_STYLE = (
     "QPushButton { background-color: #4a515a; color: #eeeeee; border: none;"
-    "border-radius: 8px; padding: 6px 14px; }"
+    "border-radius: 16px; padding: 11px 24px; }"
     "QPushButton:hover { background-color: #565f6a; }"
     "QPushButton:pressed { background-color: #3d434b; }"
 )
 _PING_PENDING_STYLE = (
     "QPushButton { background-color: rgb(160, 165, 172); color: #1f2328; border: none;"
-    "border-radius: 8px; padding: 6px 14px; }"
+    "border-radius: 16px; padding: 11px 24px; }"
     "QPushButton:hover { background-color: rgb(150, 155, 162); }"
     "QPushButton:pressed { background-color: rgb(140, 145, 152); }"
 )
 _PING_SUCCESS_STYLE = (
     "QPushButton { background-color: rgb(146, 208, 165); color: #1f2328; border: none;"
-    "border-radius: 8px; padding: 6px 14px; }"
+    "border-radius: 16px; padding: 11px 24px; }"
     "QPushButton:hover { background-color: rgb(130, 195, 150); }"
     "QPushButton:pressed { background-color: rgb(115, 180, 135); }"
 )
 _PING_FAILURE_STYLE = (
     "QPushButton { background-color: rgb(240, 149, 149); color: #1f2328; border: none;"
-    "border-radius: 8px; padding: 6px 14px; }"
+    "border-radius: 16px; padding: 11px 24px; }"
     "QPushButton:hover { background-color: rgb(230, 130, 130); }"
     "QPushButton:pressed { background-color: rgb(220, 115, 115); }"
 )
@@ -167,7 +175,12 @@ class MainWindow(QMainWindow):
         # the actual available screen so it never requests more than fits.
         screen = QGuiApplication.primaryScreen()
         avail = screen.availableGeometry() if screen else None
-        width = 1400 if avail is None else min(1400, avail.width() - 40)
+        # 1400 was too narrow once the connection row's right side (the
+        # Timing Generation toggle + its Send SOB/Send PRT reveal) got
+        # protected with real minimum widths (fix 2026-07-18) - below
+        # ~1500 that content's true minimum overlapped the header panel's
+        # fixed ~340px column. 1500 verified clear of the overlap.
+        width = 1500 if avail is None else min(1500, avail.width() - 40)
         height = 900 if avail is None else min(900, avail.height() - 60)
         self.resize(width, height)
 
@@ -306,13 +319,18 @@ class MainWindow(QMainWindow):
         rp_tab, rp_ctrl = self.remote_programming_tab, self.remote_prog_ctrl
         rp_tab.mode_step1_requested.connect(self._on_rp_mode_step1)
         rp_tab.mode_step2_requested.connect(self._on_rp_mode_step2)
+        rp_tab.link_check_requested.connect(self._on_rp_link_check)
         rp_tab.lru_info_requested.connect(self._on_rp_lru_info)
+        rp_tab.qtrm_high_speed_requested.connect(self._on_rp_qtrm_high_speed)
+        rp_tab.mode_back_requested.connect(self._on_rp_mode_back)
         rp_tab.authenticate_requested.connect(self._on_rp_authenticate)
         rp_tab.verify_requested.connect(self._on_rp_verify)
+        rp_tab.upload_requested.connect(self._on_rp_upload)
         rp_tab.program_requested.connect(self._on_rp_program)
         rp_tab.retry_requested.connect(self._on_rp_retry)
         rp_tab.cancel_requested.connect(rp_ctrl.cancel)
         rp_tab.chunk_timeout_changed.connect(self._on_rp_chunk_timeout_changed)
+        rp_tab.iap_timeout_changed.connect(self._on_rp_iap_timeout_changed)
 
         rp_ctrl.step_result.connect(rp_tab.on_step_result)
         rp_ctrl.gate_changed.connect(rp_tab.on_gate_changed)
@@ -321,7 +339,7 @@ class MainWindow(QMainWindow):
         rp_ctrl.op_window_closed.connect(rp_tab.on_op_window_closed)
         rp_ctrl.chunk_progress.connect(rp_tab.on_chunk_progress)
         rp_ctrl.ack_recorded.connect(rp_tab.on_ack_recorded)
-        rp_ctrl.program_finished.connect(rp_tab.on_program_finished)
+        rp_ctrl.upload_finished.connect(rp_tab.on_upload_finished)
         rp_ctrl.session_finished.connect(rp_tab.on_session_finished)
         rp_ctrl.session_finished.connect(self._on_rp_session_finished)
         rp_ctrl.log_frame.connect(rp_tab.on_log_frame)
@@ -481,6 +499,22 @@ class MainWindow(QMainWindow):
         self.quick_send_toggle_btn.setStyleSheet(_QUICK_SEND_TOGGLE_STYLE)
         self.quick_send_toggle_btn.setToolTip("Show/hide the SOB/PRT quick-send shortcuts")
         self.quick_send_toggle_btn.clicked.connect(self._on_quick_send_toggle_clicked)
+        # Lock in the widest label variant's width up front so the button
+        # can never be compressed narrower than its text by the row's
+        # layout squeeze (this row is already full: two spins, the IP
+        # edit's 120px minimum, three buttons, two status labels) - without
+        # this, Qt shrinks the button below its text's width and paints the
+        # label center-clipped, e.g. "Timing Generation ▲" rendering as just
+        # "ming Generation" (fix 2026-07-18). Measured via sizeHint() (not
+        # a manual fontMetrics/padding estimate - that undershot the
+        # style's real button margins and still left it 33px too narrow).
+        _toggle_texts = ("Timing Generation ▾", "Timing Generation ▴")
+        _toggle_widths = []
+        for _t in _toggle_texts:
+            self.quick_send_toggle_btn.setText(_t)
+            _toggle_widths.append(self.quick_send_toggle_btn.sizeHint().width())
+        self.quick_send_toggle_btn.setText(_toggle_texts[0])
+        self.quick_send_toggle_btn.setMinimumWidth(max(_toggle_widths))
 
         # Quick-access shortcuts to Timing Generation's SOB/PRT sends,
         # available from every tab (not just Timing Generation itself) -
@@ -498,12 +532,21 @@ class MainWindow(QMainWindow):
         shortcuts_row.setContentsMargins(0, 0, 0, 0)
         self.conn_sob_btn = QPushButton("Send SOB")
         self.conn_sob_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
+        self.conn_sob_btn.setMinimumWidth(self.conn_sob_btn.sizeHint().width())
         shortcuts_row.addWidget(self.conn_sob_btn)
 
         self.conn_prt_btn = QPushButton("Send PRT")
         self.conn_prt_btn.setStyleSheet(send_button_style(radius=10, padding="8px 16px"))
+        self.conn_prt_btn.setMinimumWidth(self.conn_prt_btn.sizeHint().width())
         shortcuts_row.addWidget(self.conn_prt_btn)
         self.shortcuts_container.setVisible(False)
+        # The two buttons above refusing to shrink isn't enough on its own -
+        # their WRAPPER widget's own size still comes from the outer row's
+        # layout squeeze, not from its children's protected minimums, so it
+        # was still being capped narrower than both buttons combined need
+        # and the row's internal QHBoxLayout had to overlap them to fit.
+        # Same fix, one level up.
+        self.shortcuts_container.setMinimumWidth(self.shortcuts_container.sizeHint().width())
 
         # Toggle button and its shortcuts stacked as one column, both
         # horizontally centered within it - keeps the SOB/PRT pair visually
@@ -601,6 +644,15 @@ class MainWindow(QMainWindow):
         # lock via session_finished) before the worker goes away, so a
         # chunk watchdog never fires into a dead connection.
         self.remote_prog_ctrl.cancel()
+        # A dead/absent worker can't carry any more resend ticks - stop
+        # every tab's own auto-resend timer too, or their toggle buttons
+        # stay latched "Resending"/"Stop" forever with nothing left to send
+        # (or, before the "Stopped"-status handling above existed, kept
+        # hammering a dead socket and popping a blocking error dialog on
+        # every tick faster than the user could click Stop).
+        self.header_panel.stop_auto_resend()
+        self.link_test_tab.stop_auto_resend()
+        self.status_tab.stop_auto_resend()
         if self.worker is not None:
             # Disconnect the status signal first - worker.stop() blocks
             # until the thread actually exits, and its queued "Stopped"
@@ -624,12 +676,14 @@ class MainWindow(QMainWindow):
 
         # Persist immediately (same "no explicit Save button" pattern as
         # RC Settings) so these three fields remember their last value
-        # across restarts. Skipped while QCC IP is the temporary
-        # "127.0.0.1" auto-fill for an open Status Responder - that's not
-        # a real setting the user typed, and gets correctly re-persisted
-        # once _on_responder_window_closed restores the real value and
-        # fires this same handler again.
-        if not (self._qcc_ip_overridden_for_responder or self._qcc_port_overridden_for_responder):
+        # across restarts. Skipped while QCC IP/Port is a temporary
+        # auto-fill for an open Status Responder or Remote Programming
+        # Tester (both force IP to 127.0.0.1 and may bump the port to find
+        # a free one) - that's not a real setting the user typed, and gets
+        # correctly re-persisted once the respective "_closed" handler
+        # restores the real value and fires this same handler again.
+        if not (self._qcc_ip_overridden_for_responder or self._qcc_port_overridden_for_responder
+                or self._rp_tester_ip_overridden or self._rp_tester_port_overridden):
             connection_settings.local_port = self.local_port_edit.value()
             connection_settings.qcc_ip = self.qcc_ip_edit.text().strip()
             connection_settings.qcc_port = self.qcc_port_edit.value()
@@ -670,6 +724,17 @@ class MainWindow(QMainWindow):
             # keeps rounded corners and working hover/pressed feedback
             # instead of rendering as a flat, square, dead-looking button.
             self.connect_btn.setStyleSheet(_PING_SUCCESS_STYLE)
+        elif msg == "Stopped" and self.worker is not None:
+            # This handler is disconnected from worker.status before an
+            # explicit _disconnect() calls worker.stop() (see there), so a
+            # "Stopped" that reaches here means the worker thread's run()
+            # loop died on its own (e.g. a recv-side OSError) without the
+            # user disconnecting. Left alone, self.worker stays non-None
+            # forever with a dead/closed socket inside it, so every
+            # send - including auto-resend ticks as fast as 0.1s - kept
+            # hitting the dead socket and popping a blocking "UDP Error"
+            # dialog faster than the user could reach the Stop button.
+            self._disconnect("Disconnected (connection lost)")
 
     def _on_worker_error(self, msg: str):
         # Only a bind failure at connect-time means the connection itself
@@ -1456,23 +1521,40 @@ class MainWindow(QMainWindow):
     def _on_rp_mode_step2(self):
         self._rp_start(OP_MODE_STEP2, self.remote_prog_ctrl.start_mode_step2)
 
+    def _on_rp_link_check(self):
+        self._rp_start(OP_LINK_CHECK, self.remote_prog_ctrl.start_link_check)
+
     def _on_rp_lru_info(self):
         self._rp_start(OP_LRU_INFO, self.remote_prog_ctrl.start_lru_info)
 
-    def _on_rp_authenticate(self):
-        self._rp_start(OP_AUTHENTICATE, self.remote_prog_ctrl.start_authenticate)
+    def _on_rp_qtrm_high_speed(self):
+        self._rp_start(OP_QTRM_HIGH_SPEED, self.remote_prog_ctrl.start_qtrm_high_speed)
 
-    def _on_rp_verify(self):
-        self._rp_start(OP_VERIFY, self.remote_prog_ctrl.start_verify)
+    def _on_rp_mode_back(self):
+        self._rp_start(OP_MODE_BACK, self.remote_prog_ctrl.start_mode_back)
 
-    def _on_rp_program(self, image: bytes):
-        self._rp_start(OP_PROGRAM, self.remote_prog_ctrl.start_program, bytes(image))
+    def _on_rp_authenticate(self, image_is_golden: bool):
+        self._rp_start(OP_AUTHENTICATE, self.remote_prog_ctrl.start_authenticate,
+                       image_is_golden)
+
+    def _on_rp_verify(self, image_is_golden: bool):
+        self._rp_start(OP_VERIFY, self.remote_prog_ctrl.start_verify, image_is_golden)
+
+    def _on_rp_upload(self, image: bytes, image_is_golden: bool):
+        self._rp_start(OP_UPLOAD, self.remote_prog_ctrl.start_upload,
+                       bytes(image), image_is_golden)
+
+    def _on_rp_program(self, image_is_golden: bool):
+        self._rp_start(OP_PROGRAM, self.remote_prog_ctrl.start_program, image_is_golden)
 
     def _on_rp_retry(self):
-        self._rp_start(OP_PROGRAM, self.remote_prog_ctrl.start_retry_pass, retry=True)
+        self._rp_start(OP_UPLOAD, self.remote_prog_ctrl.start_retry_pass, retry=True)
 
     def _on_rp_chunk_timeout_changed(self, ms: int):
         self.remote_prog_ctrl.chunk_timeout_ms = ms
+
+    def _on_rp_iap_timeout_changed(self, seconds: int):
+        self.remote_prog_ctrl.iap_window_ms = seconds * 1000
 
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
         # Fed before elapsed_us's below -1.0 -> None normalization - the
@@ -1674,6 +1756,13 @@ class MainWindow(QMainWindow):
         # to update.
 
     def closeEvent(self, event):
+        # connection_settings is only ever mutated by _on_connection_field_changed,
+        # which itself skips writes while a Status Responder/RP Tester override is
+        # active - so the object here already holds the last real (non-overridden)
+        # Local Port/QCC IP/QCC Port the user set. Re-save explicitly on exit so a
+        # crash/kill between edits can't leave the on-disk file stale.
+        connection_settings.save()
+
         # Flushes any in-flight query row and closes the CSV cleanly - rows
         # are already on disk (flushed per-row), this just finalizes.
         self._frame_logger.stop()

@@ -93,8 +93,12 @@ _CHECKSUM_FAIL_NORMAL_STYLE = _CHECKSUM_FAIL_BASE_CSS + " background: transparen
 _CHECKSUM_FAIL_GLOW_STYLE = _CHECKSUM_FAIL_BASE_CSS + f" background-color: {_GLOW_BG};"
 
 # (section title, [field names]) - grouped so related values read together
-# instead of one long undifferentiated list of 26 rows.
+# instead of one long undifferentiated list of 26 rows. QCC Mode is
+# deliberately first (added 2026-07-18 per Yuvraj): whether QCC is on the
+# low-speed remote-programming link or normal high-speed is the thing an
+# operator needs to see before anything else in this panel.
 _FIELD_SECTIONS = [
+    ("QCC Mode", ["QCC_MODE"]),
     ("Routing / Command", [
         "DESTINATION_ID", "SOURCE_ID", "PACKET_SIZE",
         "ECHO_BYTE", "COMMAND_ACK", "QCC_COMMAND",
@@ -336,10 +340,7 @@ class HeaderPanel(QWidget):
         "active" state as the visible latch indicator).
         """
         if self._auto_resending:
-            self._resend_timer.stop()
-            self._auto_resending = False
-            self.query_btn.setStyleSheet(_QUERY_BTN_STYLE)
-            self.query_btn.setText("Query QCC Status")
+            self.stop_auto_resend()
             return
 
         interval_s = self.resend_delay_spin.value()
@@ -349,6 +350,14 @@ class HeaderPanel(QWidget):
             self.query_btn.setStyleSheet(_QUERY_BTN_ACTIVE_STYLE)
             self.query_btn.setText("◉ Resending - click to Stop")
             self._resend_timer.start(int(interval_s * 1000))
+
+    def stop_auto_resend(self) -> None:
+        """Stop the auto-resend timer if active - safe to call unconditionally
+        (e.g. on disconnect) even when no resend is in progress."""
+        self._resend_timer.stop()
+        self._auto_resending = False
+        self.query_btn.setStyleSheet(_QUERY_BTN_STYLE)
+        self.query_btn.setText("Query QCC Status")
 
     def _on_reset_btn_clicked(self) -> None:
         resp = QMessageBox.question(
@@ -417,6 +426,7 @@ class HeaderPanel(QWidget):
         header_raw = raw[0:_HEADER_TOTAL_SIZE]
         h = QCCHeaderTx.from_bytes(header_raw)
 
+        self._set_field("QCC_MODE", "Low-Speed (Remote Programming)" if h.qcc_mode_low_speed() else "High-Speed (Normal)")
         self._set_field("DESTINATION_ID", str(h.destination_id))
         self._set_field("SOURCE_ID", str(h.source_id))
         self._set_field("PACKET_SIZE", str(h.packet_size))
@@ -465,7 +475,15 @@ class HeaderPanel(QWidget):
         self.query_status_label.setText("")
 
     def mark_query_pending(self):
-        self.query_btn.setEnabled(False)
+        # Auto-resend fires this on every tick (as fast as every 0.1s) -
+        # disabling the button here would also disable the "click to Stop"
+        # toggle itself, and since a tick re-marks pending before a slow/
+        # absent response ever clears it, the button would stay disabled
+        # for the whole resend run and the user could never click Stop.
+        # Manual single-shot queries still get the disable-while-waiting
+        # protection against overlapping sends.
+        if not self._auto_resending:
+            self.query_btn.setEnabled(False)
         self.query_status_label.setText("Querying...")
 
     def mark_query_no_response(self):

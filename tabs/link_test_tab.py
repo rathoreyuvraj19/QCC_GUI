@@ -226,9 +226,7 @@ class LinkTestTab(QWidget):
 
     def _on_send_btn_clicked(self):
         if self._auto_resending:
-            self._resend_timer.stop()
-            self._auto_resending = False
-            self.send_btn.setText("Send Link Test")
+            self.stop_auto_resend()
             return
 
         interval_s = self.resend_spin.value()
@@ -237,6 +235,13 @@ class LinkTestTab(QWidget):
             self._auto_resending = True
             self.send_btn.setText("Stop")
             self._resend_timer.start(int(interval_s * 1000))
+
+    def stop_auto_resend(self):
+        """Stop the auto-resend timer if active - safe to call unconditionally
+        (e.g. on disconnect) even when no resend is in progress."""
+        self._resend_timer.stop()
+        self._auto_resending = False
+        self.send_btn.setText("Send Link Test")
 
     def mark_pending(self):
         # No artificial reveal delay - LEDs turn green/red the instant a

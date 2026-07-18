@@ -88,8 +88,10 @@ see "Remote Programming MSG format - updated.docx" for full detail; these
 are either firmware/doc-only discrepancies or too invasive to fix blind
 without a way to visually re-render the document)
  a. MSS Link Response's command_type: firmware's sendLinkRes() sets 0x34
-    (colliding with Bitstream Data Packet), not the documented 0x30. Likely
-    a firmware bug - not changed here.
+    (colliding with Bitstream Data Packet), not the documented 0x30.
+    HANDLED 2026-07-18: parse_slot() now accepts BOTH 0x30 and 0x34 as
+    MssLinkResponse (see CT_LINK_RESPONSE) - safe because bitstream data
+    is TX-only, so an incoming 0x34 can only be a link response.
  b. RF_LRU_STATUS_RESPONSE's command_type: firmware's send_LRU_info() sets
     0x30 (colliding with MSS Link Response), not the documented 0x31. Likely
     a firmware bug - not changed here.
@@ -110,19 +112,35 @@ PSI_FIXED = 0x00        # byte 2 for all fixed 10-byte packets
 PSI_BITSTREAM = 0xBB    # byte 2 for the Bitstream Data Packet only
 
 # Command Type values (byte 3 of every packet)
-CT_LINK = 0x30                   # Link Request (RC->LRU) / MSS Link Response (LRU->RC)
+CT_LINK = 0x30                   # Link Request (RC->LRU); the LRU's link RESPONSE
+                                 # arrives tagged 0x34, not 0x30 - see CT_LINK_RESPONSE
 CT_LRU_STATUS = 0x31             # RF LRU Status Response (LRU->RC)
+CT_MODE_CHANGE_MSS_TO_FAB = 0x32  # Mode Change MSS->Fabric (RC->LRU, post-MSS):
+                                 # "we're done at low speed, hand the UART back to
+                                 # the fabric / return to high speed". Matches
+                                 # firmware's CMD_TYPE_MODE_CHANGE_MSS_TO_FAB
+                                 # (user_common_include.h); after handling it the
+                                 # QTRM processor parks, polling the fabric flag,
+                                 # and re-takes the UART on the next Step-1 command.
 # CT_MODE_CHANGE and CT_BITSTREAM_RECEIVE intentionally share 0x33 - confirmed
 # by Yuvraj 2026-07-16 (byte-level reference: AA 00 33 00 00 03 00 00 00 9A for
-# Mode Change -> MSS_CONTROL). This is a QTRM-state-dependent overload, not a
-# collision: 0x33 means "switch to MSS/low-speed" while the QTRM is still in
-# normal/high-speed fabric mode, and means "prepare to receive bitstream" once
-# the QTRM is already in MSS mode - the QTRM disambiguates by its own current
-# state, never both at once. The GUI always knows which phase it's sending in,
-# so no runtime disambiguation is needed here either.
+# Mode Change -> MSS_CONTROL), and 2026-07-18 against the fabric RTL itself:
+# control_to_mss_proc matches COMMAND = x"33" with RX byte index 5's low nibble
+# = 3 (BSN_MSS_CONTROL) and raises the mode-change flag the MSS polls to take
+# the UART. This is a QTRM-state-dependent overload, not a collision: 0x33 is
+# decoded by the FABRIC (fabric->MSS switch) while the QTRM is still in
+# normal/high-speed mode, and by the PROCESSOR ("prepare to receive bitstream",
+# firmware's CMD_TYPE_START_BIT_STREAM_REC) once in MSS mode - never both at
+# once. The GUI always knows which phase it's sending in, so no runtime
+# disambiguation is needed here either.
 CT_MODE_CHANGE = 0x33            # Mode Change Command (RC->LRU) - pre-MSS only
 CT_BITSTREAM_RECEIVE = 0x33      # Bitstream Receive Command (RC->LRU) - post-MSS only
 CT_BITSTREAM_DATA = 0x34         # Bitstream Data Packet (RC->LRU)
+CT_LINK_RESPONSE = 0x34          # MSS Link Response tag as the FIRMWARE actually
+                                 # sends it (sendLinkRes() hardcodes byte[2]=0x34,
+                                 # not the documented 0x30). RX-side this is
+                                 # unambiguous: 0x34 bitstream data is TX-only,
+                                 # so an incoming 0x34 is always a link response.
 CT_FW_UPDATE_OR_BS_ACK = 0x35    # Firmware Update Command RESPONSE / Bitstream
                                  # Packet Ack (LRU->RC only) - shared, see open item 1
 CT_FW_UPDATE_CMD = 0x36          # Firmware Update Command REQUEST (RC->LRU) -
@@ -242,6 +260,21 @@ def build_mode_change_command(bsn_mode: int) -> bytes:
     pkt[1] = PSI_FIXED
     pkt[2] = CT_MODE_CHANGE
     pkt[5] = bsn_mode & 0x0F
+    return _finish(pkt)
+
+
+def build_mode_change_mss_to_fab() -> bytes:
+    """
+    command_type 0x32: return the QTRMs to high speed - the processor hands
+    the UART back to the fabric (firmware's CMD_TYPE_MODE_CHANGE_MSS_TO_FAB
+    handler calls mode_change_mss_to_fab() and exits the request loop).
+    Body layout mirrors the other minimal commands (no parameters in the
+    firmware's handler); sent while the QTRMs are in MSS/low-speed mode.
+    """
+    pkt = bytearray(9)
+    pkt[0] = BL_HEADER
+    pkt[1] = PSI_FIXED
+    pkt[2] = CT_MODE_CHANGE_MSS_TO_FAB
     return _finish(pkt)
 
 
@@ -405,7 +438,10 @@ def parse_slot(raw10: bytes, context: str = CONTEXT_FW_UPDATE):
     if raw10[0] != BL_HEADER:
         return UnknownSlot(**base)
 
-    if ct == CT_LINK:
+    if ct in (CT_LINK, CT_LINK_RESPONSE):
+        # Real firmware tags its link response 0x34 (sendLinkRes()), the
+        # document says 0x30 - accept both. Incoming 0x34 is unambiguous
+        # because bitstream data (the other 0x34) is TX-only.
         return MssLinkResponse(**base, b1_b4=bytes(raw10[5:9]))
     if ct == CT_LRU_STATUS:
         # byte index 4 (0-based) is msg_counter, not part of the payload -

@@ -32,25 +32,45 @@ NUM_QTRM = 96
 QTRM_BLOCK_SIZE = QTRM_SLOT_SIZE * NUM_QTRM          # 2880
 TOTAL_PACKET_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + QTRM_BLOCK_SIZE  # 2970
 
-# Remote Programming (Mode 5) TX frame - [90-byte header][4096-byte payload]
-# [10-byte inner bootloader command] = 4196 bytes, used for every RP
-# operation EXCEPT Mode Step 1 (QTRMs -> Low-Speed): per Yuvraj 2026-07-16,
-# Step 1 is sent while QTRMs are still in normal per-QTRM-addressed mode
-# (they haven't switched to the QCC's shared low-speed broadcast FIFO yet),
-# so it must use the standard 2970-byte frame shape with the 10-byte
-# bootloader command replicated into each of the 96 30-byte QTRM slots -
-# see build_broadcast_bootloader_frame() below. Every OTHER RP operation
-# (Get LRU Info, Authenticate, Program, Verify) runs after both QTRMs and
-# QCC are already in low-speed mode, where the QCC's FIFO/UART drain
-# broadcasts one 10-byte command to all QTRMs identically, hence the
-# 4196-byte single-command shape. Mode Step 2 (QCC -> Low-Speed) is a
-# separate, not-yet-implemented wire format per Yuvraj - do not assume it
-# matches either shape above until confirmed. The RX side stays the
-# standard 2970-byte frame for all RP operations. See bootloader_packet.py
-# for the inner command set.
+# Remote Programming (Mode 5) TX frames - FOUR shapes depending on phase,
+# per Yuvraj:
+#   1. Mode Step 1 (QTRMs -> Low-Speed): QTRMs are still in normal
+#      per-QTRM-addressed mode (they haven't switched to the QCC's shared
+#      low-speed broadcast FIFO yet), so this one must use the standard
+#      2970-byte frame shape with the 10-byte bootloader command replicated
+#      into each of the 96 30-byte QTRM slots - see
+#      build_broadcast_bootloader_frame() below.
+#   2. Mode Step 2 (QCC -> Low-Speed) and Mode Back/QCC -> High-Speed are
+#      both QCC's OWN self-directed UART switch, not QTRM-targeted
+#      bootloader commands at all - RE-DECIDED 2026-07-19 per Yuvraj, bare
+#      [90-byte header], no inner command, no payload = 90 bytes. CONFIRMED
+#      2026-07-18: the header's byte 34 (message_body offset 0) is a
+#      SubCommand selector QCC itself reads and acts on - see
+#      QCC_BODY_SWITCH_LOW_SPEED (0x01) / QCC_BODY_SWITCH_HIGH_SPEED (0x02)
+#      in remote_prog_controller.py - see build_qcc_level_frame() below.
+#   3. Every QTRM-targeted command once QTRMs+QCC are in low-speed mode
+#      (Link Check, Get LRU Info, Authenticate/Verify/Program, Bitstream
+#      Receive announce, QTRM -> High Speed) carries no payload of its own -
+#      just [90-byte header][10-byte inner bootloader command] = 100 bytes.
+#      RE-DECIDED 2026-07-19 (was previously sent as a 4196-byte frame
+#      zero-padded out to the full payload size, which wasted 4086 bytes per
+#      command) - see build_remote_programming_cmd_frame(). These all ride
+#      SubCommand 0x00 (Broadcast) at byte 34 - it defaults to 0x00 because
+#      rc_settings.build_header() leaves message_body all-zero unless a
+#      caller explicitly overrides it (only Mode Step 2/Mode Back do).
+#   4. ONLY the actual bitstream DATA chunks during Upload (CT_BITSTREAM_DATA,
+#      0x34 - the real file-transfer payload) use the full [90-byte header]
+#      [10-byte inner command][4096-byte payload] = 4196-byte shape - see
+#      build_remote_programming_frame() below. Also SubCommand 0x00 (Broadcast).
+# The RX side stays the standard 2970-byte frame for QTRM-targeted RP
+# operations (shapes 1/3/4); Mode Step 2/Mode Back responses (shape 2) are
+# themselves bare 90-byte frames - see remote_prog_controller.py's on_frame().
+# See bootloader_packet.py for the inner command set.
 RP_PAYLOAD_SIZE = 4096
 RP_INNER_CMD_SIZE = 10
 RP_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + RP_PAYLOAD_SIZE + RP_INNER_CMD_SIZE  # 4196
+RP_CMD_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + RP_INNER_CMD_SIZE  # 100
+RP_QCC_LEVEL_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE  # 90 - Mode Step 2 / Mode Back only
 
 # ---------------------------------------------------------------------------
 # CRC-8 / CCITT  (poly 0x07, init 0x00, no reflect, xorout 0x00)
@@ -806,7 +826,18 @@ def build_header_only_frame(header: bytes) -> bytes:
 def build_remote_programming_frame(header: bytes, inner_cmd: bytes,
                                    payload: bytes = b"") -> bytes:
     """
-    [90-byte header][4096-byte payload][10-byte inner bootloader command].
+    [90-byte header][10-byte inner bootloader command][4096-byte payload].
+
+    RE-DECIDED 2026-07-19: reserved for the actual bitstream DATA chunks
+    (CT_BITSTREAM_DATA, 0x34) ONLY - every other low-speed RP command now
+    uses build_remote_programming_cmd_frame() below instead (no payload to
+    carry, so no reason to pad one). Do not call this for commands with an
+    empty payload; use the other builder.
+
+    Order confirmed by Yuvraj 2026-07-18: QCC strips the 90-byte header and
+    forwards bytes 90..4195 to the QTRMs verbatim, so the command header
+    must precede the payload - the QTRM firmware's recieve_bit_stream()
+    reads its 10-byte header first, then the payload.
 
     payload shorter than 4096 is zero-filled to the right; Program chunk
     callers pass their own 0xFF-padded final chunk instead (padding byte is
@@ -816,11 +847,42 @@ def build_remote_programming_frame(header: bytes, inner_cmd: bytes,
     assert len(inner_cmd) == RP_INNER_CMD_SIZE
     assert len(payload) <= RP_PAYLOAD_SIZE
     out = bytearray(header)
+    out.extend(inner_cmd)
     out.extend(payload)
     out.extend(bytes(RP_PAYLOAD_SIZE - len(payload)))
-    out.extend(inner_cmd)
     assert len(out) == RP_FRAME_SIZE
     return bytes(out)
+
+
+def build_remote_programming_cmd_frame(header: bytes, inner_cmd: bytes) -> bytes:
+    """
+    [90-byte header][10-byte inner bootloader command] = 100 bytes, no
+    payload. Added 2026-07-19 per Yuvraj: once QTRMs+QCC are in low-speed
+    mode, every RP command EXCEPT the bitstream DATA chunks (which need the
+    real 4096-byte payload - see build_remote_programming_frame()) sends
+    just its 10-byte command with no payload padding. This is what gets
+    broadcast to all 96 QTRMs by the QCC's low-speed FIFO/UART drain.
+    """
+    assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+    assert len(inner_cmd) == RP_INNER_CMD_SIZE
+    out = bytearray(header)
+    out.extend(inner_cmd)
+    assert len(out) == RP_CMD_FRAME_SIZE
+    return bytes(out)
+
+
+def build_qcc_level_frame(header: bytes) -> bytes:
+    """
+    Bare 90-byte header, no inner bootloader command and no QTRM data
+    block. Added 2026-07-19 per Yuvraj: Mode Step 2 (QCC -> Low-Speed) and
+    Mode Back (QCC -> High-Speed) are both QCC's own self-directed UART
+    switch, not QTRM-targeted bootloader commands, so neither needs
+    anything past the header itself - the switch direction rides in the
+    header's byte 34 SubCommand (see QCC_BODY_SWITCH_LOW_SPEED/
+    HIGH_SPEED in remote_prog_controller.py, CONFIRMED 2026-07-18).
+    """
+    assert len(header) == RP_QCC_LEVEL_FRAME_SIZE
+    return header
 
 
 def extract_rp_slots(raw: bytes) -> list:
@@ -910,7 +972,7 @@ class QCCHeaderTx:
     71-74   OUTPUT_PRT_PRI         4     uint32  PRT PRI (Pulse Repetition Interval) measured on output, us
     75-76   INPUT_PPS_WIDTH_US     2     uint16
     77-80   PPS_COUNTER            4     uint32  Separate 32-bit counter, distinct from INPUT_PPS_COUNT
-    81      GENERATOR_STATUS       1     byte    Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bits 7-2: reserved.
+    81      GENERATOR_STATUS       1     byte    Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE (0=normal high-speed, 1=low-speed remote-programming) - added 2026-07-18. Bits 7-3: reserved.
     82-84   RESERVED1              3     byte[3]
     85-88   CHIP_ID                4     uint32  Lower 32 bits of a 64-bit chip ID
     89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
@@ -963,7 +1025,7 @@ class QCCHeaderTx:
         self.output_prt_pri = 0
         self.input_pps_width_us = 0
         self.pps_counter = 0
-        self.generator_status = 0  # Bit 0: SOB_STATE, Bit 1: PRT_STATE
+        self.generator_status = 0  # Bit 0: SOB_STATE, Bit 1: PRT_STATE, Bit 2: QCC_MODE
         self.chip_id = 0
         self.checksum_ok = None
 
@@ -975,9 +1037,20 @@ class QCCHeaderTx:
         """Return True if PRT is internal generator, False if bypass."""
         return bool((self.generator_status >> 1) & 0x01)
 
-    def set_generator_state(self, sob_internal: bool, prt_internal: bool) -> None:
-        """Set SOB and PRT state bits in generator_status."""
-        self.generator_status = (int(sob_internal) & 0x01) | ((int(prt_internal) & 0x01) << 1)
+    def qcc_mode_low_speed(self) -> bool:
+        """Return True if QCC is in low-speed remote-programming mode,
+        False if normal high-speed mode. Bit 2 of GENERATOR_STATUS, added
+        2026-07-18 per Yuvraj."""
+        return bool((self.generator_status >> 2) & 0x01)
+
+    def set_generator_state(self, sob_internal: bool, prt_internal: bool,
+                            qcc_mode_low_speed: bool = False) -> None:
+        """Set SOB, PRT, and QCC-mode state bits in generator_status."""
+        self.generator_status = (
+            (int(sob_internal) & 0x01)
+            | ((int(prt_internal) & 0x01) << 1)
+            | ((int(qcc_mode_low_speed) & 0x01) << 2)
+        )
 
     def to_bytes(self) -> bytes:
         body = struct.pack(

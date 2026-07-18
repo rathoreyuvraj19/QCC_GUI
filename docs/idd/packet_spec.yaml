@@ -96,7 +96,7 @@ qcc_commands:
   - { value: 0x05, name: PRT_INTERNAL_GEN,    status: defined, desc: "No DMA triggered; configures the PRT internal generator using the parameters in message_body.", triggers_dma_write: false, qtrm_data_block_state: tbd }
   - { value: 0x06, name: SOB_INTERNAL_GEN,    status: defined, desc: "No DMA triggered; configures the SOB internal generator using the width in message_body.", triggers_dma_write: false, qtrm_data_block_state: tbd }
   - { value: 0x07, name: PPS_INTERNAL_GEN,    status: defined, desc: "No DMA triggered; configures the PPS internal generator using the width in message_body.", triggers_dma_write: false, qtrm_data_block_state: tbd }
-  - { value: 0xFF, name: REMOTE_PROGRAMMING,  status: defined, desc: "No DMA triggered. Selects a Remote Programming session; byte 34 (message_body offset 0) is a SubCommand selector - see remote_programming_subcommands below. CONFIRMED 2026-07-18 per Yuvraj. Does NOT use the standard 56-byte message_body frame shape - see remote_programming_framing below.", triggers_dma_write: false, qtrm_data_block_state: tbd }
+  - { value: 0xFF, name: REMOTE_PROGRAMMING,  status: defined, desc: "No DMA triggered. Selects a Remote Programming session; byte 34 (message_body offset 0) is a SubCommand selector - see remote_programming_subcommands below. Does NOT use the standard 56-byte message_body frame shape - see remote_programming_framing below.", triggers_dma_write: false, qtrm_data_block_state: tbd }
 
 # -----------------------------------------------------------------------------
 # Message Body (bytes 34-89, 56 bytes) - TX direction (RC -> QCC command).
@@ -162,18 +162,18 @@ message_body_tx:
       status: defined
       fields:
         - { offset: 0, name: sub_command, size: 1, type: u8, desc: "SubCommand selector for the Remote Programming session - see remote_programming_subcommands below.", enum_ref: remote_programming_subcommands }
-      note: "CONFIRMED 2026-07-18 per Yuvraj. sub_command occupies only byte 34 (message_body offset 0) - REMOTE_PROGRAMMING frames do NOT use the rest of the standard 56-byte message_body shape this table otherwise describes; see remote_programming_framing below for the actual on-wire frame shapes, which vary by sub_command."
+      note: "sub_command occupies only byte 34 (message_body offset 0) - REMOTE_PROGRAMMING frames do NOT use the rest of the standard 56-byte message_body shape this table otherwise describes; see remote_programming_framing below for the actual on-wire frame shapes, which vary by sub_command."
 
 # -----------------------------------------------------------------------------
-# REMOTE_PROGRAMMING SubCommand enum (byte 34 / message_body offset 0) -
-# CONFIRMED 2026-07-18 per Yuvraj. QCC itself reads this byte and acts on it
-# directly (it is not forwarded to the QTRMs).
+# REMOTE_PROGRAMMING SubCommand enum (byte 34 / message_body offset 0).
+# QCC itself reads this byte and acts on it directly (it is not forwarded
+# to the QTRMs).
 # -----------------------------------------------------------------------------
 
 remote_programming_subcommands:
-  - { value: 0x00, name: BROADCAST,     status: defined, desc: "QCC reads this and forwards the following 10 (or 10+4096) bytes verbatim to all 96 QTRMs over the shared low-speed FIFO/UART. The standard path for every QTRM-targeted RP command: Link Check, Get LRU Info, Authenticate/Verify/Program, Bitstream Receive announce, Bitstream DATA chunks, and the QTRM -> High Speed broadcast (bootloader command_type 0x32, CT_MODE_CHANGE_MSS_TO_FAB) added 2026-07-18." }
+  - { value: 0x00, name: BROADCAST,     status: defined, desc: "QCC reads this and forwards the following 10 (or 10+4096) bytes verbatim to all 96 QTRMs over the shared low-speed FIFO/UART. The standard path for every QTRM-targeted RP command: Link Check, Get LRU Info, Authenticate/Verify/Program, Bitstream Receive announce, Bitstream DATA chunks, and the QTRM -> High Speed broadcast (bootloader command_type 0x32, CT_MODE_CHANGE_MSS_TO_FAB)." }
   - { value: 0x01, name: QCC_LOW_SPEED,  status: defined, desc: "QCC switches its own UART to the low-speed 115200 bootloader link (Mode Step 2). Bare 90-byte header only - no inner command, no payload." }
-  - { value: 0x02, name: QCC_HIGH_SPEED, status: defined, desc: "QCC switches its own UART back to high speed (QCC -> High Speed / Mode Back). Bare 90-byte header only - no inner command, no payload. VALUE CHANGED 2026-07-18 from 0x00 to 0x02 so 0x00 is reserved exclusively for BROADCAST." }
+  - { value: 0x02, name: QCC_HIGH_SPEED, status: defined, desc: "QCC switches its own UART back to high speed (QCC -> High Speed / Mode Back). Bare 90-byte header only - no inner command, no payload. Value 0x02 (not 0x00) so 0x00 is reserved exclusively for BROADCAST." }
 
 # -----------------------------------------------------------------------------
 # Remote Programming on-wire frame shapes - these are NOT the standard
@@ -216,7 +216,7 @@ message_body_response:
     - { offset: [38,41], name: output_prt_pri,        size: 4, type: u32, desc: "PRT PRI (Pulse Repetition Interval) measured on output, microseconds" }
     - { offset: [42,43], name: input_pps_width_us,    size: 2, type: u16, desc: "Last PPS pulse width measured on input, microseconds" }
     - { offset: [44,47], name: pps_counter,           size: 4, type: u32, desc: "Separate 32-bit PPS counter (distinct from input_pps_count)" }
-    - { offset: 48,      name: generator_status,      size: 1, type: u8, status: defined, desc: "Generator/mode status. Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE / speed toggle status (0=normal high-speed mode, 1=low-speed remote-programming mode) - added 2026-07-18 per Yuvraj. Bits 7-3: reserved (0x00).", enum_ref: generator_status_bits }
+    - { offset: 48,      name: generator_status,      size: 1, type: u8, status: defined, desc: "Generator/mode status. Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE / speed toggle status (0=normal high-speed mode, 1=low-speed remote-programming mode). Bits 7-3: reserved (0x00).", enum_ref: generator_status_bits }
     - { offset: [49,51], name: reserved,              size: 3, type: "u8[3]", desc: "Reserved" }
     - { offset: [52,55], name: chip_id,               size: 4, type: u32, desc: "Lower 32 bits of the 64-bit chip ID, positioned immediately before the Checksum" }
 
@@ -228,7 +228,7 @@ message_body_response:
 generator_status_bits:
   - { bit: 0, name: SOB_STATE,  status: defined, desc: "0=bypass, 1=internal" }
   - { bit: 1, name: PRT_STATE,  status: defined, desc: "0=bypass, 1=internal" }
-  - { bit: 2, name: QCC_MODE,   status: defined, desc: "Speed toggle status - 0=normal high-speed mode, 1=low-speed remote-programming mode. Added 2026-07-18 per Yuvraj." }
+  - { bit: 2, name: QCC_MODE,   status: defined, desc: "Speed toggle status - 0=normal high-speed mode, 1=low-speed remote-programming mode." }
 
 # -----------------------------------------------------------------------------
 # QTRM data block: 96 fixed 30-byte slots, positional QTRM ID (not a field
@@ -296,7 +296,6 @@ qtrm_command_types:
 
 open_items:
   - "What format is time_of_day (header bytes 15-18)?"
-  - "RESOLVED 2026-07-18: REMOTE_PROGRAMMING command (0xFF) byte 34 is a SubCommand selector (0x00 Broadcast/0x01 QCC Low-Speed/0x02 QCC High-Speed - see remote_programming_subcommands), and the frame does use a different, variable-length shape than the standard 56-byte message_body - see remote_programming_framing."
   - "PRT_BYPASS/PRT_INTERNAL_GEN's prt_width_us and SOB_BYPASS/SOB_INTERNAL_GEN/PPS_INTERNAL_GEN's width field sizes/units are drafted and approved, but not yet cross-checked against the actual sob_gen/prt_gen VHDL register widths (e.g. sob_gen's i_sob_width port is 8-bit in the current RTL, vs 16-bit specified here - needs reconciliation before implementation)."
   - "qtrm_data_block_state is only confirmed for DATA_DISTRIBUTION (populated) and QCC_STATUS (empty) - QCC_RESET, PRT_BYPASS, SOB_BYPASS, PRT_INTERNAL_GEN, SOB_INTERNAL_GEN, PPS_INTERNAL_GEN, REMOTE_PROGRAMMING are still TBD."
   - "Which GUI command tabs should send which QCC_COMMAND value is a code-level judgment call, not stated directly in the IDD - Dwell/Link Test/Status/RX Cal/TX Cal/Isolation/Soft Reset/Memory Operation are currently all mapped to DATA_DISTRIBUTION (0x00) in core/rc_settings.py on the reasoning that they all deliver a QTRM-targeted command via the DMA'd 2880-byte data block; Soft Reset and Memory Operation previously used QCC_RESET(4)/REMOTE_PROGRAMMING(5) under the old mode scheme, which don't have a clean equivalent anymore. Confirm with Yuvraj."

@@ -76,32 +76,31 @@ instructions and a file-by-file overview.
      rather than a missing `PPS_BYPASS` command.
    See `docs/idd/packet_spec.yaml`'s `open_items` for the full detail.
 
-5. **Remote Programming low-speed command framing RE-DECIDED 2026-07-19,
-   byte 34 SubCommand scheme CONFIRMED 2026-07-18** - per Yuvraj: once
-   QTRMs+QCC are in low-speed mode, every RP command EXCEPT the bitstream
-   DATA chunks sends `[90-byte header][10-byte inner command]` = 100
-   bytes, no payload padding - previously these were sent as 4196-byte
-   frames zero-padded out to the full payload size. Only the actual
-   bitstream DATA chunks (`CT_BITSTREAM_DATA`, 0x34 - the real file-upload
-   payload) still use the full `[90-byte header][10-byte
+5. **Remote Programming low-speed command framing RE-DECIDED 2026-07-19** -
+   per Yuvraj: once QTRMs+QCC are in low-speed mode, every RP command
+   EXCEPT the bitstream DATA chunks sends `[90-byte header][10-byte inner
+   command]` = 100 bytes, no payload padding - previously these were sent
+   as 4196-byte frames zero-padded out to the full payload size. Only the
+   actual bitstream DATA chunks (`CT_BITSTREAM_DATA`, 0x34 - the real
+   file-upload payload) still use the full `[90-byte header][10-byte
    command][4096-byte payload]` = 4196-byte shape. Mode Step 1 (still
    per-QTRM-addressed, not yet in low-speed mode) is unaffected - it keeps
    the 2970-byte replicated-slot frame.
 
    Header byte 34 (message_body offset 0, `QCC_COMMAND=0xFF`/
    `REMOTE_PROGRAMMING` only) is a **SubCommand** QCC itself reads and acts
-   on, confirmed by Yuvraj 2026-07-18: `0x00` = Broadcast (QCC fans the
-   rest of the frame out to all 96 QTRMs unmodified - the path every
-   QTRM-targeted RP command above already uses, since
-   `rc_settings.build_header()` leaves `message_body` all-zero by default),
-   `0x01` = QCC -> Low-Speed (Mode Step 2), `0x02` = QCC -> High-Speed
-   (**value changed from `0x00`** to make room for Broadcast at `0x00`).
-   See `RP_SUBCMD_BROADCAST`/`QCC_BODY_SWITCH_LOW_SPEED`/
+   on, per Yuvraj: `0x00` = Broadcast (QCC fans the rest of the frame out
+   to all 96 QTRMs unmodified - the path every QTRM-targeted RP command
+   above already uses, since `rc_settings.build_header()` leaves
+   `message_body` all-zero by default), `0x01` = QCC -> Low-Speed (Mode
+   Step 2), `0x02` = QCC -> High-Speed (**value changed from `0x00`** to
+   make room for Broadcast at `0x00`). See
+   `RP_SUBCMD_BROADCAST`/`QCC_BODY_SWITCH_LOW_SPEED`/
    `QCC_BODY_SWITCH_HIGH_SPEED` in `apps/remote_prog_controller.py` and
    `remote_programming_subcommands`/`remote_programming_framing` in
    `docs/idd/packet_spec.yaml`.
 
-   Also added 2026-07-18: a **QTRM -> High Speed** command/button
+   Also new: a **QTRM -> High Speed** command/button
    (`OP_QTRM_HIGH_SPEED`, `RemoteProgController.start_qtrm_high_speed()`),
    broadcasting the bootloader's existing `build_mode_change_mss_to_fab()`
    (command_type 0x32) via the normal SubCommand 0x00 broadcast path.
@@ -117,10 +116,9 @@ instructions and a file-by-file overview.
    `apps/remote_prog_tester_app.py`'s mock responder, `tabs/remote_programming_tab.py`,
    `main_window.py`, and `core/udp_worker.py`'s `_VALID_TX_SIZES` are all
    updated to match. `docs/idd/QCC_Protocol.docx`'s Remote Programming
-   table (byte 33/34 remarks) was updated 2026-07-18 to reflect the
-   SubCommand scheme.
+   table (byte 33/34 remarks) reflects the SubCommand scheme.
 
-6. **GENERATOR_STATUS bit 2 (QCC Mode) ADDED 2026-07-18** - header byte 82
+6. **GENERATOR_STATUS bit 2 (QCC Mode)** - header byte 82
    (`GENERATOR_STATUS`, response direction) gained a third status bit per
    Yuvraj: bit 0 `SOB_STATE`, bit 1 `PRT_STATE` (unchanged), and now bit 2
    `QCC_MODE`/speed-toggle status (0 = normal high-speed mode, 1 =
@@ -132,5 +130,4 @@ instructions and a file-by-file overview.
    deliberately the FIRST section in the panel, above "Routing / Command" -
    so the operator sees at a glance whether QCC is on the low-speed
    remote-programming link before anything else. `docs/idd/QCC_Protocol.docx`'s
-   byte 82 GENERATOR_STATUS row was updated 2026-07-18 to add the bit 2
-   remark.
+   byte 82 GENERATOR_STATUS row reflects the bit 2 remark.

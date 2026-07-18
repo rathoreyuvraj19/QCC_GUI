@@ -43,9 +43,9 @@ TOTAL_PACKET_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + QTRM_BLOCK_SIZE  # 297
 #   2. Mode Step 2 (QCC -> Low-Speed) and Mode Back/QCC -> High-Speed are
 #      both QCC's OWN self-directed UART switch, not QTRM-targeted
 #      bootloader commands at all - RE-DECIDED 2026-07-19 per Yuvraj, bare
-#      [90-byte header], no inner command, no payload = 90 bytes. CONFIRMED
-#      2026-07-18: the header's byte 34 (message_body offset 0) is a
-#      SubCommand selector QCC itself reads and acts on - see
+#      [90-byte header], no inner command, no payload = 90 bytes. The
+#      header's byte 34 (message_body offset 0) is a SubCommand selector
+#      QCC itself reads and acts on - see
 #      QCC_BODY_SWITCH_LOW_SPEED (0x01) / QCC_BODY_SWITCH_HIGH_SPEED (0x02)
 #      in remote_prog_controller.py - see build_qcc_level_frame() below.
 #   3. Every QTRM-targeted command once QTRMs+QCC are in low-speed mode
@@ -879,7 +879,7 @@ def build_qcc_level_frame(header: bytes) -> bytes:
     switch, not QTRM-targeted bootloader commands, so neither needs
     anything past the header itself - the switch direction rides in the
     header's byte 34 SubCommand (see QCC_BODY_SWITCH_LOW_SPEED/
-    HIGH_SPEED in remote_prog_controller.py, CONFIRMED 2026-07-18).
+    HIGH_SPEED in remote_prog_controller.py).
     """
     assert len(header) == RP_QCC_LEVEL_FRAME_SIZE
     return header
@@ -972,7 +972,7 @@ class QCCHeaderTx:
     71-74   OUTPUT_PRT_PRI         4     uint32  PRT PRI (Pulse Repetition Interval) measured on output, us
     75-76   INPUT_PPS_WIDTH_US     2     uint16
     77-80   PPS_COUNTER            4     uint32  Separate 32-bit counter, distinct from INPUT_PPS_COUNT
-    81      GENERATOR_STATUS       1     byte    Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE (0=normal high-speed, 1=low-speed remote-programming) - added 2026-07-18. Bits 7-3: reserved.
+    81      GENERATOR_STATUS       1     byte    Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE (0=normal high-speed, 1=low-speed remote-programming). Bits 7-3: reserved.
     82-84   RESERVED1              3     byte[3]
     85-88   CHIP_ID                4     uint32  Lower 32 bits of a 64-bit chip ID
     89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
@@ -1039,8 +1039,7 @@ class QCCHeaderTx:
 
     def qcc_mode_low_speed(self) -> bool:
         """Return True if QCC is in low-speed remote-programming mode,
-        False if normal high-speed mode. Bit 2 of GENERATOR_STATUS, added
-        2026-07-18 per Yuvraj."""
+        False if normal high-speed mode. Bit 2 of GENERATOR_STATUS."""
         return bool((self.generator_status >> 2) & 0x01)
 
     def set_generator_state(self, sob_internal: bool, prt_internal: bool,

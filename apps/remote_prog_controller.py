@@ -21,11 +21,10 @@ Operation flow (per the IDD + decisions with Yuvraj 2026-07-08/18):
   2. Mode Step 2 - tell QCC itself to switch to low-speed: a bare 90-byte
      header-only frame (RE-DECIDED 2026-07-19 - was a 2970-byte
      header-only frame before) with byte 34 (SubCommand) =
-     QCC_BODY_SWITCH_LOW_SPEED (0x01). CONFIRMED 2026-07-18 per Yuvraj:
-     byte 34 of every Remote Programming frame is a SubCommand selector
-     QCC itself reads and acts on - 0x00 Broadcast (fan the rest of the
-     frame out to all 96 QTRMs), 0x01 QCC -> Low-Speed, 0x02 QCC ->
-     High-Speed.
+     QCC_BODY_SWITCH_LOW_SPEED (0x01). Byte 34 of every Remote Programming
+     frame is a SubCommand selector QCC itself reads and acts on - 0x00
+     Broadcast (fan the rest of the frame out to all 96 QTRMs), 0x01 QCC
+     -> Low-Speed, 0x02 QCC -> High-Speed.
   3. Link Check - broadcast a Link Request (0x30); each QTRM's processor
      answers with its 0x34-tagged link response (B1 B2 B3 B4 body).
   4. Get LRU Info / Upload bitstream / Authenticate / Program / Verify -
@@ -33,11 +32,11 @@ Operation flow (per the IDD + decisions with Yuvraj 2026-07-08/18):
   5. QTRM -> High Speed - broadcast the bootloader's Mode Change
      MSS->Fabric command (0x32, CT_MODE_CHANGE_MSS_TO_FAB) to all 96
      QTRMs via the normal SubCommand 0x00 broadcast path (100-byte frame,
-     same shape as Link Check/LRU Info). Added 2026-07-18: QTRMs already
-     auto-return to high speed on their own after Programming completes,
-     but this button lets the operator force it explicitly (e.g. after an
-     aborted session). Does not touch the gate - QCC itself is still on
-     the low-speed link until step 6.
+     same shape as Link Check/LRU Info). QTRMs already auto-return to high
+     speed on their own after Programming completes, but this button lets
+     the operator force it explicitly (e.g. after an aborted session).
+     Does not touch the gate - QCC itself is still on the low-speed link
+     until step 6.
   6. QCC -> High Speed - QCC's own self-directed UART switch back to
      high speed (RE-DECIDED 2026-07-19: mirrors Mode Step 2, NOT the
      QTRM-targeted 0x32 bootloader command - that's now step 5's separate
@@ -84,17 +83,17 @@ from core.packet import (
 from core.rc_settings import COMMAND_ID_REMOTE_PROGRAMMING, rc_settings
 
 # Remote Programming SubCommand values (header byte 34 / message_body offset
-# 0) - CONFIRMED 2026-07-18 per Yuvraj (see module docstring). QCC_COMMAND
-# byte 33 = REMOTE_PROGRAMMING selects a Remote Programming session; this
-# SubCommand byte tells QCC what to do with the rest of the frame.
+# 0, see module docstring). QCC_COMMAND byte 33 = REMOTE_PROGRAMMING selects
+# a Remote Programming session; this SubCommand byte tells QCC what to do
+# with the rest of the frame.
 RP_SUBCMD_BROADCAST = 0x00        # QCC fans the rest of the frame out to all
                                    # 96 QTRMs - the default, since
                                    # rc_settings.build_header() leaves
                                    # message_body all-zero unless overridden.
 QCC_BODY_SWITCH_LOW_SPEED = 0x01  # Mode Step 2: QCC -> Low-Speed
-QCC_BODY_SWITCH_HIGH_SPEED = 0x02  # QCC -> High-Speed - VALUE CHANGED
-                                   # 2026-07-18 from 0x00 to 0x02 so 0x00 is
-                                   # reserved exclusively for RP_SUBCMD_BROADCAST.
+QCC_BODY_SWITCH_HIGH_SPEED = 0x02  # QCC -> High-Speed - value 0x02 (not
+                                   # 0x00) so 0x00 is reserved exclusively
+                                   # for RP_SUBCMD_BROADCAST.
 
 MODE_STEP_TIMEOUT_MS = 3000
 LRU_INFO_TIMEOUT_MS = 3000
@@ -284,10 +283,10 @@ class RemoteProgController(QObject):
         if self.busy:
             return
         self._start(OP_MODE_STEP2, MODE_STEP_TIMEOUT_MS, self._on_simple_timeout)
-        # CONFIRMED 2026-07-18 wire format - see module docstring. Bare
-        # 90-byte header, no inner command/payload (RE-DECIDED 2026-07-19:
-        # this is QCC's own self-directed UART switch, not a QTRM-targeted
-        # bootloader command); byte 34 carries the SubCommand
+        # See module docstring. Bare 90-byte header, no inner
+        # command/payload (RE-DECIDED 2026-07-19: this is QCC's own
+        # self-directed UART switch, not a QTRM-targeted bootloader
+        # command); byte 34 carries the SubCommand
         # "QCC: switch your own UART to 115200".
         body = bytes([QCC_BODY_SWITCH_LOW_SPEED])
         header = rc_settings.build_header(
@@ -373,14 +372,13 @@ class RemoteProgController(QObject):
         """QTRM -> High Speed: broadcasts the bootloader's Mode Change
         MSS->Fabric command (0x32, CT_MODE_CHANGE_MSS_TO_FAB) to all 96
         QTRMs via the normal SubCommand 0x00 broadcast path - same 100-byte
-        frame shape as Link Check/Get LRU Info. Added 2026-07-18 per
-        Yuvraj: QTRMs already auto-return to high speed on their own after
-        Programming completes, but this lets the operator force it
-        explicitly (e.g. after an aborted session). Firmware's handler for
-        0x32 only toggles GPIOs and exits - no UART reply, so (like QCC ->
-        High Speed) a reply is bonus, not required. Does not touch the
-        gate; QCC itself is still on the low-speed link until QCC -> High
-        Speed is sent separately."""
+        frame shape as Link Check/Get LRU Info. QTRMs already auto-return
+        to high speed on their own after Programming completes, but this
+        lets the operator force it explicitly (e.g. after an aborted
+        session). Firmware's handler for 0x32 only toggles GPIOs and exits
+        - no UART reply, so (like QCC -> High Speed) a reply is bonus, not
+        required. Does not touch the gate; QCC itself is still on the
+        low-speed link until QCC -> High Speed is sent separately."""
         if self.busy or not self.gate_open:
             return
         self._start(OP_QTRM_HIGH_SPEED, QTRM_HIGH_SPEED_WINDOW_MS, self._on_simple_timeout)
@@ -392,9 +390,9 @@ class RemoteProgController(QObject):
         UART switch back to high speed - RE-DECIDED 2026-07-19 per Yuvraj,
         NOT the QTRM-targeted 0x32 bootloader command (that's now the
         separate QTRM -> High Speed button/start_qtrm_high_speed()). Bare
-        90-byte header, CONFIRMED 2026-07-18 wire format, same shape as
-        Mode Step 2 (see build_qcc_level_frame's docstring); the gate
-        re-locks when the settle window closes."""
+        90-byte header, same shape as Mode Step 2 (see
+        build_qcc_level_frame's docstring); the gate re-locks when the
+        settle window closes."""
         if self.busy or not self.gate_open:
             return
         self._start(OP_MODE_BACK, MODE_BACK_WINDOW_MS, self._on_simple_timeout)

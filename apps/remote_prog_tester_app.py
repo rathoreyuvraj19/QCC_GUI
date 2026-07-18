@@ -104,9 +104,9 @@ class MockBootloaderResponder(QThread):
            slots, each slot's first 10 bytes carrying the SAME bootloader
            mode-change command (QTRMs are still individually addressed at
            this point, not yet in the QCC's shared low-speed FIFO).
-        2. Mode Step 2 / QCC -> High Speed (90 bytes, CONFIRMED 2026-07-18):
-           bare header, no inner command, no payload - RE-DECIDED
-           2026-07-19, both are QCC's own self-directed UART switch,
+        2. Mode Step 2 / QCC -> High Speed (90 bytes): bare header, no
+           inner command, no payload - RE-DECIDED 2026-07-19, both are
+           QCC's own self-directed UART switch,
            distinguished only by the header's byte 34 SubCommand
            (QCC_BODY_SWITCH_LOW_SPEED=0x01 vs QCC_BODY_SWITCH_HIGH_SPEED=0x02;
            0x00 is reserved for the Broadcast SubCommand used by shapes 3/4).
@@ -133,10 +133,10 @@ class MockBootloaderResponder(QThread):
             return None, ""
 
         if len(query) == RP_QCC_LEVEL_FRAME_SIZE:
-            # Mode Step 2 / QCC -> High Speed (bare 90-byte QCC-level frame,
-            # CONFIRMED 2026-07-18 SubCommand format) - qcc_command byte
-            # (header index 32) must be REMOTE_PROGRAMMING; byte 34
-            # (index 33) is the SubCommand that says which direction.
+            # Mode Step 2 / QCC -> High Speed (bare 90-byte QCC-level
+            # frame) - qcc_command byte (header index 32) must be
+            # REMOTE_PROGRAMMING; byte 34 (index 33) is the SubCommand
+            # that says which direction.
             if query[32] != COMMAND_ID_REMOTE_PROGRAMMING:
                 return None, ""
             sub_cmd = query[33] if len(query) > 33 else None
@@ -185,8 +185,8 @@ class MockBootloaderResponder(QThread):
 
             # Mode Change MSS->Fabric (0x32): firmware's handler only
             # toggles GPIOs and exits the request loop - no UART reply.
-            # Sent by the "QTRM -> High Speed" button (added 2026-07-18,
-            # remote_prog_controller.py's start_qtrm_high_speed()) via the
+            # Sent by the "QTRM -> High Speed" button
+            # (remote_prog_controller.py's start_qtrm_high_speed()) via the
             # normal SubCommand 0x00 broadcast path - QCC -> High Speed
             # (start_mode_back()) is the separate QCC-level switch, not this.
             elif cmd_type == bl.CT_MODE_CHANGE_MSS_TO_FAB:
@@ -596,9 +596,9 @@ class RemoteProgTesterWindow(QMainWindow):
             self.analysis_view.setPlainText("\n".join(lines))
 
         elif len(query) == RP_QCC_LEVEL_FRAME_SIZE:
-            # Mode Step 2 / QCC -> High Speed (CONFIRMED 2026-07-18): bare
-            # header only, no inner command, no payload - QCC's own
-            # self-directed UART switch. The SubCommand at byte 34 is the
+            # Mode Step 2 / QCC -> High Speed: bare header only, no inner
+            # command, no payload - QCC's own self-directed UART switch.
+            # The SubCommand at byte 34 is the
             # only thing distinguishing which direction - it lives INSIDE
             # the 90-byte header (offset 33), not in `body` (which is empty
             # here since the frame ends exactly at header_size).

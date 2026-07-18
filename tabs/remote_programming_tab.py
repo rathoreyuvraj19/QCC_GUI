@@ -267,8 +267,7 @@ class RemoteProgrammingTab(QWidget):
 
         form.addWidget(_muted_note(
             "Byte 34 (SubCommand) selects the action: 0x00 = Broadcast to all "
-            "96 QTRMs, 0x01 = QCC → Low-Speed, 0x02 = QCC → High-Speed. "
-            "Confirmed by Yuvraj 2026-07-18."
+            "96 QTRMs, 0x01 = QCC → Low-Speed, 0x02 = QCC → High-Speed."
         ))
 
         self.link_check_btn = QPushButton("3.  Check Link (all 96 QTRMs)")

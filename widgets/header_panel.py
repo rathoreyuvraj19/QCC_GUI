@@ -94,9 +94,9 @@ _CHECKSUM_FAIL_GLOW_STYLE = _CHECKSUM_FAIL_BASE_CSS + f" background-color: {_GLO
 
 # (section title, [field names]) - grouped so related values read together
 # instead of one long undifferentiated list of 26 rows. QCC Mode is
-# deliberately first (added 2026-07-18 per Yuvraj): whether QCC is on the
-# low-speed remote-programming link or normal high-speed is the thing an
-# operator needs to see before anything else in this panel.
+# deliberately first: whether QCC is on the low-speed remote-programming
+# link or normal high-speed is the thing an operator needs to see before
+# anything else in this panel.
 _FIELD_SECTIONS = [
     ("QCC Mode", ["QCC_MODE"]),
     ("Routing / Command", [

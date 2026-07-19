@@ -32,7 +32,7 @@ from apps.remote_prog_controller import QCC_BODY_SWITCH_HIGH_SPEED, QCC_BODY_SWI
 from core.packet import (
     NUM_QTRM, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_PAYLOAD_SIZE, RP_INNER_CMD_SIZE,
     RP_QCC_LEVEL_FRAME_SIZE, RP_QTRM_SELECT_BROADCAST,
-    FIXED_HEADER_SIZE, QCC_HEADER_SIZE, crc8,
+    FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QCCHeaderTx,
     QTRM_SLOT_SIZE, TOTAL_PACKET_SIZE,
 )
 from core.rc_settings import COMMAND_ID_REMOTE_PROGRAMMING
@@ -61,6 +61,11 @@ class MockBootloaderResponder(QThread):
         # low-speed traffic, so responses carry its slot alone and the
         # other 95 slots are zero-filled (as the real QCC does).
         self._lru_select = RP_QTRM_SELECT_BROADCAST
+        # Mirrors the real QCC's GENERATOR_STATUS bit 2 - flipped by the
+        # SubCommand 0x01/0x02 QCC-level frames below, so a Query QCC Status
+        # (or any other RP response) sent while a session is open reports
+        # the mode the tester actually latched, instead of always 0.
+        self._qcc_mode_low_speed = False
 
     def run(self):
         try:
@@ -86,15 +91,22 @@ class MockBootloaderResponder(QThread):
                 break
 
             response, desc = self._build_response(data)
-            if response is None:
+            if response is None and not desc:
+                # Not a recognized command at all - nothing to log.
                 continue
 
-            try:
-                self._sock.sendto(response, addr)
-            except OSError as e:
-                self.error.emit(f"Failed to send response: {e}")
-                continue
-            self.frame_processed.emit(data, response, desc)
+            if response is not None:
+                try:
+                    self._sock.sendto(response, addr)
+                except OSError as e:
+                    self.error.emit(f"Failed to send response: {e}")
+                    continue
+            # Recognized commands that firmware answers with no reply
+            # (Bitstream Receive announce, Mode Change MSS->Fabric) still
+            # get logged so the query itself - the actual bytes broadcast
+            # to all 96 QTRMs - is visible in the Activity Log/Sent Packet
+            # Analysis panels, even though nothing was sent back.
+            self.frame_processed.emit(data, response if response is not None else b"", desc)
 
         if self._sock:
             self._sock.close()
@@ -150,7 +162,7 @@ class MockBootloaderResponder(QThread):
                 scope = ("all 96 QTRMs" if len(addressed) == NUM_QTRM
                          else f"QTRM {addressed[0]} only" if len(addressed) == 1
                          else f"{len(addressed)} QTRMs")
-                return (self._respond_mode_change(query_header, addressed),
+                return (self._respond_mode_change(query_header),
                         f"Mode Step 1 ({mode_name}, {scope})")
             # Unrecognized 2970-byte frame - ignore
             return None, ""
@@ -169,6 +181,7 @@ class MockBootloaderResponder(QThread):
                 # subsequent SubCommand 0x00 response carries only the
                 # selected QTRM's slot (0xFF = all 96).
                 self._lru_select = query[34] if len(query) > 34 else RP_QTRM_SELECT_BROADCAST
+                self._qcc_mode_low_speed = (sub_cmd == QCC_BODY_SWITCH_LOW_SPEED)
                 target = ("all 96 QTRMs" if self._lru_select == RP_QTRM_SELECT_BROADCAST
                           else f"QTRM {self._lru_select} only")
                 direction = ("Mode Step 2 (QCC self low-speed, SubCommand 0x01"
@@ -209,20 +222,22 @@ class MockBootloaderResponder(QThread):
             if cmd_type == bl.CT_BITSTREAM_RECEIVE:
                 golden = inner_cmd[3] if len(inner_cmd) > 3 else 0
                 count = (inner_cmd[7] | (inner_cmd[8] << 8)) if len(inner_cmd) > 8 else 0
-                self.status.emit(
-                    f"Bitstream Receive announce ({'GOLDEN' if golden else 'CURRENT'}, "
-                    f"{count} chunks) — no ack, as per firmware")
-                return None, ""
+                desc = (f"Bitstream Receive announce ({'GOLDEN' if golden else 'CURRENT'}, "
+                        f"{count} chunks) — no ack, as per firmware")
+                self.status.emit(desc)
+                return None, desc
 
-            # Mode Change MSS->Fabric (0x32): firmware's handler only
-            # toggles GPIOs and exits the request loop - no UART reply.
-            # Sent by the "QTRM -> High Speed" button
+            # Mode Change MSS->Fabric (0x32): QTRM firmware's handler only
+            # toggles GPIOs and exits - no UART reply from the QTRMs
+            # themselves. QCC acks with a bare 90-byte response once it's
+            # written the broadcast to the DMA/fabric bus, same shape as
+            # Mode Step 1/2. Sent by the "QTRM -> High Speed" button
             # (remote_prog_controller.py's start_qtrm_high_speed()) via the
             # normal SubCommand 0x00 broadcast path - QCC -> High Speed
             # (start_mode_back()) is the separate QCC-level switch, not this.
             elif cmd_type == bl.CT_MODE_CHANGE_MSS_TO_FAB:
-                self.status.emit("Mode Change MSS->Fabric (0x32) — no reply, as per firmware")
-                return None, ""
+                return (self._respond_mode_change(query_header),
+                        "Mode Change MSS->Fabric (0x32) — QCC DMA-write ack")
 
             # LRU Status Query (0x31)
             elif cmd_type == bl.CT_LRU_STATUS:
@@ -260,14 +275,16 @@ class MockBootloaderResponder(QThread):
     def _respond_qcc_level(self, query: bytes) -> bytes:
         """
         Bare 90-byte QCC-level response for Mode Step 2 / Return to High
-        Speed (RE-DECIDED 2026-07-19) - just echo the header back with
-        source/destination swapped and the checksum recomputed, same as
-        every other response, but with no QTRM data block at all.
+        Speed - echoes the header back with source/destination swapped, the
+        GENERATOR_STATUS QCC_MODE bit set to whatever this SubCommand just
+        latched (so the header panel reflects the switch immediately rather
+        than only on the query that caused it), and the checksum recomputed.
         """
-        header = bytearray(query[:RP_QCC_LEVEL_FRAME_SIZE])
-        header[0], header[1] = query[1], query[0]
-        header[RP_QCC_LEVEL_FRAME_SIZE - 1] = crc8(bytes(header[:RP_QCC_LEVEL_FRAME_SIZE - 1]))
-        return bytes(header)
+        h = QCCHeaderTx.from_bytes(query[:RP_QCC_LEVEL_FRAME_SIZE])
+        h.destination_id, h.source_id = h.source_id, h.destination_id
+        h.set_generator_state(h.sob_is_internal(), h.prt_is_internal(),
+                               qcc_mode_low_speed=self._qcc_mode_low_speed)
+        return h.to_bytes()
 
     def _build_response_frame(self, query_header: bytes, build_slots_fn,
                               respond_slots=None) -> bytes:
@@ -289,12 +306,17 @@ class MockBootloaderResponder(QThread):
                 respond_slots = [self._lru_select] if self._lru_select < NUM_QTRM else []
         responding = set(respond_slots)
 
-        # Start with query header, swap source/destination IDs
-        header = bytearray(query_header)
-        header[0], header[1] = query_header[1], query_header[0]
-
-        # Build response frame
-        resp_body = bytearray(header)
+        # Echo the query header, swap source/destination IDs, and stamp the
+        # current QCC_MODE bit - these per-QTRM-slot responses (Link Check,
+        # LRU Info, Authenticate/Verify/Program, Bitstream Ack) all ride the
+        # same low-speed session as the QCC-level acks, so the header panel
+        # should keep reporting Low-Speed through the whole session, not
+        # just for the SubCommand 0x01/0x02 frames themselves.
+        h = QCCHeaderTx.from_bytes(query_header[:RP_QCC_LEVEL_FRAME_SIZE])
+        h.destination_id, h.source_id = h.source_id, h.destination_id
+        h.set_generator_state(h.sob_is_internal(), h.prt_is_internal(),
+                               qcc_mode_low_speed=self._qcc_mode_low_speed)
+        resp_body = bytearray(h.to_bytes())
 
         # Fill each of 96 QTRM slots (zeros for non-responding QTRMs)
         for i in range(NUM_QTRM):
@@ -303,29 +325,25 @@ class MockBootloaderResponder(QThread):
             else:
                 resp_body.extend(bytes(QTRM_SLOT_SIZE))
 
-        # Recalculate header checksum (last byte of header)
-        header_end = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
-        resp_body[header_end - 1] = crc8(resp_body[:header_end - 1])
-
         return bytes(resp_body)
 
-    def _respond_mode_change(self, query_header: bytes, addressed) -> bytes:
-        """Mode Change Command acknowledgment - only the slots that were
-        actually addressed in the query answer (per-slot addressing, the
-        LRU-select mux plays no part in Mode Step 1)."""
-        def build_slot(i: int) -> bytes:
-            slot = bytearray(QTRM_SLOT_SIZE)
-            slot[0] = bl.BL_HEADER
-            slot[1] = bl.PSI_FIXED
-            slot[2] = bl.CT_MODE_CHANGE  # Echo the command type
-            slot[3] = 0x00  # Status byte (success)
-            # Checksum for first 10 bytes
-            slot[9] = bl.bootloader_checksum(slot[:9])
-            # Remaining 20 bytes are reserved/unused
-            return bytes(slot)
-
-        return self._build_response_frame(query_header, build_slot,
-                                          respond_slots=addressed)
+    def _respond_mode_change(self, query_header: bytes) -> bytes:
+        """
+        Mode Step 1 / Mode Change MSS->Fabric (0x32) response: only the QCC
+        itself replies (bare 90-byte header, same shape as Mode Step 2/QCC
+        -> High Speed's _respond_qcc_level) - no per-QTRM slot data at all,
+        regardless of how many QTRMs the query addressed. QTRMs themselves
+        don't originate a reply to their own mode-change slot. Stamps the
+        current latched QCC_MODE bit (unaffected by either of these - only
+        the SubCommand 0x01/0x02 QCC-level frames flip it) so the header
+        panel doesn't regress to "High-Speed" just because this ack didn't
+        go through _respond_qcc_level.
+        """
+        h = QCCHeaderTx.from_bytes(query_header[:RP_QCC_LEVEL_FRAME_SIZE])
+        h.destination_id, h.source_id = h.source_id, h.destination_id
+        h.set_generator_state(h.sob_is_internal(), h.prt_is_internal(),
+                               qcc_mode_low_speed=self._qcc_mode_low_speed)
+        return h.to_bytes()
 
     def _respond_lru_info(self, query_header: bytes) -> bytes:
         """
@@ -473,6 +491,9 @@ class RemoteProgTesterWindow(QMainWindow):
         self.port_spin.spin.valueChanged.connect(self._update_endpoint_label)
         self._update_endpoint_label()
 
+        self.clear_log_btn = QPushButton("Clear Log")
+        self.clear_log_btn.clicked.connect(self._on_clear_log_clicked)
+
         row.addWidget(QLabel("Listen Port:"))
         row.addWidget(self.port_spin)
         row.addWidget(self.listen_btn)
@@ -480,6 +501,7 @@ class RemoteProgTesterWindow(QMainWindow):
         row.addWidget(self.endpoint_label)
         row.addStretch(1)
         row.addWidget(self.count_label)
+        row.addWidget(self.clear_log_btn)
         return box
 
     def _update_endpoint_label(self, *_args):
@@ -518,6 +540,14 @@ class RemoteProgTesterWindow(QMainWindow):
         self.log_view.currentItemChanged.connect(self._on_log_item_selected)
         layout.addWidget(self.log_view)
         return box
+
+    def _on_clear_log_clicked(self):
+        self.log_view.clear()
+        self._frame_count = 0
+        self.count_label.setText("Frames processed: 0")
+        self._selected_query = None
+        self.header_view.setPlainText("(waiting for a frame)")
+        self.analysis_view.setPlainText("(waiting for a frame)")
 
     def _build_header_group(self):
         box, layout = titled_group_box("QCC Header (90 bytes)")

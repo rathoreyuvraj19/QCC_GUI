@@ -127,6 +127,14 @@ QLineEdit, QSpinBox, QComboBox {{
 QLineEdit:focus, QSpinBox:focus, QComboBox:focus {{
     border: 1px solid {_ACCENT};
 }}
+/* Explicit colors above override Qt's own disabled-state dimming, so a
+   locked field would otherwise look identical to an editable one - restate
+   it here, washed-out against the card background. */
+QLineEdit:disabled, QSpinBox:disabled, QComboBox:disabled {{
+    background-color: {_BG};
+    border: 1px solid {_BORDER};
+    color: {_TEXT_SECONDARY};
+}}
 /* Note: QSpinBox's native up/down buttons are unused everywhere in this app -
    every spinbox is wrapped in spin_field.py's SpinField, which hides them
    (QAbstractSpinBox.NoButtons) and draws its own always-visible arrow

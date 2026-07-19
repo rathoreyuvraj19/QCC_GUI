@@ -121,6 +121,15 @@ QTRM_HIGH_SPEED_WINDOW_MS = 2000     # QTRM -> High Speed settle window - firmwa
 CHUNK_TIMEOUT_MS_DEFAULT = 2000      # per-chunk watchdog (tab exposes a SpinField)
 CHUNK_MAX_ATTEMPTS = 3
 TRAILING_ACK_GRACE_MS = 3000         # collect late acks after the final chunk
+BITSTREAM_ANNOUNCE_SETTLE_MS = 20    # gap before chunk 0, after the 0x33 announce -
+                                     # user_functions.c's CMD_TYPE_START_BIT_STREAM_REC
+                                     # handler calls recieve_bit_stream() in the same
+                                     # UART-polling loop that just read the announce's
+                                     # 10 bytes: it stack-allocates and memsets two
+                                     # packetSize-sized buffers before it starts polling
+                                     # MSS_UART_get_rx() again for chunk 0's bytes. If
+                                     # chunk 0 lands on the wire before that setup
+                                     # finishes, the UART can drop its opening bytes.
 
 CHUNK_PAD_BYTE = 0xFF  # erased-flash state; final chunk reports its REAL length
 
@@ -360,19 +369,21 @@ class RemoteProgController(QObject):
                 self.step_result.emit(op, False, "No response — link may be down")
                 self._finish(False, "No response")
         elif op == OP_QTRM_HIGH_SPEED:
-            # Firmware's 0x32 handler never replies (GPIO toggle + exit) -
-            # the settle window just lets it happen. Doesn't touch the
+            # QCC should have acked the DMA write well before the window
+            # closed - on_frame() finishes early the moment that arrives.
+            # Reaching here means it never showed up. Doesn't touch the
             # gate; QCC itself is still on the low-speed link.
-            self._finish(True, "QTRM high-speed broadcast sent")
+            self.step_result.emit(op, False, "No ack from QCC — link may be down")
+            self._finish(False, "No response")
         elif op == OP_MODE_BACK:
-            # A reply isn't required to consider this done (unconfirmed
-            # whether QCC acks its own self-directed switch) - the window
-            # simply lets it settle. Always re-lock the gate: the QTRMs are
-            # back at high speed either way.
+            # Same - on_frame() finishes early on the DMA-write ack. No ack
+            # by the window closing still re-locks the gate (the QTRMs are
+            # back at high speed either way) but is flagged as a failure.
             self.mode_step1_done = False
             self.mode_step2_done = False
             self.gate_changed.emit(False)
-            self._finish(True, "Returned to high speed — gate re-locked")
+            self.step_result.emit(op, False, "No ack from QCC — link may be down")
+            self._finish(False, "No response")
 
     def reset_gate(self):
         """E.g. after a link change - operations re-lock until redone."""
@@ -498,9 +509,10 @@ class RemoteProgController(QObject):
         self._upload_phase = "stream"
         # Bitstream Receive announce (0x33): the QTRM enters
         # recieve_bit_stream(count, 4096, golden) and starts reading
-        # packets. It sends no ack for the announce itself, so chunk 0
-        # follows immediately - its watchdog covers a lost announce too
-        # (no acks -> retries -> abort).
+        # packets. It sends no ack for the announce itself. Chunk 0 is
+        # delayed by BITSTREAM_ANNOUNCE_SETTLE_MS rather than sent
+        # immediately - see that constant's comment - the watchdog still
+        # covers a lost announce (no acks -> retries -> abort).
         self._send_rp(
             bl.build_bitstream_receive_command(
                 RP_PAYLOAD_SIZE, self._chunk_count, image_is_golden),
@@ -509,7 +521,7 @@ class RemoteProgController(QObject):
                     f"{self._chunk_count} x {RP_PAYLOAD_SIZE}B)",
         )
         self._current_chunk = None
-        self._send_next_chunk(first=True)
+        QTimer.singleShot(BITSTREAM_ANNOUNCE_SETTLE_MS, lambda: self._send_next_chunk(first=True))
 
     def start_retry_pass(self):
         """Re-broadcast only the chunks some QTRM is still missing."""
@@ -638,14 +650,26 @@ class RemoteProgController(QObject):
             self._finish(True, "Step complete")
             return
 
+        if self._op == OP_QTRM_HIGH_SPEED:
+            # QTRMs themselves never reply to the 0x32 broadcast (GPIO
+            # toggle + exit), but QCC acks with a bare 90-byte response once
+            # it's written the command to the DMA/fabric bus - latch on
+            # that immediately instead of sitting out the full settle
+            # window. Doesn't touch the gate; QCC itself is still low-speed.
+            self.log_frame.emit(raw, False, "QCC DMA-write ack")
+            self._finish(True, "QTRM high-speed broadcast acked")
+            return
+
         if self._op == OP_MODE_BACK:
-            # QCC's own response (if any) to its self-directed high-speed
-            # switch - RE-DECIDED 2026-07-19, same bare 90-byte shape as
-            # Mode Step 2, so it can't go through extract_rp_slots() below
-            # (which assumes the standard 2970-byte RP response). Just log
-            # it; _on_simple_timeout's OP_MODE_BACK branch always finishes
-            # on the settle window regardless of whether a reply arrived.
-            self.log_frame.emit(raw, False, "QCC mode-change response")
+            # QCC's own bare 90-byte ack to its self-directed high-speed
+            # switch, sent once it's written the command to DMA - same
+            # shape as Mode Step 2. Latch on it immediately and re-lock the
+            # gate; the QTRMs are back at high speed either way.
+            self.log_frame.emit(raw, False, "QCC DMA-write ack")
+            self.mode_step1_done = False
+            self.mode_step2_done = False
+            self.gate_changed.emit(False)
+            self._finish(True, "Returned to high speed — gate re-locked")
             return
 
         context = (bl.CONTEXT_BITSTREAM
@@ -666,6 +690,19 @@ class RemoteProgController(QObject):
             raw, False,
             f"{self._op} response frame" + ("" if decoded_any else " (no populated slots)"),
         )
+
+        if self._op == OP_LINK_CHECK:
+            # QCC replies with exactly one frame carrying every targeted
+            # QTRM's slot already populated (or zero-filled) - no need to
+            # sit out the rest of LINK_CHECK_WINDOW_MS collecting more
+            # frames that will never arrive.
+            self.op_window_closed.emit(OP_LINK_CHECK)
+            self._finish(True, "Link check response received")
+        elif self._op == OP_LRU_INFO:
+            # Same shape as Link Check - QCC answers with exactly one frame
+            # carrying every targeted QTRM's LRU slot, so there's nothing
+            # left to collect once it lands.
+            self._finish(True, "LRU info received")
 
     def _dispatch_slot(self, q: int, parsed):
         op = self._op

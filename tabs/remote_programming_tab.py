@@ -88,6 +88,8 @@ _GOLDEN_BTN_STYLE = send_button_style(
     radius=12, font_size_px=14, padding="10px", text_color="#1f2328",
 )
 
+_WARNING_COLOR = "#e2a33d"
+
 _IDLE_QCOLOR = QColor(*IDLE_MATRIX_RGB)
 _PENDING_QCOLOR = QColor(*PENDING_RGB)
 _OK_QCOLOR = QColor(*SUCCESS_RGB)
@@ -201,7 +203,11 @@ class RemoteProgrammingTab(QWidget):
         self._raw_file = b""               # file content as loaded from disk
         self._file_name = ""
         self._gate_open = False
+        self._step1_done = False
         self._session_active = False
+        self._active_iap_op = None         # which of Authenticate/Verify/Program
+                                             # is running, so its own button can
+                                             # flip to "Stop" instead of disabling
         self._chunks_dispatched = 0
         self._qtrm_acked = [0] * NUM_QTRM  # successful-ack count per QTRM
         self._qtrm_failed = [False] * NUM_QTRM
@@ -266,6 +272,18 @@ class RemoteProgrammingTab(QWidget):
         self.target_combo.currentIndexChanged.connect(self._on_target_changed)
         _field_row(target_grid, 0, "Target", self.target_combo)
         form.addLayout(target_grid)
+
+        self.target_lock_note = QLabel(
+            "Target locked — Step 1 already sent it to the QTRM(s). Send "
+            "\"QTRM → High Speed\" then \"QCC → High Speed\" below to "
+            "unlock it before changing the target."
+        )
+        self.target_lock_note.setWordWrap(True)
+        self.target_lock_note.setStyleSheet(
+            f"color: {_WARNING_COLOR}; font-size: 11px; font-weight: 600; background: transparent;"
+        )
+        self.target_lock_note.setVisible(False)
+        form.addWidget(self.target_lock_note)
 
         self.step1_btn = QPushButton("1.  QTRMs → Low-Speed (115200)")
         self.step1_btn.setFixedHeight(38)
@@ -442,14 +460,10 @@ class RemoteProgrammingTab(QWidget):
         form.addLayout(lru_row)
 
         self.auth_btn = QPushButton("Authenticate Current Image")
-        self.verify_btn = QPushButton("Verify Current Image")
-        for btn, sig in ((self.auth_btn, self.authenticate_requested),
-                         (self.verify_btn, self.verify_requested)):
-            btn.setFixedHeight(38)
-            btn.setStyleSheet(_SEND_BTN_STYLE)
-            btn.clicked.connect(
-                lambda _=False, s=sig: s.emit(self.image_is_golden))
-            form.addWidget(btn)
+        self.auth_btn.setFixedHeight(38)
+        self.auth_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.auth_btn.clicked.connect(self._on_authenticate_clicked)
+        form.addWidget(self.auth_btn)
 
         self.program_btn = QPushButton("Program Current Image")
         self.program_btn.setFixedHeight(38)
@@ -461,6 +475,19 @@ class RemoteProgrammingTab(QWidget):
         )
         self.program_btn.clicked.connect(self._on_program_clicked)
         form.addWidget(self.program_btn)
+
+        self.verify_btn = QPushButton("Verify Current Image")
+        self.verify_btn.setFixedHeight(38)
+        self.verify_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.verify_btn.clicked.connect(self._on_verify_clicked)
+        form.addWidget(self.verify_btn)
+
+        form.addWidget(_muted_note(
+            "Sequence: Authenticate checks the staged image (signature/header/"
+            "chaining) before anything is committed — non-destructive. Program "
+            "commits it to eNVM/fabric — destructive. Verify reads back and "
+            "confirms the now-programmed image matches what was intended."
+        ))
 
         timeout_grid = QGridLayout()
         timeout_grid.setHorizontalSpacing(18)
@@ -634,11 +661,18 @@ class RemoteProgrammingTab(QWidget):
         style = _GOLDEN_BTN_STYLE if golden else _SEND_BTN_STYLE
         self.choose_file_btn.setText(f"Choose {scope} .spi File…")
         self.upload_btn.setText(f"Upload {scope} Image")
-        self.auth_btn.setText(f"Authenticate {scope} Image")
-        self.verify_btn.setText(f"Verify {scope} Image")
-        self.program_btn.setText(f"Program {scope} Image")
-        for btn in (self.choose_file_btn, self.upload_btn, self.auth_btn,
-                    self.verify_btn):
+        # Skip Authenticate/Verify/Program's own text+style while it's the
+        # active op showing "Stop X" - toggling Golden/Current mid-run
+        # shouldn't clobber that back to its normal label.
+        if self._active_iap_op != OP_AUTHENTICATE:
+            self.auth_btn.setText(f"Authenticate {scope} Image")
+            self.auth_btn.setStyleSheet(style)
+        if self._active_iap_op != OP_VERIFY:
+            self.verify_btn.setText(f"Verify {scope} Image")
+            self.verify_btn.setStyleSheet(style)
+        if self._active_iap_op != OP_PROGRAM:
+            self.program_btn.setText(f"Program {scope} Image")
+        for btn in (self.choose_file_btn, self.upload_btn):
             btn.setStyleSheet(style)
         if golden:
             # The toggle's own selected segment goes gold too - runs after
@@ -701,7 +735,22 @@ class RemoteProgrammingTab(QWidget):
         if confirm == QMessageBox.Yes:
             self.upload_requested.emit(self._image, golden)
 
+    def _on_authenticate_clicked(self):
+        if self._active_iap_op == OP_AUTHENTICATE:
+            self.cancel_requested.emit()
+            return
+        self.authenticate_requested.emit(self.image_is_golden)
+
+    def _on_verify_clicked(self):
+        if self._active_iap_op == OP_VERIFY:
+            self.cancel_requested.emit()
+            return
+        self.verify_requested.emit(self.image_is_golden)
+
     def _on_program_clicked(self):
+        if self._active_iap_op == OP_PROGRAM:
+            self.cancel_requested.emit()
+            return
         golden = self.image_is_golden
         scope = "GOLDEN" if golden else "CURRENT"
         confirm = QMessageBox.question(
@@ -719,10 +768,17 @@ class RemoteProgrammingTab(QWidget):
 
     def _apply_gate(self):
         ops_ok = self._gate_open and not self._session_active
-        for btn in (self.link_check_btn, self.lru_btn, self.auth_btn,
-                    self.verify_btn, self.program_btn,
+        for btn in (self.link_check_btn, self.lru_btn,
                     self.qtrm_high_speed_btn, self.mode_back_btn):
             btn.setEnabled(ops_ok)
+        # Authenticate/Verify/Program: the button belonging to whichever one
+        # is currently running stays enabled (as "Stop X") instead of
+        # disabling along with the rest of the gated ops, so a click can
+        # cancel it - see _set_iap_button_stop/_restore_iap_button.
+        for op, btn in ((OP_AUTHENTICATE, self.auth_btn),
+                        (OP_VERIFY, self.verify_btn),
+                        (OP_PROGRAM, self.program_btn)):
+            btn.setEnabled(ops_ok or self._active_iap_op == op)
         self.upload_btn.setEnabled(ops_ok and bool(self._image))
         self.retry_btn.setEnabled(ops_ok and self._have_gaps)
         # Export needs actual LRU data, not the gate - the table stays
@@ -731,13 +787,13 @@ class RemoteProgrammingTab(QWidget):
         self.cancel_btn.setEnabled(self._session_active)
         self.step1_btn.setEnabled(not self._session_active)
         self.step2_btn.setEnabled(not self._session_active)
-        # QCC latches the target when Mode Step 2 opens the low-speed
-        # session, so switching it while the gate is open would silently
-        # disagree with what QCC is routing (and QCC -> High Speed must
-        # carry the same latched value) - locked until the gate re-locks.
-        # While the gate is still closed it stays changeable, so a failed
-        # step can be retried against a different target.
-        self.target_combo.setEnabled(not self._session_active and not self._gate_open)
+        # Step 1 already sends QTRM_SELECT to the addressed QTRM(s), and
+        # Step 2 latches the same value into QCC - so the target locks as
+        # soon as Step 1 succeeds, not just once the full gate (both steps)
+        # is open. Changing it after Step 1 but before Step 2 would send
+        # Step 2 with a target Step 1 never used.
+        self.target_combo.setEnabled(not self._session_active and not self._step1_done)
+        self.target_lock_note.setVisible(self._step1_done)
         self.gate_label.setText(
             "Link ready — operations unlocked" if self._gate_open
             else "Complete both steps to unlock operations"
@@ -750,6 +806,7 @@ class RemoteProgrammingTab(QWidget):
     def on_gate_changed(self, open_: bool):
         self._gate_open = open_
         if not open_:
+            self._step1_done = False
             self.step1_status.setText("Not sent yet")
             self.step1_status.setStyleSheet(_indicator_style())
             self.step2_status.setText("Not sent yet")
@@ -772,6 +829,33 @@ class RemoteProgrammingTab(QWidget):
             OP_UPLOAD: self.upload_status,
         }.get(op)
 
+    # -- Authenticate/Verify/Program "Stop" button toggle -----------------------------
+
+    def _iap_btn_for_op(self, op: str):
+        return {OP_AUTHENTICATE: self.auth_btn, OP_VERIFY: self.verify_btn,
+                OP_PROGRAM: self.program_btn}.get(op)
+
+    def _set_iap_button_stop(self, op: str):
+        btn = self._iap_btn_for_op(op)
+        if btn is None:
+            return
+        label = {OP_AUTHENTICATE: "Stop Authenticate", OP_VERIFY: "Stop Verify",
+                 OP_PROGRAM: "Stop Program"}[op]
+        btn.setText(label)
+        btn.setStyleSheet(_PROGRAM_BTN_STYLE)
+
+    def _restore_iap_button(self, op: str):
+        btn = self._iap_btn_for_op(op)
+        if btn is None:
+            return
+        scope = "Golden" if self.image_is_golden else "Current"
+        label = {OP_AUTHENTICATE: f"Authenticate {scope} Image",
+                 OP_VERIFY: f"Verify {scope} Image",
+                 OP_PROGRAM: f"Program {scope} Image"}[op]
+        btn.setText(label)
+        btn.setStyleSheet(_PROGRAM_BTN_STYLE if op == OP_PROGRAM
+                          else (_GOLDEN_BTN_STYLE if self.image_is_golden else _SEND_BTN_STYLE))
+
     def mark_session_started(self, op: str):
         self._session_active = True
         pill = self._pill_for_op(op)
@@ -786,6 +870,8 @@ class RemoteProgrammingTab(QWidget):
         elif op in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
             self.results_stack.setCurrentIndex(2)
             self._reset_iap_grid()
+            self._active_iap_op = op
+            self._set_iap_button_stop(op)
         elif op == OP_UPLOAD:
             self.results_stack.setCurrentIndex(3)
             self._reset_program_view()
@@ -807,6 +893,11 @@ class RemoteProgrammingTab(QWidget):
 
     def on_session_finished(self, op: str, ok: bool, text: str):
         self._session_active = False
+        if op == OP_MODE_STEP1 and ok:
+            self._step1_done = True
+        if op in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
+            self._active_iap_op = None
+            self._restore_iap_button(op)
         pill = self._pill_for_op(op)
         if pill is not None:
             pill.setText(text)

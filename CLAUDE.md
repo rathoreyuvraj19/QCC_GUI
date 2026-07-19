@@ -164,3 +164,29 @@ instructions and a file-by-file overview.
    so the operator sees at a glance whether QCC is on the low-speed
    remote-programming link before anything else. `docs/idd/QCC_Protocol.docx`'s
    byte 82 GENERATOR_STATUS row reflects the bit 2 remark.
+
+8. **Mode Step 1's response is a bare 90-byte QCC header, not a 2970-byte
+   per-QTRM-slot echo** - only the QCC itself replies to the mode-change
+   query; QTRMs don't originate a reply to their own mode-change slot,
+   same as Mode Step 2. `apps/remote_prog_tester_app.py`'s
+   `_respond_mode_change()` builds this the same way
+   `_respond_qcc_level()` does (echo header, swap source/destination,
+   recompute checksum, no QTRM slots) instead of the previous
+   `_build_response_frame()`-based per-slot echo. GUI-side, this needed no
+   change: `remote_prog_controller.py`'s `on_frame()` already treats a
+   Mode Step 1 reply as an opaque frame it just logs, and
+   `core/udp_worker.py`'s RX size check already accepts the 90-byte shape
+   (`RP_QCC_LEVEL_FRAME_SIZE`) alongside the standard 2970-byte one.
+
+9. **Tester app now logs no-ack commands, not just no-reply ones** -
+   `apps/remote_prog_tester_app.py`'s Bitstream Receive announce (0x33
+   post-MSS) and Mode Change MSS->Fabric (0x32) handlers previously only
+   called `self.status.emit(...)` (a transient status-bar line) and
+   returned an empty description, so `run()`'s `if response is None:
+   continue` dropped the frame entirely - it never reached the Activity
+   Log or Sent Packet Analysis panel, even though the command itself is a
+   real 100-byte frame broadcast to all 96 QTRMs and worth inspecting.
+   Both handlers now return `(None, desc)` with a non-empty `desc`, and
+   `run()` distinguishes "recognized, no reply" (`response is None` but
+   `desc` set - still logged) from "not a recognized command at all"
+   (`response is None` and `desc` empty - still dropped).

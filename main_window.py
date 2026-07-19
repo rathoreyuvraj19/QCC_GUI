@@ -1784,4 +1784,22 @@ class MainWindow(QMainWindow):
                 # Swallow it and let the window close normally anyway;
                 # the app is already shutting down either way.
                 pass
+
+        # Status Responder / RP Tester are independent top-level windows -
+        # Qt doesn't close them just because this one does, and each owns a
+        # QThread with its own bound UDP socket. .close() runs their own
+        # closeEvent (stop_listening()), so the sockets/threads are torn
+        # down cleanly instead of being killed mid-flight when the process
+        # exits.
+        if self._responder_window is not None:
+            self._responder_window.close()
+        if self._remote_prog_tester_window is not None:
+            self._remote_prog_tester_window.close()
+
+        # PingWorker finishes on its own in ~1-3s (single ping.exe subprocess,
+        # no event loop) - wait() briefly rather than leaving a QThread
+        # running past this object's destruction.
+        if self._ping_worker is not None and self._ping_worker.isRunning():
+            self._ping_worker.wait(3500)
+
         super().closeEvent(event)

@@ -88,7 +88,7 @@ from core.packet import (
     build_qcc_level_frame, build_remote_programming_cmd_frame,
     build_remote_programming_frame, extract_rp_slots,
 )
-from core.rc_settings import COMMAND_ID_REMOTE_PROGRAMMING, rc_settings
+from core.rc_settings import COMMAND_ID_DWELL, COMMAND_ID_REMOTE_PROGRAMMING, rc_settings
 
 # Remote Programming SubCommand values (header byte 34 / message_body offset
 # 0, see module docstring). QCC_COMMAND byte 33 = REMOTE_PROGRAMMING selects
@@ -295,8 +295,13 @@ class RemoteProgController(QObject):
         # once for the QCC to broadcast (that broadcast path only exists
         # once QTRMs are already in low-speed mode): every slot when
         # targeting all 96, only the target's slot (others all-zero) for a
-        # single-QTRM session.
-        header = rc_settings.build_header(COMMAND_ID_REMOTE_PROGRAMMING)
+        # single-QTRM session. Uses QCC_COMMAND=DATA_DISTRIBUTION (0x00),
+        # NOT REMOTE_PROGRAMMING (0xFF): per Yuvraj, Mode Step 1 rides the
+        # existing DMA data-pipeline path on the QCC side (same as normal
+        # dwell/dbf traffic) - QCC just moves the 2880-byte payload to the
+        # fabric unmodified, and it's the QTRM bootloader that interprets
+        # its own slot's first 10 bytes as a mode-change command.
+        header = rc_settings.build_header(COMMAND_ID_DWELL)
         frame = build_broadcast_bootloader_frame(
             header, bl.build_mode_change_command(bl.BSN_MSS_CONTROL),
             target_qtrm=self.target_qtrm,

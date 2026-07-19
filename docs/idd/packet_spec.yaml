@@ -177,17 +177,26 @@ remote_programming_subcommands:
   - { value: 0x02, name: QCC_HIGH_SPEED, status: defined, desc: "QCC switches its own UART back to high speed (QCC -> High Speed / Mode Back); byte 35 (qtrm_select) carries the same target the session was opened with. Bare 90-byte header only - no inner command, no payload. Value 0x02 (not 0x00) so 0x00 is reserved exclusively for BROADCAST." }
 
 # -----------------------------------------------------------------------------
-# Remote Programming on-wire frame shapes - these are NOT the standard
-# [90-byte header][56-byte message_body] shape; total frame size varies by
-# sub_command. See core/packet.py's RP_* size constants and CLAUDE.md open
-# issue 5 for full detail.
+# Remote Programming on-wire frame shapes under QCC_COMMAND = REMOTE_PROGRAMMING
+# (0xFF) - these are NOT the standard [90-byte header][56-byte message_body]
+# shape; total frame size varies by sub_command. See core/packet.py's RP_*
+# size constants and CLAUDE.md open issue 5 for full detail.
+#
+# Mode Step 1 (QTRMs -> Low-Speed) is NOT one of these: confirmed by Yuvraj
+# 2026-07-19, it uses QCC_COMMAND = DATA_DISTRIBUTION (0x00), the existing
+# DMA data-pipeline path, NOT REMOTE_PROGRAMMING - QCC just moves the
+# standard 2970-byte frame's 2880-byte payload to the fabric unmodified, and
+# it's the QTRM bootloader firmware that interprets its own slot's first 10
+# bytes as a mode-change command. There is no sub_command byte for this
+# frame at all (byte 34 is unused/reserved, same as any other
+# DATA_DISTRIBUTION frame) - see build_broadcast_bootloader_frame() in
+# core/packet.py.
 # -----------------------------------------------------------------------------
 
 remote_programming_framing:
   - { sub_command: [QCC_LOW_SPEED, QCC_HIGH_SPEED], total_size_bytes: 90, shape: "[90-byte header]", desc: "QCC's own self-directed UART switch - no inner command, no payload. Byte 35 (qtrm_select, inside the header) says which QTRM(s) the low-speed session targets: 0-95 = one QTRM, 0xFF = all 96." }
   - { sub_command: BROADCAST, total_size_bytes: 100, shape: "[90-byte header][10-byte inner bootloader command]", desc: "Every QTRM-targeted RP command except bitstream DATA chunks. Reaches all 96 QTRMs or just the latched one, per the qtrm_select of the preceding QCC_LOW_SPEED mode change." }
   - { sub_command: BROADCAST, total_size_bytes: 4196, shape: "[90-byte header][10-byte inner bootloader command][4096-byte payload]", desc: "Bitstream DATA chunks only (CT_BITSTREAM_DATA, 0x34). Same qtrm_select routing as the 100-byte shape." }
-  - { sub_command: BROADCAST, total_size_bytes: 2970, shape: "[90-byte header][96 x 30-byte QTRM slots]", desc: "Mode Step 1 only (QTRMs -> Low-Speed) - QTRMs are still per-QTRM-addressed at this point, not yet on the shared low-speed FIFO. Broadcast: the 10-byte command is replicated into every slot. Single-QTRM: only the target QTRM's slot carries the command, the other 95 slots are all-zero." }
 
 # -----------------------------------------------------------------------------
 # Message Body (bytes 34-89, 56 bytes) - RESPONSE direction (QCC -> RC).

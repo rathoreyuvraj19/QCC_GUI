@@ -39,7 +39,13 @@ TOTAL_PACKET_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + QTRM_BLOCK_SIZE  # 297
 #      low-speed broadcast FIFO yet), so this one must use the standard
 #      2970-byte frame shape with the 10-byte bootloader command replicated
 #      into each of the 96 30-byte QTRM slots - see
-#      build_broadcast_bootloader_frame() below.
+#      build_broadcast_bootloader_frame() below. Uses QCC_COMMAND =
+#      DATA_DISTRIBUTION (0x00), NOT REMOTE_PROGRAMMING (0xFF): per Yuvraj
+#      2026-07-19, QCC just moves the 2880-byte payload to the fabric via
+#      its existing DMA pipeline, unmodified - it's the QTRM bootloader
+#      firmware that interprets its own slot's first 10 bytes as a
+#      mode-change command, not QCC itself. Shapes 2-4 below are the ones
+#      that genuinely use QCC_COMMAND = REMOTE_PROGRAMMING (0xFF).
 #   2. Mode Step 2 (QCC -> Low-Speed) and Mode Back/QCC -> High-Speed are
 #      both QCC's OWN self-directed UART switch, not QTRM-targeted
 #      bootloader commands at all - RE-DECIDED 2026-07-19 per Yuvraj, bare

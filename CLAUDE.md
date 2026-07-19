@@ -134,7 +134,24 @@ instructions and a file-by-file overview.
    while the gate is open so the value can't drift mid-session, and the
    mock responder latches/zero-fills the same way the real QCC will.
 
-6. **GENERATOR_STATUS bit 2 (QCC Mode)** - header byte 82
+6. **Mode Step 1 confirmed to use QCC_COMMAND=DATA_DISTRIBUTION, not
+   REMOTE_PROGRAMMING (2026-07-19 per Yuvraj)** - the 2970-byte
+   replicated-slot frame (item 5 above) rides the QCC's existing DMA
+   data-pipeline path (`QCC_COMMAND` byte 33 = `0x00`), not `0xFF`: QCC
+   just moves the 2880-byte payload to the fabric unmodified, and it's the
+   QTRM bootloader firmware that interprets its own slot's first 10 bytes
+   as a mode-change command, not QCC itself. `apps/remote_prog_controller.py`'s
+   `start_mode_step1()` builds its header with `COMMAND_ID_DWELL` (the
+   existing `DATA_DISTRIBUTION` alias) instead of
+   `COMMAND_ID_REMOTE_PROGRAMMING`. `core/packet.py`'s framing comment and
+   `docs/idd/packet_spec.yaml`'s `remote_programming_framing` no longer
+   list the 2970-byte shape under `REMOTE_PROGRAMMING`'s SubCommands - it
+   was removed from there since it never carried a SubCommand byte to
+   begin with. No change needed on the mock responder
+   (`apps/remote_prog_tester_app.py`) or `main_window.py`'s RX routing -
+   neither gates on the query's `QCC_COMMAND` byte for this frame shape.
+
+7. **GENERATOR_STATUS bit 2 (QCC Mode)** - header byte 82
    (`GENERATOR_STATUS`, response direction) gained a third status bit per
    Yuvraj: bit 0 `SOB_STATE`, bit 1 `PRT_STATE` (unchanged), and now bit 2
    `QCC_MODE`/speed-toggle status (0 = normal high-speed mode, 1 =

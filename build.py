@@ -37,6 +37,9 @@ def build_exe(onefile: bool = False):
     if not main_script.exists():
         sys.exit(f"main.py not found at {repo_root}")
 
+    # Icon path (check once, use for both data and exe embedding)
+    icon_path = repo_root / "app.ico"
+
     # Build options
     pyinstaller_args = [
         "--name=qcc_gui",
@@ -52,8 +55,11 @@ def build_exe(onefile: bool = False):
         "--collect-all=openpyxl",
     ]
 
-    # Icon if it exists (optional)
-    icon_path = repo_root / "app.ico"
+    # Include icon file in dist folder (not just embedded in exe)
+    if icon_path.exists():
+        pyinstaller_args.append("--add-data=app.ico:.")
+
+    # Embed icon in the exe itself
     if icon_path.exists():
         pyinstaller_args.append(f"--icon={icon_path}")
 

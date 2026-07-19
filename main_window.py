@@ -13,6 +13,7 @@ the QCC/QTRM side yet.
 import csv
 import os
 import socket
+import sys
 import time
 from datetime import datetime
 
@@ -21,7 +22,7 @@ from PySide6.QtGui import QAction, QGuiApplication
 from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QLineEdit, QPushButton, QLabel,
-    QGroupBox, QMessageBox, QTabWidget, QInputDialog, QFileDialog,
+    QGroupBox, QMessageBox, QTabWidget, QFileDialog,
 )
 
 from core.packet import (
@@ -45,6 +46,7 @@ from core.frame_logger import FrameLogger
 from core.udp_worker import UdpWorker
 from ping_worker import PingWorker
 from widgets.header_panel import HeaderPanel
+from widgets.password_keypad_dialog import PasswordKeypadDialog
 from tabs.link_test_tab import LinkTestTab
 from tabs.status_tab import StatusTab
 from tabs.cal_tab import CalTab
@@ -443,10 +445,9 @@ class MainWindow(QMainWindow):
         ):
             tab_name = ("Memory Operation" if index == self._memory_tab_index
                         else "Remote Programming")
-            password, ok = QInputDialog.getText(
+            password, ok = PasswordKeypadDialog.get_password(
                 self, f"{tab_name} - Locked",
                 "This tab can write to real hardware's flash memory.\nEnter password:",
-                QLineEdit.Password,
             )
             if not (ok and password == MEMORY_TAB_PASSWORD):
                 self.tabs.setCurrentIndex(self._last_unlocked_tab_index)

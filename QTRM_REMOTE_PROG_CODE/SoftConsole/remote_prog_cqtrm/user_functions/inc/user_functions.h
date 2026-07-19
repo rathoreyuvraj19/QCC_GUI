@@ -12,6 +12,13 @@
 #define BIT_STREAM_PACKET_HEADER_SIZE 10
 #define CMD_MSG_PACKET_SIZE 		10
 
+/* QCC's low-speed FIFO drain is 32-bit-word based and always transmits
+ * all 4 bytes of every word, so every stream QCC sends us arrives
+ * zero-padded up to a multiple of 4 bytes. Always RECEIVE the padded
+ * length (and use only the real first N bytes) so the pad bytes are
+ * consumed here and never shift the framing of the next packet. */
+#define QCC_FIFO_PAD4(n) ((((n) + 3u) / 4u) * 4u)
+
 #define COREGPIO_INPUT_OFFSET_REG 0x90
 #define COREGPIO0_INPUT_REG  ((uint32_t*)(0x50000000U + COREGPIO_INPUT_OFFSET_REG))
 #define COREGPIO1_INPUT_REG  ((uint16_t*)(0x50001000U + COREGPIO_INPUT_OFFSET_REG))

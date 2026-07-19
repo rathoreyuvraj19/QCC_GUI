@@ -3,10 +3,13 @@
 
 void wait_for_new_request(LRU_info_type_def* pLRU_info) {
 	uint32_t byte_count = 0;
-	uint8_t recv_data[CMD_MSG_PACKET_SIZE] = { 0 };
+	/* Receive the QCC-FIFO-padded length (12 for a 10-byte command) so the
+	 * 2 zero pad bytes are consumed here instead of desyncing the next
+	 * packet; only the first CMD_MSG_PACKET_SIZE bytes are ever parsed. */
+	uint8_t recv_data[QCC_FIFO_PAD4(CMD_MSG_PACKET_SIZE)] = { 0 };
 	uint8_t temp = 0;
 	uint32_t timer = 0;
-	uint32_t packetSize = CMD_MSG_PACKET_SIZE;
+	uint32_t packetSize = QCC_FIFO_PAD4(CMD_MSG_PACKET_SIZE);
  	while (byte_count < packetSize) {
 		if (MSS_UART_get_rx(&g_mss_uart1, &temp, 1) > 0) {
 			timer = 0;
@@ -30,7 +33,7 @@ void wait_for_new_request(LRU_info_type_def* pLRU_info) {
 	}
 	// TODO: check header and checksum and generate error msg accordingly and also add timeout error
 
-	if (!headerAndCheckSumCheck(recv_data, packetSize)) {
+	if (!headerAndCheckSumCheck(recv_data, CMD_MSG_PACKET_SIZE)) {
 		//Send an error msg based on the type of error
 		return;
 	}
@@ -94,8 +97,12 @@ void wait_for_new_request(LRU_info_type_def* pLRU_info) {
 
 void recieve_bit_stream(uint16_t total_packet_count, uint16_t packetSize, uint8_t img_is_golden) {
 	uint32_t byte_count = 0;
-	uint8_t recv_data[packetSize + BIT_STREAM_PACKET_HEADER_SIZE];
-	memset(recv_data, 0, packetSize + BIT_STREAM_PACKET_HEADER_SIZE);
+	/* Receive the QCC-FIFO-padded chunk length (e.g. 4108 for a 10+4096
+	 * chunk) so the zero pad bytes are consumed here; only the first
+	 * packetSize + BIT_STREAM_PACKET_HEADER_SIZE bytes are ever used. */
+	uint32_t padded_size = QCC_FIFO_PAD4(packetSize + BIT_STREAM_PACKET_HEADER_SIZE);
+	uint8_t recv_data[QCC_FIFO_PAD4(packetSize + BIT_STREAM_PACKET_HEADER_SIZE)];
+	memset(recv_data, 0, padded_size);
 	uint8_t bitstream_packet[packetSize];
 	memset(bitstream_packet, 0, packetSize);
 	uint8_t* p_recv_buff = recv_data;
@@ -105,13 +112,20 @@ void recieve_bit_stream(uint16_t total_packet_count, uint16_t packetSize, uint8_
 	while (packet_index < total_packet_count) {//TODO: Check packet_index <= total_packet_count OR <?????????????????????
 		memset(recv_data, 0, sizeof(recv_data));
 		p_recv_buff = recv_data;
-		while (byte_count < packetSize + BIT_STREAM_PACKET_HEADER_SIZE) {
-			uint32_t rx_size = MSS_UART_get_rx(&g_mss_uart1, p_recv_buff, 16);
+		while (byte_count < padded_size) {
+			/* Never request past the end of this chunk's buffer -- caps the
+			 * read so a burst can neither overrun recv_data nor overshoot
+			 * the exact byte_count == padded_size terminating check. */
+			uint32_t want = padded_size - byte_count;
+			if (want > 16) {
+				want = 16;
+			}
+			uint32_t rx_size = MSS_UART_get_rx(&g_mss_uart1, p_recv_buff, want);
 			if (rx_size > 0) {
 				timer = 0;
 				p_recv_buff += rx_size;
 				byte_count += rx_size;
-				if (byte_count == packetSize + BIT_STREAM_PACKET_HEADER_SIZE) {
+				if (byte_count == padded_size) {
 					byte_count = 0;
 					packet_index++;
 					break;

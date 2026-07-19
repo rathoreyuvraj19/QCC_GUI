@@ -999,7 +999,7 @@ class QCCHeaderTx:
     67-70   INPUT_PRT_PRI          4     uint32  PRT PRI (Pulse Repetition Interval) measured on input, us
     71-74   OUTPUT_PRT_PRI         4     uint32  PRT PRI (Pulse Repetition Interval) measured on output, us
     75-76   INPUT_PPS_WIDTH_US     2     uint16
-    77-80   PPS_COUNTER            4     uint32  Separate 32-bit counter, distinct from INPUT_PPS_COUNT
+    77-80   PPS_TIMESTAMP          4     uint32  Microseconds since last PPS edge, latched at each SOB edge; distinct from INPUT_PPS_COUNT (the edge counter)
     81      GENERATOR_STATUS       1     byte    Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE (0=normal high-speed, 1=low-speed remote-programming). Bits 7-3: reserved.
     82-84   RESERVED1              3     byte[3]
     85-88   CHIP_ID                4     uint32  Lower 32 bits of a 64-bit chip ID
@@ -1052,7 +1052,7 @@ class QCCHeaderTx:
         self.input_prt_pri = 0
         self.output_prt_pri = 0
         self.input_pps_width_us = 0
-        self.pps_counter = 0
+        self.pps_timestamp = 0
         self.generator_status = 0  # Bit 0: SOB_STATE, Bit 1: PRT_STATE, Bit 2: QCC_MODE
         self.chip_id = 0
         self.checksum_ok = None
@@ -1095,7 +1095,7 @@ class QCCHeaderTx:
             self.input_prt_width_us, self.output_prt_width_us,
             self.input_prt_pri, self.output_prt_pri,
             self.input_pps_width_us,
-            self.pps_counter,
+            self.pps_timestamp,
             self.generator_status,
             bytes(3),
             self.chip_id,
@@ -1120,7 +1120,7 @@ class QCCHeaderTx:
             input_prt_width_us, output_prt_width_us,
             input_prt_pri, output_prt_pri,
             input_pps_width_us,
-            pps_counter,
+            pps_timestamp,
             generator_status,
             _reserved1,
             chip_id,
@@ -1158,7 +1158,7 @@ class QCCHeaderTx:
         obj.input_prt_pri = input_prt_pri
         obj.output_prt_pri = output_prt_pri
         obj.input_pps_width_us = input_pps_width_us
-        obj.pps_counter = pps_counter
+        obj.pps_timestamp = pps_timestamp
         obj.generator_status = generator_status & 0xFF
         obj.chip_id = chip_id
         obj.checksum_ok = crc8(raw[:-1]) == chk

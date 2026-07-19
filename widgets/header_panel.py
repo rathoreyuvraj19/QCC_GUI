@@ -117,7 +117,7 @@ _FIELD_SECTIONS = [
         "INPUT_PPS_WIDTH_US",
     ]),
     ("PRT PRI (µs)", ["INPUT_PRT_PRI", "OUTPUT_PRT_PRI"]),
-    ("Misc", ["PPS_COUNTER", "GENERATOR_STATUS", "CHIP_ID"]),
+    ("Misc", ["PPS_TIMESTAMP", "GENERATOR_STATUS", "CHIP_ID"]),
 ]
 
 _QUERY_BTN_STYLE = (
@@ -456,7 +456,7 @@ class HeaderPanel(QWidget):
         self._set_field("INPUT_PPS_WIDTH_US", f"{h.input_pps_width_us} µs")
         self._set_field("INPUT_PRT_PRI", f"{h.input_prt_pri} µs")
         self._set_field("OUTPUT_PRT_PRI", f"{h.output_prt_pri} µs")
-        self._set_field("PPS_COUNTER", str(h.pps_counter))
+        self._set_field("PPS_TIMESTAMP", f"{h.pps_timestamp} µs")
         gen_status_str = f"SOB={'Internal' if h.sob_is_internal() else 'Bypass'}\nPRT={'Internal' if h.prt_is_internal() else 'Bypass'}"
         self._set_field("GENERATOR_STATUS", gen_status_str)
         self._set_field("CHIP_ID", f"0x{h.chip_id:08X}")

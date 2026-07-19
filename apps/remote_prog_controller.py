@@ -205,6 +205,13 @@ class RemoteProgController(QObject):
 
         self._op = None                  # active operation, None = idle
         self._got_any_frame = False
+        # Authenticate/Verify/Program: distinct QTRM indices that have
+        # reported so far this poll - lets on_frame() end the window early
+        # the moment every targeted QTRM is accounted for, instead of always
+        # sitting out the full iap_window_ms (replies land staggered, up to
+        # several seconds apart per QTRM, but there's no reason to keep
+        # polling once nobody's left to reply).
+        self._iap_replied = set()
         # One reusable single-shot timer for whatever the active operation is
         # waiting on (mode-step window, 30 s poll, per-chunk watchdog,
         # trailing-ack grace) - each call site (_start/_send_current_chunk/
@@ -473,6 +480,7 @@ class RemoteProgController(QObject):
                         window_ms: int):
         if self.busy or not self.gate_open:
             return
+        self._iap_replied = set()
         self._start(op, window_ms, self._on_iap_window_closed)
         self._send_rp(
             bl.build_firmware_update_command(iap_mode, image_is_golden),
@@ -703,6 +711,21 @@ class RemoteProgController(QObject):
             # carrying every targeted QTRM's LRU slot, so there's nothing
             # left to collect once it lands.
             self._finish(True, "LRU info received")
+        elif self._op in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
+            # Replies land staggered over the poll window (each QTRM answers
+            # whenever its own authenticate/verify/program finishes) - once
+            # every targeted QTRM has reported at least once, there's nobody
+            # left to wait on, so end the window now instead of sitting out
+            # the rest of iap_window_ms. Program legitimately expects no
+            # replies at all (busy-wait + reboot) - this just lets that case
+            # resolve immediately too if a target's link-response happens to
+            # land before the timeout.
+            target_count = (NUM_QTRM if self.target_qtrm == RP_QTRM_SELECT_BROADCAST
+                            else 1)
+            if len(self._iap_replied) >= target_count:
+                op = self._op
+                self.op_window_closed.emit(op)
+                self._finish(True, "All targeted QTRMs replied — poll ended early")
 
     def _dispatch_slot(self, q: int, parsed):
         op = self._op
@@ -714,6 +737,8 @@ class RemoteProgController(QObject):
             else:
                 self.op_row_updated.emit(op, q, parsed)
         elif op in (OP_LINK_CHECK, OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
+            if op in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
+                self._iap_replied.add(q)
             self.op_row_updated.emit(op, q, parsed)
         elif op == OP_UPLOAD:
             if not isinstance(parsed, bl.BitstreamAck):

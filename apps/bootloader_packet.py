@@ -202,15 +202,10 @@ BS_ACK_TRANSFER_FAILED_BIT = 0x02      # bit 1
 
 def bootloader_checksum(packet_first_9: bytes) -> int:
     """
-    Byte 10 (Footer/Check Sum) of every fixed 10-byte packet.
-
-    TODO(UNCONFIRMED ALGORITHM): the source document never specifies how
-    this byte is computed - XOR of bytes 1-9 is a PROVISIONAL choice
-    (per Yuvraj, 2026-07-08), picked because it matches the XOR checksum
-    the 30-byte QTRM slots already use in this project's main protocol.
-    If the document owner confirms a different algorithm (CRC-8? sum?),
-    swap it HERE and nowhere else - every builder and parser in this
-    module funnels through this one function.
+    Byte 10 (Footer/Check Sum) of every fixed 10-byte packet: plain
+    XOR-accumulate over bytes 1-9, stored in byte 10. Matches firmware's
+    getCheckSum() (user_functions.c) exactly - every builder and parser in
+    this module funnels through this one function.
     """
     x = 0
     for b in packet_first_9:
@@ -418,9 +413,8 @@ def parse_slot(raw10: bytes, context: str = CONTEXT_FW_UPDATE):
     typed dataclass for recognized packets, or UnknownSlot for anything
     with a plausible header but an unrecognized/unexpected command type.
 
-    checksum_ok is computed under the PROVISIONAL XOR algorithm (see
-    bootloader_checksum) - callers should display it but not reject decodes
-    on it while the real algorithm is unconfirmed.
+    checksum_ok is computed via bootloader_checksum() (XOR-accumulate,
+    matches firmware's getCheckSum()).
     """
     if len(raw10) != BL_PACKET_SIZE:
         raise ValueError(f"expected {BL_PACKET_SIZE} bytes, got {len(raw10)}")

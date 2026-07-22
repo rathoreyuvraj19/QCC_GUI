@@ -573,6 +573,17 @@ class MainWindow(QMainWindow):
         )
         self.responder_warning_label.setVisible(False)
 
+        # Same pattern, for the Remote Programming tester window - it's a
+        # separate mock (bootloader protocol, not the status-query path)
+        # opened independently, so it gets its own banner rather than
+        # reusing responder_warning_label's text.
+        self.rp_tester_warning_label = QLabel("⚠ RP Tester is open (mock QTRM bootloader, not real hardware)")
+        self.rp_tester_warning_label.setStyleSheet(
+            "color: #1f2328; background-color: rgb(240, 200, 120);"
+            "border-radius: 8px; padding: 4px 10px; font-weight: 600;"
+        )
+        self.rp_tester_warning_label.setVisible(False)
+
         # Always-visible-while-active indicator that a burn-test log is
         # being written (the Tools menu action that started it is hidden
         # inside a closed menu) - lives on the same banner row as the
@@ -587,6 +598,7 @@ class MainWindow(QMainWindow):
 
         warning_row = QHBoxLayout()
         warning_row.addWidget(self.responder_warning_label)
+        warning_row.addWidget(self.rp_tester_warning_label)
         warning_row.addWidget(self.logging_indicator_label)
         warning_row.addStretch(1)
 
@@ -895,7 +907,11 @@ class MainWindow(QMainWindow):
         self._remote_prog_tester_window.raise_()
         self._remote_prog_tester_window.activateWindow()
 
+        self.rp_tester_warning_label.setVisible(True)
+
     def _on_rp_tester_window_closed(self):
+        self.rp_tester_warning_label.setVisible(False)
+
         if self._rp_tester_ip_overridden:
             self._rp_tester_ip_overridden = False
             self.qcc_ip_edit.setText(self._rp_tester_ip_before or "")

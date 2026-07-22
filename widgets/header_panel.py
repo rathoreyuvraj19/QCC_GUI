@@ -372,6 +372,15 @@ class HeaderPanel(QWidget):
     def _make_value_label(self, name: str) -> QLabel:
         value_label = QLabel("-")
         value_label.setStyleSheet(_VALUE_NORMAL_STYLE)
+        # Wrapped and capped to the value column's actual available width
+        # (the rest of _CONTENT_COL_WIDTH after the shared label column) -
+        # without this, a long value (e.g. QCC_MODE's "Low-Speed (Remote
+        # Programming)") stretches this label past the panel's fixed
+        # _PANEL_WIDTH, and since the panel sits flush against the window's
+        # right edge, that overflow spills past the window boundary instead
+        # of staying inside the card.
+        value_label.setWordWrap(True)
+        value_label.setMaximumWidth(_CONTENT_COL_WIDTH - self._label_col_width - 10)
         # Selectable/copyable via mouse - lets an operator copy a single
         # value (e.g. CHIP_ID) without retyping it by hand.
         value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)

@@ -94,7 +94,15 @@ without a way to visually re-render the document)
     is TX-only, so an incoming 0x34 can only be a link response.
  b. RF_LRU_STATUS_RESPONSE's command_type: firmware's send_LRU_info() sets
     0x30 (colliding with MSS Link Response), not the documented 0x31. Likely
-    a firmware bug - not changed here.
+    a firmware bug. HANDLED 2026-07-22: parse_slot() now reads 0x30 as
+    LruStatusResponse when a Get LRU Info poll is in flight (context=
+    CONTEXT_LRU_INFO) - see remote_prog_controller.py's on_frame(), which
+    only sets that context while self._op == OP_LRU_INFO, so Link Check's
+    own 0x30/0x34 handling (item a) is unaffected outside that window. Fixes
+    the LRU Info table never populating even though QTRMs were replying -
+    every response was being misparsed as an MssLinkResponse and silently
+    dropped (remote_programming_tab.py's on_op_row() has no OP_LRU_INFO
+    case).
  c. FwUpdateResponse/ErrorMsg wire layout: the source document shows these
     as bit-packed single bytes, but firmware treats iap_mode/iap_status and
     header_error/crc_error/timeout_error as separate whole bytes. This
@@ -397,11 +405,19 @@ class UnknownSlot(SlotBase):
     pass
 
 
-# Contexts for disambiguating the shared 0x35 Command Type on receive
-# (open item 1): the GUI knows which operation is in flight, and only ever
-# RECEIVES the LRU->RC meanings, so no byte-level guess is needed.
+# Contexts for disambiguating shared Command Type values on receive (open
+# item 1, and item b below): the GUI knows which operation is in flight, and
+# only ever RECEIVES the LRU->RC meanings, so no byte-level guess is needed.
 CONTEXT_FW_UPDATE = "fw_update"    # Authenticate/Verify/Program-start in flight
 CONTEXT_BITSTREAM = "bitstream"    # chunk streaming in flight
+CONTEXT_LRU_INFO = "lru_info"      # Get LRU Info poll in flight - firmware's
+                                    # send_LRU_info() tags its response 0x30
+                                    # (CT_LINK), not documented 0x31
+                                    # (CT_LRU_STATUS) - see item b above. That
+                                    # collides with CT_LINK/CT_LINK_RESPONSE,
+                                    # which this parser otherwise treats as
+                                    # MssLinkResponse, so an LRU poll needs
+                                    # this context to read 0x30 correctly.
 
 
 def parse_slot(raw10: bytes, context: str = CONTEXT_FW_UPDATE):
@@ -432,16 +448,14 @@ def parse_slot(raw10: bytes, context: str = CONTEXT_FW_UPDATE):
     if raw10[0] != BL_HEADER:
         return UnknownSlot(**base)
 
-    if ct in (CT_LINK, CT_LINK_RESPONSE):
-        # Real firmware tags its link response 0x34 (sendLinkRes()), the
-        # document says 0x30 - accept both. Incoming 0x34 is unambiguous
-        # because bitstream data (the other 0x34) is TX-only.
-        return MssLinkResponse(**base, b1_b4=bytes(raw10[5:9]))
-    if ct == CT_LRU_STATUS:
+    if ct == CT_LRU_STATUS or (ct == CT_LINK and context == CONTEXT_LRU_INFO):
         # byte index 4 (0-based) is msg_counter, not part of the payload -
         # the packed mfg_id/part_no byte starts at index 5. See
         # LruStatusResponse's docstring note for the firmware struct this
-        # mirrors.
+        # mirrors. The ct==CT_LINK arm is the documented firmware quirk
+        # (item b): send_LRU_info() actually tags 0x30, so it only reaches
+        # here when a Get LRU Info poll is in flight (context check) -
+        # otherwise 0x30 falls through to the MssLinkResponse branch below.
         mfg_id_and_part = raw10[5]
         return LruStatusResponse(
             **base,
@@ -450,6 +464,11 @@ def parse_slot(raw10: bytes, context: str = CONTEXT_FW_UPDATE):
             serial_num=raw10[6] | (raw10[7] << 8),
             fw_version=raw10[8],
         )
+    if ct in (CT_LINK, CT_LINK_RESPONSE):
+        # Real firmware tags its link response 0x34 (sendLinkRes()), the
+        # document says 0x30 - accept both. Incoming 0x34 is unambiguous
+        # because bitstream data (the other 0x34) is TX-only.
+        return MssLinkResponse(**base, b1_b4=bytes(raw10[5:9]))
     if ct == CT_FW_UPDATE_OR_BS_ACK:
         if context == CONTEXT_BITSTREAM:
             return BitstreamAck(

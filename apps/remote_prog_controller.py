@@ -682,6 +682,7 @@ class RemoteProgController(QObject):
 
         context = (bl.CONTEXT_BITSTREAM
                    if self._op == OP_UPLOAD and self._upload_phase in ("stream", "grace")
+                   else bl.CONTEXT_LRU_INFO if self._op == OP_LRU_INFO
                    else bl.CONTEXT_FW_UPDATE)
         slots = extract_rp_slots(raw)
         decoded_any = False

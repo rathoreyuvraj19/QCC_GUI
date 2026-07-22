@@ -1001,6 +1001,22 @@ class RemoteProgrammingTab(QWidget):
             self.iap_table.item(q, 1).setText("Error")
             self.iap_table.item(q, 2).setText(
                 f"hdr={parsed.header_error} crc={parsed.crc_error} tmo={parsed.timeout_error}")
+        elif op == OP_PROGRAM and isinstance(parsed, bl.MssLinkResponse):
+            # Program-only (per Yuvraj 2026-07-22): iap_program() in the
+            # firmware (user_functions.c) never transmits a 0x35
+            # FwUpdateResponse - it busy-waits on the IAP result then resets
+            # the device, unlike iap_authenticate()/iap_verify() which do
+            # send one. What actually lands on the wire during a Program
+            # poll is a 0x34 MSS Link Response (B1 B2 B3 B4), same shape
+            # Link Check uses. Authenticate/Verify are untouched - they
+            # still only handle FwUpdateResponse/ErrorMsg above. Without
+            # this branch the row silently stayed "Pending" and was later
+            # mislabeled "No Reply (normal)" by on_op_window_closed() even
+            # though a real packet had arrived.
+            self.iap_matrix.set_one(q, _OK_QCOLOR)
+            self.iap_table.item(q, 1).setText("Responded")
+            self.iap_table.item(q, 2).setText(
+                "Link " + " ".join(f"{b:02X}" for b in parsed.b1_b4))
 
     def on_op_window_closed(self, op: str):
         if op == OP_LINK_CHECK:

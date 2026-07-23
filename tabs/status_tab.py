@@ -36,16 +36,18 @@ don't apply to whatever gets selected/sent next.
 from openpyxl import Workbook
 
 from PySide6.QtCore import QTimer, Signal
+from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFileDialog, QFormLayout, QFrame, QGridLayout,
     QGroupBox, QHBoxLayout, QLabel, QMessageBox, QPushButton, QScrollArea,
     QVBoxLayout, QWidget,
 )
 
-from core.command_style import send_button_style
+from core.command_style import send_button_style, WARNING_RGB
 from tabs.link_test_tab import LedMatrix, _IDLE_COLOR, _LINKED_COLOR, _NOT_LINKED_COLOR, _PENDING_COLOR
 from core.packet import (
     STATUS_TYPE_ACK, STATUS_TYPE_HEALTH, STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
+    STATUS_TYPE_THERMAL_CONFIG,
     DIAGNOSTIC_TYPE_DETAILED_HEALTH, DIAGNOSTIC_TYPE_FUTURE_BUFFER, DIAGNOSTIC_TYPE_PRESENT_BUFFER,
 )
 from widgets.qtrm_layout import NUM_QTRM
@@ -60,6 +62,7 @@ _STATUS_TYPES = [
     ("TRM Err. Log", STATUS_TYPE_ERR_LOG),
     ("TRM Mfg. Details", STATUS_TYPE_MFG),
     ("DIAGNOSTIC", STATUS_TYPE_DIAGNOSTIC),
+    ("TRM Thermal Shutdown Config", STATUS_TYPE_THERMAL_CONFIG),
 ]
 
 _DIAGNOSTIC_TYPES = [
@@ -94,6 +97,8 @@ _FIELD_LABELS = {
     "dwell_prt_count": "Dwell PRT Count",
     "total_sob_count": "Total SOB Count",
     "beam_data_register_address": "Beam Data Register Address",
+    "temp_cutoff_enable": "Temp Cutoff Enable (raw)",
+    "temp_cutoff_value": "Temp Cutoff Value",
 }
 
 _CHANNEL_FIELD_LABELS = {
@@ -125,6 +130,7 @@ _FILTERABLE_FIELDS = {
         "timeout_error", "prt_duty_violation_count", "prt_width_violation_count",
     ],
     STATUS_TYPE_MFG: ["mfg_agency_id", "firmware_version", "serial_number", "on_time_hours"],
+    STATUS_TYPE_THERMAL_CONFIG: ["temp_cutoff_enable", "temp_cutoff_value"],
 }
 
 _DIAGNOSTIC_FILTERABLE_FIELDS = {
@@ -141,6 +147,16 @@ _DIAGNOSTIC_FILTERABLE_FIELDS = {
 # LedMatrix to tx_forward_matrix.py's TxForwardMatrix (per-channel LEDs) -
 # see _is_tx_forward_mode().
 _TX_FORWARD_FIELD = "tx_forward_rf_status"
+
+# Health's temperature_status field (a raw 0-255 status byte - see
+# parse_health_response in core/packet.py) gets a user-set cutoff: any
+# responded QTRM whose value exceeds it is overlaid orange instead of the
+# normal green, independent of whichever field "Show Field" is currently
+# displaying. Only meaningful under HEALTH, since that's the only Status
+# Type with this field at the top level.
+_TEMP_FIELD = "temperature_status"
+_WARNING_COLOR = QColor(*WARNING_RGB)
+_DEFAULT_TEMP_CUTOFF = 100
 
 
 def _format_value(value) -> str:
@@ -299,6 +315,12 @@ class StatusTab(QWidget):
         row.addWidget(self.diagnostic_type_label)
         row.addWidget(self.diagnostic_type_combo)
 
+        self.temp_cutoff_label = QLabel("Temp Cutoff:")
+        self.temp_cutoff_spin = SpinField(0, 255, _DEFAULT_TEMP_CUTOFF, field_width=56)
+        self.temp_cutoff_spin.spin.valueChanged.connect(self._on_temp_cutoff_changed)
+        row.addWidget(self.temp_cutoff_label)
+        row.addWidget(self.temp_cutoff_spin)
+
         divider = QFrame()
         divider.setFrameShape(QFrame.VLine)
         divider.setStyleSheet("background-color: #4a515a; max-width: 1px; border: none;")
@@ -329,6 +351,7 @@ class StatusTab(QWidget):
         self.diagnostic_type_label.setVisible(is_diagnostic)
         self.diagnostic_type_combo.setVisible(is_diagnostic)
         self._rebuild_filter_checkboxes()
+        self._update_temp_cutoff_visibility()
         # A previous query's results were for a different Status Type and
         # no longer apply - same reasoning as resetting on tab-change.
         self.reset_to_idle()
@@ -402,13 +425,69 @@ class StatusTab(QWidget):
         for btn in self.filter_button_group.buttons():
             btn.setStyleSheet(_FILTER_BTN_STYLE_ON if btn.isChecked() else _FILTER_BTN_STYLE_OFF)
         self._update_matrix_visibility()
+        self._update_temp_cutoff_visibility()
         self._on_filter_changed()
 
     def _on_filter_changed(self):
         if self._last_mode == "individual" and self._individual_target is not None:
             self._set_led_text_for_one(self._individual_target, self._individual_result)
+            # Toggling "Temperature Status" on/off changes whether the
+            # cutoff overlay applies at all - recolor from scratch rather
+            # than leaving a stale orange/green from before the toggle.
+            if self._individual_result is not None:
+                self.led_matrix.set_one(
+                    self._individual_target,
+                    _WARNING_COLOR if self._over_temp_cutoff(self._individual_result) else _LINKED_COLOR,
+                )
         elif self._last_mode == "all" and self._results is not None:
             self._apply_filter_to_leds(self._results)
+            self.led_matrix.set_results([r is not None for r in self._results])
+            self._apply_temp_highlight(self._results)
+
+    # -- temperature cutoff (HEALTH only): orange overlay on responded QTRMs
+    # whose temperature_status exceeds the cutoff --------------------------
+
+    def _is_health(self) -> bool:
+        return self.status_type_combo.currentData() == STATUS_TYPE_HEALTH
+
+    def _update_temp_cutoff_visibility(self):
+        # Only relevant once "Temperature Status" is the selected "Show
+        # Field" - not just anytime HEALTH is picked, since the cutoff has
+        # nothing to compare against until that field's actually on screen.
+        visible = self._is_health() and self._current_filter_field() == _TEMP_FIELD
+        self.temp_cutoff_label.setVisible(visible)
+        self.temp_cutoff_spin.setVisible(visible)
+
+    def _over_temp_cutoff(self, decoded) -> bool:
+        return (
+            self._is_health()
+            and self._current_filter_field() == _TEMP_FIELD
+            and decoded is not None
+            and _TEMP_FIELD in decoded
+            and decoded[_TEMP_FIELD] > self.temp_cutoff_spin.value()
+        )
+
+    def _apply_temp_highlight(self, results):
+        """Overlay orange on every responded QTRM over cutoff - leaves
+        non-responding cells (never colored green to begin with) alone."""
+        if not self._is_health() or self._current_filter_field() != _TEMP_FIELD:
+            return
+        for i, decoded in enumerate(results):
+            if self._over_temp_cutoff(decoded):
+                self.led_matrix.set_one(i, _WARNING_COLOR)
+
+    def _on_temp_cutoff_changed(self):
+        # Re-derive coloring from cached results (no re-query) so moving
+        # the cutoff live updates the matrix immediately.
+        if self._last_mode == "individual" and self._individual_target is not None:
+            if self._individual_result is not None:
+                self.led_matrix.set_one(
+                    self._individual_target,
+                    _WARNING_COLOR if self._over_temp_cutoff(self._individual_result) else _LINKED_COLOR,
+                )
+        elif self._last_mode == "all" and self._results is not None:
+            self.led_matrix.set_results([r is not None for r in self._results])
+            self._apply_temp_highlight(self._results)
 
     def _reset_led_texts(self):
         for i, led in enumerate(self.led_matrix._leds):
@@ -637,6 +716,7 @@ class StatusTab(QWidget):
         self.summary_label.setText(f"{valid_count}/{NUM_QTRM} QTRMs responded")
         self.led_matrix.set_results(valid_flags)
         self._apply_filter_to_leds(results)
+        self._apply_temp_highlight(results)
         self.tx_forward_matrix.set_results(results)
 
     def show_response_time(self, microseconds: float):
@@ -685,7 +765,7 @@ class StatusTab(QWidget):
             self._set_led_text_for_one(qtrm_index, None)
             self.tx_forward_matrix.set_one_result(qtrm_index, None)
             return
-        self.led_matrix.set_one(qtrm_index, _LINKED_COLOR)
+        self.led_matrix.set_one(qtrm_index, _WARNING_COLOR if self._over_temp_cutoff(decoded) else _LINKED_COLOR)
         self.summary_label.setText(f"QTRM-{qtrm_index}: Responded")
         self._populate_details(qtrm_index, decoded)
         self._set_led_text_for_one(qtrm_index, decoded)

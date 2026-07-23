@@ -156,6 +156,7 @@ STATUS_TYPE_HEALTH = 0x3
 STATUS_TYPE_ERR_LOG = 0x4
 STATUS_TYPE_MFG = 0x5
 STATUS_TYPE_DIAGNOSTIC = 0x6
+STATUS_TYPE_THERMAL_CONFIG = 0x7
 
 # Diagnostic Status Type IDs (Section 10.1.5.1) - only meaningful when
 # STATUS_TYPE_DIAGNOSTIC is requested; carried in the Sub Status Type nibble.
@@ -384,6 +385,24 @@ def parse_mfg_response(raw_slot: bytes):
     }
 
 
+def parse_thermal_shutdown_config_response(raw_slot: bytes):
+    """
+    TRM Thermal Shutdown Configuration Status response - 10-byte message,
+    confirmed against STATUS_MODULE.vhd (status type 0x7, not yet in the
+    QTRM Message Format IDD's numbered sections). Reads back the QTRM's
+    onboard temperature cutoff as stored in flash (i_data_packet_from_flash
+    slots 1/2) - the real hardware cutoff that drives i_temp_error/thermal
+    shutdown, distinct from the Status tab's own "Temp Cutoff" field (a
+    client-side display threshold on Health's temperature_status byte).
+    """
+    if not _valid_status_header(raw_slot, STATUS_TYPE_THERMAL_CONFIG, 10):
+        return None
+    return {
+        "temp_cutoff_enable": raw_slot[4],
+        "temp_cutoff_value": raw_slot[5],
+    }
+
+
 def parse_diagnostic_response(raw_slot: bytes, diagnostic_type: int):
     """
     Diagnostic Status response format (Section 10.1.5.2) - a full 30-byte
@@ -443,6 +462,7 @@ _STATUS_PARSERS = {
     STATUS_TYPE_ERR_LOG: lambda raw_slot, diagnostic_type: parse_err_log_response(raw_slot),
     STATUS_TYPE_MFG: lambda raw_slot, diagnostic_type: parse_mfg_response(raw_slot),
     STATUS_TYPE_DIAGNOSTIC: parse_diagnostic_response,
+    STATUS_TYPE_THERMAL_CONFIG: lambda raw_slot, diagnostic_type: parse_thermal_shutdown_config_response(raw_slot),
 }
 
 

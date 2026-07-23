@@ -38,6 +38,10 @@ WRITE_PRESSED_COLOR = "#b83a3a"
 PENDING_RGB = (160, 165, 172)
 SUCCESS_RGB = (146, 208, 165)
 FAILURE_RGB = (240, 149, 149)
+# Over-cutoff warning overlay (e.g. Status tab's Temperature Status cutoff) -
+# distinct from FAILURE_RGB since it means "responded, but out of range",
+# not "didn't respond".
+WARNING_RGB = (240, 178, 90)
 
 # Per-QTRM matrix button idle look (Isolation/Soft Reset's 96-button grids,
 # Link Test's LED matrix outline) - a light neutral grey distinct from the

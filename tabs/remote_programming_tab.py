@@ -205,6 +205,10 @@ class RemoteProgrammingTab(QWidget):
         self._gate_open = False
         self._step1_done = False
         self._session_active = False
+        self._programmed = False           # Program was sent; locks Step 1/2,
+                                             # Link Check and QTRM -> High Speed
+                                             # until QCC -> High Speed is sent
+
         self._active_iap_op = None         # which of Authenticate/Verify/Program
                                              # is running, so its own button can
                                              # flip to "Stop" instead of disabling
@@ -768,9 +772,14 @@ class RemoteProgrammingTab(QWidget):
 
     def _apply_gate(self):
         ops_ok = self._gate_open and not self._session_active
-        for btn in (self.link_check_btn, self.lru_btn,
-                    self.qtrm_high_speed_btn, self.mode_back_btn):
-            btn.setEnabled(ops_ok)
+        # Once Program has been sent, lock Link Check / QTRM -> High Speed
+        # (and Step 1/2 below) until QCC -> High Speed is sent - Program
+        # keeps the two devices' modes diverging (QTRMs auto-return to high
+        # speed, QCC doesn't) so nothing else on this link should run until
+        # the operator explicitly resyncs them.
+        for btn in (self.link_check_btn, self.lru_btn, self.qtrm_high_speed_btn):
+            btn.setEnabled(ops_ok and not self._programmed)
+        self.mode_back_btn.setEnabled(ops_ok)
         # Authenticate/Verify/Program: the button belonging to whichever one
         # is currently running stays enabled (as "Stop X") instead of
         # disabling along with the rest of the gated ops, so a click can
@@ -785,8 +794,8 @@ class RemoteProgrammingTab(QWidget):
         # valid after Return to High Speed re-locks operations.
         self.export_lru_btn.setEnabled(self._lru_has_data and not self._session_active)
         self.cancel_btn.setEnabled(self._session_active)
-        self.step1_btn.setEnabled(not self._session_active)
-        self.step2_btn.setEnabled(not self._session_active)
+        self.step1_btn.setEnabled(not self._session_active and not self._programmed)
+        self.step2_btn.setEnabled(not self._session_active and not self._programmed)
         # Step 1 already sends QTRM_SELECT to the addressed QTRM(s), and
         # Step 2 latches the same value into QCC - so the target locks as
         # soon as Step 1 succeeds, not just once the full gate (both steps)
@@ -807,6 +816,7 @@ class RemoteProgrammingTab(QWidget):
         self._gate_open = open_
         if not open_:
             self._step1_done = False
+            self._programmed = False
             self.step1_status.setText("Not sent yet")
             self.step1_status.setStyleSheet(_indicator_style())
             self.step2_status.setText("Not sent yet")
@@ -872,6 +882,8 @@ class RemoteProgrammingTab(QWidget):
             self._reset_iap_grid()
             self._active_iap_op = op
             self._set_iap_button_stop(op)
+            if op == OP_PROGRAM:
+                self._programmed = True
         elif op == OP_UPLOAD:
             self.results_stack.setCurrentIndex(3)
             self._reset_program_view()
@@ -895,6 +907,8 @@ class RemoteProgrammingTab(QWidget):
         self._session_active = False
         if op == OP_MODE_STEP1 and ok:
             self._step1_done = True
+        if op == OP_MODE_BACK and ok:
+            self._programmed = False
         if op in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
             self._active_iap_op = None
             self._restore_iap_button(op)

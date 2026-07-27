@@ -329,9 +329,7 @@ class MainWindow(QMainWindow):
         rp_tab.verify_requested.connect(self._on_rp_verify)
         rp_tab.upload_requested.connect(self._on_rp_upload)
         rp_tab.program_requested.connect(self._on_rp_program)
-        rp_tab.retry_requested.connect(self._on_rp_retry)
         rp_tab.cancel_requested.connect(rp_ctrl.cancel)
-        rp_tab.chunk_timeout_changed.connect(self._on_rp_chunk_timeout_changed)
         rp_tab.iap_timeout_changed.connect(self._on_rp_iap_timeout_changed)
         rp_tab.target_qtrm_changed.connect(self._on_rp_target_qtrm_changed)
 
@@ -1511,17 +1509,14 @@ class MainWindow(QMainWindow):
     # tab to show pending, delegate to the controller (which owns every
     # timer and sends via _send_frame). session_finished clears the lock.
 
-    def _rp_start(self, op: str, start_fn, *args, retry: bool = False):
+    def _rp_start(self, op: str, start_fn, *args):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
         if not self._check_not_busy():
             return
         self._awaiting_kind = "remote_programming"
-        if retry:
-            self.remote_programming_tab.mark_retry_started()
-        else:
-            self.remote_programming_tab.mark_session_started(op)
+        self.remote_programming_tab.mark_session_started(op)
         start_fn(*args)
         if not self.remote_prog_ctrl.busy:
             # The controller refused (its own gate/empty-image checks) - the
@@ -1564,12 +1559,6 @@ class MainWindow(QMainWindow):
 
     def _on_rp_program(self, image_is_golden: bool):
         self._rp_start(OP_PROGRAM, self.remote_prog_ctrl.start_program, image_is_golden)
-
-    def _on_rp_retry(self):
-        self._rp_start(OP_UPLOAD, self.remote_prog_ctrl.start_retry_pass, retry=True)
-
-    def _on_rp_chunk_timeout_changed(self, ms: int):
-        self.remote_prog_ctrl.chunk_timeout_ms = ms
 
     def _on_rp_target_qtrm_changed(self, target: int):
         # 0-95 = single QTRM, RP_QTRM_SELECT_BROADCAST (0xFF) = all 96 -

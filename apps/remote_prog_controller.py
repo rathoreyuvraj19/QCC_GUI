@@ -68,14 +68,17 @@ Only the actual 0x34 DATA chunks (the real file-upload payload) still use
 the full [90-byte header][10-byte command][4096-byte payload] = 4196-byte
 frame via build_remote_programming_frame().
 
-Upload chunk-advance rule: send the next 4096-byte chunk as soon as ANY
-ONE of the 96 QTRMs acks the current one - never wait for all 96. A full
-96 x N ack matrix is maintained in the background from every ack that does
-arrive (including late acks for earlier chunks), and after the transfer a
-"retry stragglers" pass re-broadcasts just the chunks some QTRM is missing.
-Backfill is broadcast-only by construction - QCC's fabric fans every frame
-out to all 96 identically, so a gap chunk goes to everyone and QTRMs that
-already have it are expected to re-ack or ignore it.
+Upload chunk-advance rule: send the next 4096-byte chunk the moment ANY ONE
+of the 96 QTRMs acks the current one - purely ack-driven, no watchdog and
+no retry (RE-DECIDED 2026-07-27 per Yuvraj - previously a per-chunk
+timeout resent the same chunk up to CHUNK_MAX_ATTEMPTS times before
+aborting, and a separate manual "Retry Stragglers" pass re-broadcast
+missing chunks after the fact; both are gone). If a chunk's ack never
+arrives, streaming simply waits there - the operator's only way out is the
+Cancel button. A full 96 x N ack matrix is still maintained in the
+background from every ack that does arrive (including late acks for
+chunks already advanced past), purely for the post-transfer gaps
+table/diagnostics.
 """
 
 from PySide6.QtCore import QObject, QTimer, Signal
@@ -108,7 +111,7 @@ QCC_BODY_SWITCH_HIGH_SPEED = 0x02  # QCC -> High-Speed - value 0x02 (not
 MODE_STEP_TIMEOUT_MS = 3000
 LRU_INFO_TIMEOUT_MS = 3000
 LINK_CHECK_WINDOW_MS = 3000          # Link Request response collection window
-IAP_POLL_WINDOW_MS = 30_000          # Authenticate/Verify/Program window DEFAULT -
+IAP_POLL_WINDOW_MS = 45_000          # Authenticate/Verify/Program window DEFAULT -
                                      # operator-adjustable via the tab's
                                      # "Op timeout (s)" field (iap_window_ms)
 MODE_BACK_WINDOW_MS = 2000           # QCC self return-to-high-speed settle window
@@ -118,8 +121,6 @@ QTRM_HIGH_SPEED_WINDOW_MS = 2000     # QTRM -> High Speed settle window - firmwa
                                      # CT_MODE_CHANGE_MSS_TO_FAB handler only toggles
                                      # GPIOs and exits, no UART reply, so (like Mode
                                      # Back) a reply is bonus, not required
-CHUNK_TIMEOUT_MS_DEFAULT = 2000      # per-chunk watchdog (tab exposes a SpinField)
-CHUNK_MAX_ATTEMPTS = 3
 TRAILING_ACK_GRACE_MS = 3000         # collect late acks after the final chunk
 BITSTREAM_ANNOUNCE_SETTLE_MS = 20    # gap before chunk 0, after the 0x33 announce -
                                      # user_functions.c's CMD_TYPE_START_BIT_STREAM_REC
@@ -174,8 +175,8 @@ class RemoteProgController(QObject):
     op_row_updated = Signal(str, int, object)
     # (operation,) - collection window expired; rows still pending are No Response
     op_window_closed = Signal(str)
-    # (chunk_index, chunk_count, attempt) - chunk was (re)sent
-    chunk_progress = Signal(int, int, int)
+    # (chunk_index, chunk_count) - chunk was sent, purely ack-driven, no retry
+    chunk_progress = Signal(int, int)
     # (qtrm_index, chunk_index, ok) - one ack recorded into the matrix
     ack_recorded = Signal(int, int, bool)
     # (missing_count, failed_count) - upload transfer pass done, gaps computed
@@ -189,7 +190,6 @@ class RemoteProgController(QObject):
     def __init__(self, send_fn, parent=None):
         super().__init__(parent)
         self._send_fn = send_fn          # main_window._send_frame
-        self.chunk_timeout_ms = CHUNK_TIMEOUT_MS_DEFAULT
         # Authenticate/Verify/Program reply-collection window - the tab
         # exposes a seconds SpinField for it (per Yuvraj 2026-07-18).
         self.iap_window_ms = IAP_POLL_WINDOW_MS
@@ -213,9 +213,10 @@ class RemoteProgController(QObject):
         # polling once nobody's left to reply).
         self._iap_replied = set()
         # One reusable single-shot timer for whatever the active operation is
-        # waiting on (mode-step window, 30 s poll, per-chunk watchdog,
-        # trailing-ack grace) - each call site (_start/_send_current_chunk/
-        # _enter_grace) disconnects any previous handler and connects its own.
+        # waiting on (mode-step window, 30 s poll, trailing-ack grace after
+        # upload streaming finishes) - each call site (_start/_enter_grace)
+        # disconnects any previous handler and connects its own. Upload
+        # streaming itself is purely ack-driven and uses no timer at all.
         self._timer = QTimer(self)
         self._timer.setSingleShot(True)
         self._timer_connected = False
@@ -224,9 +225,6 @@ class RemoteProgController(QObject):
         self._chunks = []                # [(padded_data, real_len), ...]
         self._chunk_count = 0
         self._current_chunk = None       # index being streamed, None outside streaming
-        self._chunk_attempt = 0
-        self._retry_queue = []           # chunk indices for the stragglers pass
-        self._in_retry_pass = False
         self._upload_phase = None        # "stream" | "grace"
         self._image_is_golden = False    # tab toggle at upload start
         # 96 x N matrix: per QTRM, {chunk_index: True(pass)/False(TRANSFER_FAILED)}
@@ -370,6 +368,7 @@ class RemoteProgController(QObject):
                 self.step_result.emit(op, False, "No response — link may be down")
                 self._finish(False, "No response")
         elif op == OP_LRU_INFO:
+            self.op_window_closed.emit(op)
             if self._got_any_frame:
                 self._finish(True, "LRU info received")
             else:
@@ -509,8 +508,6 @@ class RemoteProgController(QObject):
         self._chunks = split_chunks(image)
         self._chunk_count = len(self._chunks)
         self.ack_matrix = [dict() for _ in range(NUM_QTRM)]
-        self._in_retry_pass = False
-        self._retry_queue = []
         self._image_is_golden = image_is_golden
         self._op = OP_UPLOAD
         self._got_any_frame = False
@@ -519,8 +516,7 @@ class RemoteProgController(QObject):
         # recieve_bit_stream(count, 4096, golden) and starts reading
         # packets. It sends no ack for the announce itself. Chunk 0 is
         # delayed by BITSTREAM_ANNOUNCE_SETTLE_MS rather than sent
-        # immediately - see that constant's comment - the watchdog still
-        # covers a lost announce (no acks -> retries -> abort).
+        # immediately - see that constant's comment.
         self._send_rp(
             bl.build_bitstream_receive_command(
                 RP_PAYLOAD_SIZE, self._chunk_count, image_is_golden),
@@ -531,68 +527,32 @@ class RemoteProgController(QObject):
         self._current_chunk = None
         QTimer.singleShot(BITSTREAM_ANNOUNCE_SETTLE_MS, lambda: self._send_next_chunk(first=True))
 
-    def start_retry_pass(self):
-        """Re-broadcast only the chunks some QTRM is still missing."""
-        if self.busy or not self.gate_open or not self._chunks:
-            return
-        gaps = self.missing_chunk_indices()
-        if not gaps:
-            return
-        self._op = OP_UPLOAD
-        self._got_any_frame = False
-        self._in_retry_pass = True
-        self._retry_queue = gaps
-        self._upload_phase = "stream"
-        self._send_next_chunk(first=True)
-
-    def _on_upload_phase_timeout(self):
-        if self._upload_phase == "stream":
-            # Per-chunk watchdog: nobody acked the current chunk in time.
-            if self._chunk_attempt < CHUNK_MAX_ATTEMPTS:
-                self._send_current_chunk(retry=True)
-            else:
-                idx = self._retry_queue[0] if self._in_retry_pass else self._current_chunk
-                self._finish(
-                    False,
-                    f"Chunk {idx} got no ack from any QTRM after "
-                    f"{CHUNK_MAX_ATTEMPTS} attempts — aborted",
-                )
-        elif self._upload_phase == "grace":
-            self._close_upload_pass()
-
     def _send_next_chunk(self, first: bool = False):
-        if self._in_retry_pass:
-            if not first:
-                self._retry_queue.pop(0)
-            if not self._retry_queue:
-                self._enter_grace()
-                return
-            idx = self._retry_queue[0]
-        else:
-            idx = 0 if first or self._current_chunk is None else self._current_chunk + 1
-            if idx >= self._chunk_count:
-                self._enter_grace()
-                return
-            self._current_chunk = idx
-        self._chunk_attempt = 0
+        idx = 0 if first or self._current_chunk is None else self._current_chunk + 1
+        if idx >= self._chunk_count:
+            self._enter_grace()
+            return
+        self._current_chunk = idx
         self._send_current_chunk()
 
-    def _send_current_chunk(self, retry: bool = False):
-        idx = self._retry_queue[0] if self._in_retry_pass else self._current_chunk
+    def _send_current_chunk(self):
+        idx = self._current_chunk
         data, real_len = self._chunks[idx]
-        self._chunk_attempt += 1
         inner = bl.build_bitstream_data_header(real_len, self._chunk_count, idx)
         self._send_rp(
             inner, payload=data,
-            summary=f"Bitstream chunk {idx + 1}/{self._chunk_count}"
-                    f" ({real_len} bytes{', retry' if retry else ''})",
+            summary=f"Bitstream chunk {idx + 1}/{self._chunk_count} ({real_len} bytes)",
         )
-        self.chunk_progress.emit(idx, self._chunk_count, self._chunk_attempt)
-        self._retarget_timer(self._on_upload_phase_timeout, self.chunk_timeout_ms)
+        self.chunk_progress.emit(idx, self._chunk_count)
+        # Purely ack-driven - no watchdog timer here. _dispatch_slot() calls
+        # _send_next_chunk() itself the moment any QTRM acks this chunk.
 
     def _enter_grace(self):
         self._upload_phase = "grace"
-        self._retarget_timer(self._on_upload_phase_timeout, TRAILING_ACK_GRACE_MS)
+        self._retarget_timer(self._on_grace_timeout, TRAILING_ACK_GRACE_MS)
+
+    def _on_grace_timeout(self):
+        self._close_upload_pass()
 
     def _close_upload_pass(self):
         missing = self.missing_chunk_indices()
@@ -711,6 +671,7 @@ class RemoteProgController(QObject):
             # Same shape as Link Check - QCC answers with exactly one frame
             # carrying every targeted QTRM's LRU slot, so there's nothing
             # left to collect once it lands.
+            self.op_window_closed.emit(OP_LRU_INFO)
             self._finish(True, "LRU info received")
         elif self._op in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
             # Replies land staggered over the poll window (each QTRM answers
@@ -750,14 +711,12 @@ class RemoteProgController(QObject):
                 return  # nonsense index - ignore rather than corrupt the matrix
             ok = not parsed.transfer_failed
             # A pass never downgrades to fail from a stale duplicate, but a
-            # fail is upgraded by a later successful re-ack (retry pass).
+            # fail is upgraded by a later successful re-ack.
             prev = self.ack_matrix[q].get(idx)
             if prev is not True:
                 self.ack_matrix[q][idx] = ok
                 self.ack_recorded.emit(q, idx, ok)
             # Advance rule: ANY ONE successful ack of the in-flight chunk
             # moves streaming forward - never wait for all 96.
-            current = (self._retry_queue[0] if self._in_retry_pass and self._retry_queue
-                       else self._current_chunk)
-            if (self._upload_phase == "stream" and ok and idx == current):
+            if self._upload_phase == "stream" and ok and idx == self._current_chunk:
                 self._send_next_chunk()

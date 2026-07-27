@@ -32,10 +32,10 @@ from datetime import datetime
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
-    QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout, QHeaderView,
-    QLabel, QMessageBox, QPlainTextEdit, QProgressBar, QPushButton,
-    QScrollArea, QSizePolicy, QStackedWidget, QTableWidget, QTableWidgetItem,
-    QVBoxLayout, QWidget,
+    QButtonGroup, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
+    QHeaderView, QLabel, QMessageBox, QPlainTextEdit, QProgressBar,
+    QPushButton, QScrollArea, QSizePolicy, QStackedWidget, QTableWidget,
+    QTableWidgetItem, QVBoxLayout, QWidget,
 )
 
 import apps.bootloader_packet as bl
@@ -105,6 +105,27 @@ _PROGRESS_STYLE = (
 _HEXDUMP_STYLE = (
     f"QPlainTextEdit {{ background-color: #2b2f35; color: {_TEXT};"
     f"border: 1px solid {_BORDER}; border-radius: 8px; padding: 6px; }}"
+)
+
+# LRU Info "Show Field" filter row - which decoded attribute (label, attr
+# name on the parsed LruStatusResponse) gets shown directly on the QTRM
+# grid cells, mirroring status_tab.py's field-filter buttons.
+_LRU_FIELDS = [
+    ("MFG ID", "mfg_id"),
+    ("Part No", "part_no"),
+    ("Serial", "serial_num"),
+    ("FW Version", "fw_version"),
+]
+
+_FILTER_BTN_STYLE_OFF = (
+    f"QPushButton {{ background-color: {_CARD_BG}; color: rgba(238, 238, 238, 0.7);"
+    f"border: 1px solid {_BORDER}; border-radius: 10px; padding: 6px 12px; font-weight: 600; }}"
+    "QPushButton:hover { background-color: #454d57; }"
+)
+_FILTER_BTN_STYLE_ON = (
+    f"QPushButton {{ background-color: {_ACCENT}; color: #1f2328;"
+    f"border: 1px solid {_ACCENT}; border-radius: 10px; padding: 6px 12px; font-weight: 600; }}"
+    "QPushButton:hover { background-color: #1fc2ca; }"
 )
 
 
@@ -192,9 +213,7 @@ class RemoteProgrammingTab(QWidget):
     verify_requested = Signal(bool)        # image_is_golden
     upload_requested = Signal(bytes, bool)  # (.spi image bytes, image_is_golden)
     program_requested = Signal(bool)       # image_is_golden (IAP from uploaded image)
-    retry_requested = Signal()
     cancel_requested = Signal()
-    chunk_timeout_changed = Signal(int)   # milliseconds
     iap_timeout_changed = Signal(int)     # seconds (Authenticate/Verify/Program window)
 
     def __init__(self, parent=None):
@@ -212,11 +231,10 @@ class RemoteProgrammingTab(QWidget):
         self._active_iap_op = None         # which of Authenticate/Verify/Program
                                              # is running, so its own button can
                                              # flip to "Stop" instead of disabling
-        self._chunks_dispatched = 0
         self._qtrm_acked = [0] * NUM_QTRM  # successful-ack count per QTRM
         self._qtrm_failed = [False] * NUM_QTRM
-        self._have_gaps = False
         self._lru_has_data = False         # gates the Export CSV button
+        self._lru_results = [None] * NUM_QTRM  # per-QTRM LruStatusResponse, for the filter/grid
         self._controller = None            # read-only gap queries, set by main_window
 
         content = QWidget()
@@ -398,9 +416,6 @@ class RemoteProgrammingTab(QWidget):
         _field_row(grid, 2, "4K chunks", self.chunk_count_label)
         self.chunk_count_label.setStyleSheet(f"color: {_TEXT}; font-size: 13px; background: transparent;")
 
-        self.chunk_timeout_spin = SpinField(200, 30_000, 2000, field_width=90)
-        _field_row(grid, 3, "Chunk ack timeout (ms)", self.chunk_timeout_spin)
-        self.chunk_timeout_spin.spin.valueChanged.connect(self.chunk_timeout_changed.emit)
         form.addLayout(grid)
 
         self.progress_bar = QProgressBar()
@@ -423,23 +438,11 @@ class RemoteProgrammingTab(QWidget):
         self.upload_btn.clicked.connect(self._on_upload_clicked)
         form.addWidget(self.upload_btn)
 
-        row = QHBoxLayout()
-        self.retry_btn = QPushButton("Retry Stragglers")
-        self.retry_btn.setFixedHeight(32)
-        self.retry_btn.setStyleSheet(_SEND_BTN_STYLE)
-        self.retry_btn.setToolTip(
-            "Re-broadcasts only the chunks some QTRM is still missing. "
-            "Broadcast-only by design: QCC fans every frame out to all 96 "
-            "identically, so QTRMs that already have a chunk re-ack or ignore it."
-        )
-        self.retry_btn.clicked.connect(self.retry_requested.emit)
-        row.addWidget(self.retry_btn)
         self.cancel_btn = QPushButton("Cancel")
         self.cancel_btn.setFixedHeight(32)
         self.cancel_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.cancel_btn.clicked.connect(self.cancel_requested.emit)
-        row.addWidget(self.cancel_btn)
-        form.addLayout(row)
+        form.addWidget(self.cancel_btn)
 
         self.upload_status = _status_pill()
         form.addWidget(self.upload_status)
@@ -496,7 +499,7 @@ class RemoteProgrammingTab(QWidget):
         timeout_grid = QGridLayout()
         timeout_grid.setHorizontalSpacing(18)
         timeout_grid.setColumnStretch(0, 1)
-        self.iap_timeout_spin = SpinField(1, 600, 30, field_width=90)
+        self.iap_timeout_spin = SpinField(1, 600, 45, field_width=90)
         _field_row(timeout_grid, 0, "Op timeout (s)", self.iap_timeout_spin)
         self.iap_timeout_spin.spin.valueChanged.connect(self.iap_timeout_changed.emit)
         form.addLayout(timeout_grid)
@@ -550,9 +553,42 @@ class RemoteProgrammingTab(QWidget):
         placeholder.setStyleSheet(f"color: {_MUTED}; font-size: 13px; background: transparent;")
         self.results_stack.addWidget(placeholder)
 
-        # Page 1: LRU Info table
+        # Page 1: LRU Info - "Show Field" filter row, then LedMatrix (grid
+        # cells can display any one filterable field directly, like
+        # status_tab.py's Detailed Health view) + detail table side by side.
+        lru_page = QWidget()
+        lru_col = QVBoxLayout(lru_page)
+        lru_col.setContentsMargins(0, 0, 0, 0)
+        lru_col.setSpacing(8)
+
+        lru_filter_row = QHBoxLayout()
+        lru_filter_row.addWidget(QLabel("Show Field:"))
+        self.lru_filter_group = QButtonGroup(self)
+        # Not exclusive=True - same reasoning as status_tab.py's filter
+        # group: "toggle one at a time" needs a genuine none-checked state
+        # too (reverts every cell back to plain "QTRM-N"), which Qt's
+        # built-in exclusive mode doesn't allow once anything is checked.
+        self.lru_filter_group.setExclusive(False)
+        self.lru_filter_group.buttonToggled.connect(self._on_lru_filter_toggled)
+        for label, attr in _LRU_FIELDS:
+            btn = QPushButton(label)
+            btn.setCheckable(True)
+            btn.setProperty("field_key", attr)
+            btn.setStyleSheet(_FILTER_BTN_STYLE_OFF)
+            self.lru_filter_group.addButton(btn)
+            lru_filter_row.addWidget(btn)
+        lru_filter_row.addStretch(1)
+        lru_col.addLayout(lru_filter_row)
+
+        lru_row = QHBoxLayout()
+        lru_row.setSpacing(12)
+        self.lru_matrix = LedMatrix(clickable=False)
+        lru_row.addWidget(self.lru_matrix, 1)
         self.lru_table = self._make_table(["QTRM", "MFG_ID", "Part No", "Serial", "FW Version"])
-        self.results_stack.addWidget(self.lru_table)
+        lru_row.addWidget(self.lru_table, 1)
+        lru_col.addLayout(lru_row, 1)
+
+        self.results_stack.addWidget(lru_page)
 
         # Page 2: Authenticate/Verify - LedMatrix + detail table side by side
         iap_page = QWidget()
@@ -789,7 +825,6 @@ class RemoteProgrammingTab(QWidget):
                         (OP_PROGRAM, self.program_btn)):
             btn.setEnabled(ops_ok or self._active_iap_op == op)
         self.upload_btn.setEnabled(ops_ok and bool(self._image))
-        self.retry_btn.setEnabled(ops_ok and self._have_gaps)
         # Export needs actual LRU data, not the gate - the table stays
         # valid after Return to High Speed re-locks operations.
         self.export_lru_btn.setEnabled(self._lru_has_data and not self._session_active)
@@ -892,17 +927,6 @@ class RemoteProgrammingTab(QWidget):
             self._reset_link_grid()
         self._apply_gate()
 
-    def mark_retry_started(self):
-        """Like mark_session_started(OP_UPLOAD) but keeps the ack matrix -
-        the stragglers pass fills gaps in the existing state, it doesn't
-        start a fresh transfer."""
-        self._session_active = True
-        self.results_stack.setCurrentIndex(3)
-        self.upload_status.setText("Retrying stragglers...")
-        self.upload_status.setStyleSheet(_indicator_style(_PENDING_COLOR))
-        self.progress_bar.setFormat("retrying… %v / %m")
-        self._apply_gate()
-
     def on_session_finished(self, op: str, ok: bool, text: str):
         self._session_active = False
         if op == OP_MODE_STEP1 and ok:
@@ -938,16 +962,53 @@ class RemoteProgrammingTab(QWidget):
 
     def _reset_lru_table(self):
         self._lru_has_data = False
+        self._lru_results = [None] * NUM_QTRM
+        self.lru_matrix.set_all(_PENDING_QCOLOR)
         for q in range(NUM_QTRM):
+            self.lru_matrix._leds[q].setText(f"QTRM-{q}")
             for c in range(1, 5):
                 self.lru_table.item(q, c).setText("—")
 
     def on_lru_row(self, q: int, resp):
         self._lru_has_data = True
+        self._lru_results[q] = resp
         self.lru_table.item(q, 1).setText(str(resp.mfg_id))
         self.lru_table.item(q, 2).setText(str(resp.part_no))
         self.lru_table.item(q, 3).setText(str(resp.serial_num))
         self.lru_table.item(q, 4).setText(str(resp.fw_version))
+        self.lru_matrix.set_one(q, _OK_QCOLOR)
+        self._set_lru_cell_text(q, resp)
+
+    # -- LRU Info "Show Field" filter (grid cells display one field directly) ---------
+
+    def _current_lru_field(self):
+        checked = self.lru_filter_group.checkedButton()
+        return checked.property("field_key") if checked is not None else None
+
+    def _set_lru_cell_text(self, qtrm_index: int, resp, field=None):
+        if field is None:
+            field = self._current_lru_field()
+        led = self.lru_matrix._leds[qtrm_index]
+        if field is not None and resp is not None:
+            led.setText(f"QTRM-{qtrm_index}: {getattr(resp, field)}")
+        else:
+            led.setText(f"QTRM-{qtrm_index}")
+
+    def _on_lru_filter_toggled(self, button, checked: bool):
+        if checked:
+            # Manual exclusivity, same pattern as status_tab.py: selecting
+            # one deselects every other one, but the active one can still be
+            # clicked again to deselect (reverts to plain "QTRM-N" labels).
+            for other in self.lru_filter_group.buttons():
+                if other is not button and other.isChecked():
+                    other.blockSignals(True)
+                    other.setChecked(False)
+                    other.blockSignals(False)
+        for btn in self.lru_filter_group.buttons():
+            btn.setStyleSheet(_FILTER_BTN_STYLE_ON if btn.isChecked() else _FILTER_BTN_STYLE_OFF)
+        field = self._current_lru_field()
+        for q, resp in enumerate(self._lru_results):
+            self._set_lru_cell_text(q, resp, field)
 
     def _on_export_lru_clicked(self):
         """Dump the LRU Info table exactly as displayed ('—' rows included,
@@ -1039,6 +1100,15 @@ class RemoteProgrammingTab(QWidget):
                     self.link_table.item(q, 1).setText("No Response")
                     self.link_matrix.set_one(q, _FAIL_QCOLOR)
             return
+        if op == OP_LRU_INFO:
+            # Single aggregated response frame, not staggered like
+            # Authenticate/Verify - any QTRM whose slot never populated
+            # (row still None) gets no further reply, so mark it red now
+            # rather than leaving it pending grey forever.
+            for q, resp in enumerate(self._lru_results):
+                if resp is None:
+                    self.lru_matrix.set_one(q, _FAIL_QCOLOR)
+            return
         if op not in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
             return
         no_reply_ok = op == OP_PROGRAM  # devices reprogram, silence is normal
@@ -1053,10 +1123,8 @@ class RemoteProgrammingTab(QWidget):
 
     def _reset_program_view(self):
         self.prog_matrix.set_all(_PENDING_QCOLOR)
-        self._chunks_dispatched = 0
         self._qtrm_acked = [0] * NUM_QTRM
         self._qtrm_failed = [False] * NUM_QTRM
-        self._have_gaps = False
         for q in range(NUM_QTRM):
             self.gaps_table.item(q, 1).setText("0")
             self.gaps_table.item(q, 2).setText("—")
@@ -1065,28 +1133,27 @@ class RemoteProgrammingTab(QWidget):
         self.progress_bar.setFormat("programming… %v / %m")
         self.chunk_label.setText("")
 
-    def on_chunk_progress(self, idx: int, count: int, attempt: int):
-        self._chunks_dispatched = max(self._chunks_dispatched, idx + 1)
+    def on_chunk_progress(self, idx: int, count: int):
         self.progress_bar.setRange(0, count)
         self.progress_bar.setValue(idx + 1)
-        retry_note = f"  (attempt {attempt})" if attempt > 1 else ""
-        self.chunk_label.setText(f"chunk {idx + 1} / {count}{retry_note}")
+        self.chunk_label.setText(f"chunk {idx + 1} / {count}")
 
     def on_ack_recorded(self, q: int, idx: int, ok: bool):
         if ok:
             self._qtrm_acked[q] += 1
         else:
             self._qtrm_failed[q] = True
-        # Cheap live coloring: red is sticky on any reported failure; green
-        # while the QTRM is keeping pace with what's been dispatched so far,
-        # pending-grey when it's lagging. Exact gap detail lands in the
-        # table at pass end.
+        # Live coloring: red is sticky on any reported failure. Otherwise
+        # green the moment THIS QTRM successfully acks anything - streaming
+        # advances the instant ANY ONE of the 96 acks, so most QTRMs are
+        # always a chunk or more behind the fastest responder; green here
+        # means "acking fine", not "caught up with dispatch". Grey (the
+        # reset-time default) only means "no ack recorded yet at all".
+        # Exact per-chunk gap detail lands in the table at pass end.
         if self._qtrm_failed[q]:
             self.prog_matrix.set_one(q, _FAIL_QCOLOR)
-        elif self._qtrm_acked[q] >= self._chunks_dispatched:
+        elif ok:
             self.prog_matrix.set_one(q, _OK_QCOLOR)
-        else:
-            self.prog_matrix.set_one(q, _PENDING_QCOLOR)
         self.gaps_table.item(q, 1).setText(str(self._qtrm_acked[q]))
 
     @staticmethod
@@ -1110,7 +1177,6 @@ class RemoteProgrammingTab(QWidget):
         if self._controller is None:
             return
         total = self._controller.chunk_count
-        self._have_gaps = missing_count > 0
         for q in range(NUM_QTRM):
             acked, missing, failed = self._controller.qtrm_gaps(q)
             self.gaps_table.item(q, 1).setText(f"{acked} / {total}")

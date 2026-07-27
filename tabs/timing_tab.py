@@ -160,13 +160,14 @@ class TimingTab(QWidget):
         box, form = _section_box("SOB (Start of Burst)")
 
         self.sob_loopback_switch = SegmentedControl("Internal Gen", "Bypass")
+        self.sob_loopback_switch.setChecked(True)
         form.addWidget(self.sob_loopback_switch)
 
         grid = QGridLayout()
         grid.setHorizontalSpacing(18)
         grid.setVerticalSpacing(8)
         grid.setColumnStretch(0, 1)
-        self.sob_width_spin = SpinField(0, 65535, 0, field_width=90)
+        self.sob_width_spin = SpinField(0, 65535, 25, field_width=90)
         _field_row(grid, 0, "SOB Width (µs)", self.sob_width_spin)
         form.addLayout(grid)
 
@@ -201,6 +202,7 @@ class TimingTab(QWidget):
         box, form = _section_box("PRT (Pulse Repetition Train)")
 
         self.prt_loopback_switch = SegmentedControl("Internal Gen", "Bypass")
+        self.prt_loopback_switch.setChecked(True)
         form.addWidget(self.prt_loopback_switch)
 
         grid = QGridLayout()
@@ -213,11 +215,12 @@ class TimingTab(QWidget):
         self.prt_infinite_check = ToggleSwitch()
         self.prt_infinite_check.toggled.connect(self._on_prt_infinite_toggled)
         _field_row(grid, 1, "Infinite (0xFFFFFFFF)", self.prt_infinite_check)
-        self.prt_pri_spin = SpinField(0, _U32_SPIN_MAX, 0, field_width=110)
+        self.prt_pri_spin = SpinField(0, _U32_SPIN_MAX, 10_000, field_width=110)
         _field_row(grid, 2, "PRI Width (µs)", self.prt_pri_spin)
-        self.prt_width_spin = SpinField(0, 65535, 0, field_width=110)
+        self.prt_width_spin = SpinField(0, 65535, 100, field_width=110)
         _field_row(grid, 3, "PRT Width (µs)", self.prt_width_spin)
         form.addLayout(grid)
+        self.prt_infinite_check.setChecked(True)
 
         form.addStretch(1)
 

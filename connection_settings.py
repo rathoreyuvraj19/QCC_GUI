@@ -19,7 +19,7 @@ else:
     _APP_DIR = os.path.dirname(os.path.abspath(__file__))
 _SAVE_PATH = os.path.join(_APP_DIR, "connection_settings.json")
 
-DEFAULT_LOCAL_PORT = 5001
+DEFAULT_LOCAL_PORT = 5010
 DEFAULT_QCC_IP = "192.168.1.10"
 DEFAULT_QCC_PORT = 5000
 

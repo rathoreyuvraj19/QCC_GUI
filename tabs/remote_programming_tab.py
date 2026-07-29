@@ -793,10 +793,16 @@ class RemoteProgrammingTab(QWidget):
             return
         golden = self.image_is_golden
         scope = "GOLDEN" if golden else "CURRENT"
-        confirm = QMessageBox.question(
+        # Deliberately .warning (not .question) - this commits firmware to
+        # flash, the same destructive class of action as memory_tab.py's NVM
+        # write, so it gets the warning icon rather than a neutral prompt.
+        confirm = QMessageBox.warning(
             self, "Program firmware",
             f"Command {self._target_scope_text()} to reprogram from the "
             f"already-uploaded {scope} SPI image?\n\n"
+            "WARNING: Authenticate first, then Program. Authenticate is the "
+            "non-destructive check that the staged image is valid — Program "
+            "commits it to flash whether or not that check has been run.\n\n"
             "Each addressed SmartFusion2 flashes itself and may reboot — "
             "no replies are expected while devices reprogram.",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,

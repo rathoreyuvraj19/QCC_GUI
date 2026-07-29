@@ -17,6 +17,8 @@ _ACCENT_PRESSED = "#00858c"
 _TEXT = "#eeeeee"         # primary text
 _TEXT_SECONDARY = "rgba(238, 238, 238, 0.6)"
 _BORDER = "#4a515a"
+_TOOLTIP_BG = "#F3E5AB"   # vanilla, per Yuvraj's ask - the QTRM hover popup
+_TOOLTIP_TEXT = "#1f2328"
 
 _FONT = (
     '"Satoshi", "Poppins", "Nunito", "Segoe UI Variable Display", "Segoe UI", '
@@ -206,5 +208,13 @@ QScrollBar::handle:hover {{
 QScrollBar::add-line, QScrollBar::sub-line {{
     width: 0;
     height: 0;
+}}
+
+QToolTip {{
+    background-color: {_TOOLTIP_BG};
+    color: {_TOOLTIP_TEXT};
+    border: 1px solid #d8c789;
+    border-radius: 8px;
+    padding: 6px 10px;
 }}
 """

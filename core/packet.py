@@ -142,6 +142,88 @@ CMD_DATA_STORAGE = 0x22
 CMD_DC_CONTROL = 0x23
 CMD_TIMING_SIGNAL_GEN = 0x40
 
+# Command Type -> friendly name (per Yuvraj, Section 3 Command Type table).
+# Reused for two different fields that both carry this same enum: Detailed
+# Health's whole-byte "Operation Command Type" (raw_slot[4], can be any
+# defined value up to CMD_DC_CONTROL), and Future/Present Buffer/ADAR
+# Status's per-channel "Op Mode" nibble (only 4 bits wide, so only
+# CMD_RESERVED..0x08/HR-PPFA-PPC ever actually appear there - CMD_SOFT_RESET
+# and above can't fit in a nibble). Anything not listed (including the
+# nibble's 0x09-0x0F range and the byte's 0x24-0x3F range) is Reserved.
+COMMAND_TYPE_LABELS = {
+    CMD_RESERVED: "Reserved",
+    CMD_DWELL: "Dwell Mode",
+    CMD_RX_CAL: "Rx Calibration",
+    CMD_TX_CAL: "Tx Calibration",
+    CMD_RX_ISOLATION: "Rx Isolation",
+    CMD_TX_ISOLATION: "Tx Isolation",
+    CMD_RX_PATTERN: "Rx Pattern",
+    CMD_TX_PATTERN: "Tx Pattern",
+    0x08: "HR/PPFA/PPC",
+    CMD_SOFT_RESET: "Soft RST",
+    CMD_STATUS: "Status",
+    CMD_DATA_STORAGE: "Data Storage",
+    CMD_DC_CONTROL: "DC Control",
+}
+
+
+def describe_command_type(value: int) -> str:
+    return COMMAND_TYPE_LABELS.get(value, "Reserved")
+
+
+# Diagnostic Future/Present Buffer/ADAR Status per-channel "Control" nibble -
+# same Tx/Rx-enable convention as Dwell's Control byte (dwell_tab.py's
+# TX_BIT=0b10/RX_BIT=0b01), confirmed by Yuvraj: bit1 = Tx enable, bit0 = Rx
+# enable.
+CHANNEL_CONTROL_LABELS = {
+    0: "Off",
+    1: "Rx Only",
+    2: "Tx Only",
+    3: "Tx+Rx",
+}
+
+
+def describe_channel_control(value: int) -> str:
+    return CHANNEL_CONTROL_LABELS.get(value, "Reserved")
+
+
+# Phase shifter and attenuator are both 6-bit (0-63) - that's *why* every
+# phase/atten input in the GUI is capped there (dwell_tab.py/cal_tab.py's
+# PHASE_MAX/ATTEN_MAX). The two use different full-scale conventions, per
+# Yuvraj:
+#   - Phase covers a full 360 deg in 64 steps => 360/64 = 5.625 deg per LSB.
+#     Code 0 = 0 deg and code 63 = 354.375 deg, the maximum *setting*; the
+#     64th step would be 360 deg, which wraps back to 0. NOTE: whether code
+#     63 is 354.375 deg or a literal 360 deg is still an OPEN question -
+#     see item 10 in CLAUDE.md. If it turns out to be a literal 360, this
+#     line is the only one that changes (360.0 / 63).
+#   - Attenuator spans 31.5 dB across 63 steps => 0.5 dB per LSB, so code 63
+#     is exactly the 31.5 dB full scale (no wrap - attenuation isn't
+#     periodic the way phase is).
+# These convert a raw code to the physical value shown in brackets next to
+# it wherever the GUI displays one.
+PHASE_STEP_DEG = 360.0 / 64
+ATTEN_STEP_DB = 31.5 / 63
+
+
+def phase_degrees(raw: int) -> float:
+    return raw * PHASE_STEP_DEG
+
+
+def atten_db(raw: int) -> float:
+    return raw * ATTEN_STEP_DB
+
+
+def describe_phase(raw: int) -> str:
+    # 3 decimals per Yuvraj - every multiple of 5.625 lands exactly at 3
+    # decimal places, so this is lossless (never a rounded display).
+    return f"{phase_degrees(raw):.3f}°"
+
+
+def describe_atten(raw: int) -> str:
+    return f"{atten_db(raw):.1f} dB"
+
+
 QTRM_PACKET_SIZE_ID = 0x04  # per Table 6, QTRM = 4 channels
 
 # ---------------------------------------------------------------------------

@@ -47,6 +47,7 @@ from core.udp_worker import UdpWorker
 from ping_worker import PingWorker
 from widgets.header_panel import HeaderPanel
 from widgets.password_keypad_dialog import PasswordKeypadDialog
+from widgets.temp_conversion_dialog import TempConversionDialog
 from tabs.link_test_tab import LinkTestTab
 from tabs.status_tab import StatusTab
 from tabs.cal_tab import CalTab
@@ -419,7 +420,15 @@ class MainWindow(QMainWindow):
         plot_action.triggered.connect(self._on_plot_log_action_triggered)
         tools_menu.addAction(plot_action)
 
+        tools_menu.addSeparator()
+
+        temp_formula_action = QAction("Temperature Conversion Formula…", self)
+        temp_formula_action.triggered.connect(self._on_temp_conversion_formula_triggered)
+        tools_menu.addAction(temp_formula_action)
+
     def _on_tab_changed(self, index):
+        self.status_tab.stop_auto_resend()
+        self.link_test_tab.stop_auto_resend()
         self.status_tab.reset_to_idle()
         self.rx_cal_tab.reset_to_idle()
         self.tx_cal_tab.reset_to_idle()
@@ -1005,6 +1014,18 @@ class MainWindow(QMainWindow):
         dialog.show()
         dialog.raise_()
         dialog.activateWindow()
+
+    def _on_temp_conversion_formula_triggered(self):
+        # Same lock as Memory Operation/Remote Programming - misreading the
+        # displayed temperature is as consequential as a bad NVM write if
+        # this formula gets nudged by accident.
+        password, ok = PasswordKeypadDialog.get_password(
+            self, "Temperature Conversion Formula - Locked",
+            "Changing this affects every temperature reading in the app.\nEnter password:",
+        )
+        if not (ok and password == MEMORY_TAB_PASSWORD):
+            return
+        TempConversionDialog(self).exec()
 
     # -- response timing / timeout ----------------------------------------
 

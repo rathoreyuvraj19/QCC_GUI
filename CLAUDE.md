@@ -190,3 +190,30 @@ instructions and a file-by-file overview.
    `run()` distinguishes "recognized, no reply" (`response is None` but
    `desc` set - still logged) from "not a recognized command at all"
    (`response is None` and `desc` empty - still dropped).
+
+10. **OPEN - phase shifter full scale: does code 63 mean 354.375 deg or a
+    literal 360 deg?** (raised 2026-07-28, to be discussed) - the GUI now
+    shows the physical value in brackets next to every raw 6-bit
+    phase/atten code (Dwell table, RX/TX Cal inputs, Status tab Details +
+    hover popup), via `describe_phase()`/`describe_atten()` in
+    `core/packet.py`. The **attenuator is settled**: 31.5 dB across 63
+    steps = 0.5 dB per LSB, code 63 = exactly 31.5 dB full scale.
+    The **phase shifter is not**. Two statements from Yuvraj conflict at
+    the top end:
+    - "0 means 0 degree phase shift and 63 means max phase shift 360" -
+      implies 360/63 = 5.714... deg per LSB, code 63 = 360.000 deg.
+    - "360/64 is 5.625" - implies 5.625 deg per LSB, code 63 = 354.375
+      deg, with the (unreachable) 64th step being 360 deg = 0 deg.
+
+    Currently implemented as **360/64 = 5.625 deg per LSB** (code 63 ->
+    354.375 deg), on the reasoning that phase is periodic - a 64th step of
+    360 deg would wrap to the same physical setting as code 0, so 64
+    distinct steps of 5.625 covers the circle exactly once, which is also
+    the standard 6-bit phase-shifter convention. That reading treats "63
+    means max phase shift" as "63 is the maximum *code*", not "63 equals
+    literally 360.000 deg". **Needs Yuvraj's confirmation against the
+    actual phase-shifter part/RTL** - if code 63 really is a literal 360
+    deg, change `PHASE_STEP_DEG` in `core/packet.py` back to `360.0 / 63`
+    (that's the only line that needs to move; every display derives from
+    it). Display precision is 3 decimals, which is lossless for 5.625
+    steps but not for 360/63.

@@ -80,12 +80,24 @@ class RawSlotTableModel(QAbstractTableModel):
         row, col = index.row(), index.column()
         slot = self.slots[row]
 
+        # A received frame isn't always the full 2970 bytes - core/udp_worker.py
+        # also accepts the 90-byte QCC-header-only reply (Mode Step 1/2, Mode
+        # Back), and the TX side additionally sends 100-byte Remote Programming
+        # command frames. Slicing those into 96 x 30-byte slots yields short or
+        # entirely empty slots (Python slicing pads nothing and raises nothing),
+        # while columnCount() stays fixed at 30 - so every byte access here has
+        # to be bounds-checked or Qt logs an IndexError per repaint per cell.
+        if col >= len(slot):
+            return None
+
         if role == Qt.DisplayRole:
             value = slot[col]  # columns 0..29 map 1:1 onto slot bytes 0..29
             return f"{value:02X}" if self._hex_mode else value
 
         if role == Qt.BackgroundRole:
-            if col < message_length(slot[1]):
+            # byte 1 is the Packet Size ID the message length derives from -
+            # a 1-byte slot has no such byte to read.
+            if len(slot) > 1 and col < message_length(slot[1]):
                 return _MESSAGE_HIGHLIGHT
             return None  # trailing padding byte for a shorter message - default background
 

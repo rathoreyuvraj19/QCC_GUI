@@ -65,20 +65,25 @@ class IsolationTab(QWidget):
         root.setContentsMargins(16, 16, 16, 16)
         root.setSpacing(14)
 
-        top_row = QHBoxLayout()
-        top_row.addStretch(1)
-        top_row.addWidget(QLabel("Mode:"))
+        mode_row = QHBoxLayout()
+        mode_row.addStretch(1)
+        mode_row.addWidget(QLabel("Mode:"))
         self.mode_switch = SegmentedControl("Rx Isolation", "Tx Isolation")
-        top_row.addWidget(self.mode_switch)
+        mode_row.addWidget(self.mode_switch)
+        mode_row.addStretch(1)
+        root.addLayout(mode_row)
+
+        send_row = QHBoxLayout()
+        send_row.addStretch(1)
         # Always the app's default teal look - unlike the 96 matrix buttons,
         # this button doesn't represent any single QTRM's result, so it never
         # gets recolored by mark_all_pending/show_all_results/show_all_no_response.
         self.send_all_btn = QPushButton("Send All")
         self.send_all_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.send_all_btn.clicked.connect(self._on_send_all_clicked)
-        top_row.addWidget(self.send_all_btn)
-        top_row.addStretch(1)
-        root.addLayout(top_row)
+        send_row.addWidget(self.send_all_btn)
+        send_row.addStretch(1)
+        root.addLayout(send_row)
 
         # Six Cold Plate (CP0-CP5) group boxes, stacked CP5 at top to CP0 at
         # bottom, each holding its 16 QTRMs - matches the real array layout.

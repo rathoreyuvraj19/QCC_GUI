@@ -28,6 +28,7 @@ from core.command_style import SUCCESS_COLOR as _LINKED_COLOR
 from core.command_style import FAILURE_COLOR as _NOT_LINKED_COLOR
 from core.command_style import indicator_style as _indicator_style
 from core.command_style import send_button_style
+from core.packet import describe_atten, describe_phase
 from widgets.segmented_control import SegmentedControl
 from widgets.spin_field import SpinField
 
@@ -67,11 +68,21 @@ def _section_header(text: str) -> QLabel:
     return lbl
 
 
-def _field_row(grid: QGridLayout, row: int, label_text: str, spin: SpinField):
+def _converted_label() -> QLabel:
+    lbl = QLabel("")
+    lbl.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 15px; background: transparent;")
+    return lbl
+
+
+def _field_row(grid: QGridLayout, row: int, label_text: str, spin: SpinField, suffix: QLabel = None):
     label = QLabel(label_text)
     label.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 15px; background: transparent;")
     grid.addWidget(label, row, 0, Qt.AlignLeft | Qt.AlignVCenter)
     grid.addWidget(spin, row, 1, Qt.AlignRight | Qt.AlignVCenter)
+    # Read-only physical value for the raw 6-bit code just entered - the
+    # input itself stays 0-63, this only annotates it.
+    if suffix is not None:
+        grid.addWidget(suffix, row, 2, Qt.AlignLeft | Qt.AlignVCenter)
 
 
 class CalTab(QWidget):
@@ -141,8 +152,14 @@ class CalTab(QWidget):
         cal_grid.setColumnStretch(0, 1)
         self.phase_spin = SpinField(0, PHASE_MAX, 0, field_width=76)
         self.atten_spin = SpinField(0, ATTEN_MAX, 0, field_width=76)
-        _field_row(cal_grid, 0, "TRM Phase", self.phase_spin)
-        _field_row(cal_grid, 1, "TRM Attenuation", self.atten_spin)
+        self.phase_value_label = _converted_label()
+        self.atten_value_label = _converted_label()
+        self.phase_spin.spin.valueChanged.connect(self._on_phase_changed)
+        self.atten_spin.spin.valueChanged.connect(self._on_atten_changed)
+        _field_row(cal_grid, 0, "TRM Phase", self.phase_spin, self.phase_value_label)
+        _field_row(cal_grid, 1, "TRM Attenuation", self.atten_spin, self.atten_value_label)
+        self._on_phase_changed(self.phase_spin.value())
+        self._on_atten_changed(self.atten_spin.value())
         cal_col.addLayout(cal_grid)
 
         two_col_row.addLayout(selection_col, 1)
@@ -184,6 +201,12 @@ class CalTab(QWidget):
         # HeaderPanel is now a single global full-height sidebar owned by
         # main_window.py, not embedded per-tab - see its module docstring.
         outer.addWidget(scroll)
+
+    def _on_phase_changed(self, value: int):
+        self.phase_value_label.setText(f"({describe_phase(value)})")
+
+    def _on_atten_changed(self, value: int):
+        self.atten_value_label.setText(f"({describe_atten(value)})")
 
     def _on_send_clicked(self):
         qtrm_index = self.qtrm_spin.value()

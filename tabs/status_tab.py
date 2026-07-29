@@ -44,11 +44,13 @@ from PySide6.QtWidgets import (
 )
 
 from core.command_style import send_button_style, WARNING_RGB
+from temp_conversion_settings import temp_conversion_settings
 from tabs.link_test_tab import LedMatrix, _IDLE_COLOR, _LINKED_COLOR, _NOT_LINKED_COLOR, _PENDING_COLOR
 from core.packet import (
     STATUS_TYPE_ACK, STATUS_TYPE_HEALTH, STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
     STATUS_TYPE_THERMAL_CONFIG,
     DIAGNOSTIC_TYPE_DETAILED_HEALTH, DIAGNOSTIC_TYPE_FUTURE_BUFFER, DIAGNOSTIC_TYPE_PRESENT_BUFFER,
+    describe_command_type, describe_channel_control, describe_phase, describe_atten,
 )
 from widgets.qtrm_layout import NUM_QTRM
 from widgets.spin_field import DoubleSpinField, SpinField
@@ -161,6 +163,35 @@ _DEFAULT_TEMP_CUTOFF = 100
 
 def _format_value(value) -> str:
     return value.hex(" ").upper() if isinstance(value, (bytes, bytearray)) else str(value)
+
+
+# Detailed Health's whole-byte "operation_command_type" and Future/Present
+# Buffer/ADAR Status's per-channel "op_mode"/"control" nibbles are all raw
+# numbers on the wire - name the decoded value in brackets alongside it
+# wherever these fields get displayed (Details panel + hover popup).
+def _format_field(key, value) -> str:
+    text = _format_value(value)
+    if key == "operation_command_type":
+        return f"{text} ({describe_command_type(value)})"
+    if key == "temperature_status":
+        return f"{text} ({temp_conversion_settings.convert(value):.1f}°C)"
+    return text
+
+
+def _format_channel_field(key, value) -> str:
+    text = str(value)
+    if key == "op_mode":
+        return f"{text} ({describe_command_type(value)})"
+    if key == "control":
+        return f"{text} ({describe_channel_control(value)})"
+    if key == "temperature_status":
+        return f"{text} ({temp_conversion_settings.convert(value):.1f}°C)"
+    # Raw 6-bit codes on the wire - show the physical value alongside.
+    if key in ("tx_phase", "rx_phase"):
+        return f"{text} ({describe_phase(value)})"
+    if key in ("tx_atten", "rx_atten"):
+        return f"{text} ({describe_atten(value)})"
+    return text
 
 
 # Field-filter selector buttons - highlighted (accent teal) when selected,
@@ -326,7 +357,8 @@ class StatusTab(QWidget):
         divider.setStyleSheet("background-color: #4a515a; max-width: 1px; border: none;")
         row.addWidget(divider)
 
-        row.addWidget(QLabel("Show Field:"))
+        self.show_field_label = QLabel("Show Field:")
+        row.addWidget(self.show_field_label)
         self.filter_button_group = QButtonGroup(self)
         # Not exclusive=True: Qt's exclusive QButtonGroup behaves like a
         # radio-button group once anything is checked (it won't let the
@@ -386,6 +418,14 @@ class StatusTab(QWidget):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+
+        # Thermal Shutdown Config always shows both its fields together on
+        # the QTRM cells (see _set_led_text_for_one) - a single-field
+        # picker doesn't apply here, so skip building it.
+        self.show_field_label.setVisible(not self._is_thermal_config())
+        if self._is_thermal_config():
+            self.filter_layout.addStretch(1)
+            return
 
         for field in self._current_fields():
             btn = QPushButton(_FIELD_LABELS.get(field, field.replace("_", " ").title()))
@@ -450,6 +490,9 @@ class StatusTab(QWidget):
     def _is_health(self) -> bool:
         return self.status_type_combo.currentData() == STATUS_TYPE_HEALTH
 
+    def _is_thermal_config(self) -> bool:
+        return self.status_type_combo.currentData() == STATUS_TYPE_THERMAL_CONFIG
+
     def _update_temp_cutoff_visibility(self):
         # Only relevant once "Temperature Status" is the selected "Show
         # Field" - not just anytime HEALTH is picked, since the cutoff has
@@ -492,24 +535,67 @@ class StatusTab(QWidget):
     def _reset_led_texts(self):
         for i, led in enumerate(self.led_matrix._leds):
             led.setText(f"QTRM-{i}")
+            led.setToolTip(f"QTRM-{i} - click to query just this QTRM")
+
+    # Hover tooltip: every decoded field for this QTRM, not just whichever
+    # one "Show Field" currently has selected on the cell itself - lets the
+    # operator see the full response without switching filters or clicking
+    # into the Details panel below.
+    def _tooltip_for_result(self, qtrm_index: int, decoded) -> str:
+        if decoded is None:
+            return f"QTRM-{qtrm_index} - click to query just this QTRM"
+        # Rich text (the popup QLabel auto-detects HTML) - Op Mode/Control/
+        # Operation Command Type values and the Ch1-4 channel headers are
+        # bolded per Yuvraj's ask, everything else stays plain.
+        lines = [f"<b>QTRM-{qtrm_index}</b>"]
+        for key, value in decoded.items():
+            if key == "channels":
+                continue
+            label = _FIELD_LABELS.get(key, key.replace("_", " ").title())
+            text = _format_field(key, value)
+            if key == "operation_command_type":
+                text = f"<b>{text}</b>"
+            lines.append(f"{label}: {text}")
+        channels = decoded.get("channels")
+        if channels:
+            for ch_index, ch_fields in enumerate(channels):
+                lines.append(f"<b>Ch{ch_index + 1}</b>")
+                for key, value in ch_fields.items():
+                    label = _CHANNEL_FIELD_LABELS.get(key, key.replace("_", " ").title())
+                    text = _format_channel_field(key, value)
+                    if key in ("op_mode", "control"):
+                        text = f"<b>{text}</b>"
+                    lines.append(f"{label}: {text}")
+        return "<br>".join(lines)
 
     def _apply_filter_to_leds(self, results):
-        field = self._current_filter_field()
-        if field is None:
-            self._reset_led_texts()
+        if self._is_thermal_config():
+            for i, result in enumerate(results):
+                self._set_led_text_for_one(i, result)
             return
+        field = self._current_filter_field()
         for i, result in enumerate(results):
             self._set_led_text_for_one(i, result, field)
 
     def _set_led_text_for_one(self, qtrm_index: int, decoded, field=None):
+        led = self.led_matrix._leds[qtrm_index]
+        led.setToolTip(self._tooltip_for_result(qtrm_index, decoded))
+        if self._is_thermal_config():
+            # No single-field picker for this Status Type - always show
+            # both the cutoff value (degrees C) and EN/DI state together.
+            if decoded is not None and "temp_cutoff_value" in decoded and "temp_cutoff_enable" in decoded:
+                state = "EN" if decoded["temp_cutoff_enable"] else "DI"
+                led.setText(f"QTRM-{qtrm_index}: Cutoff: {decoded['temp_cutoff_value']}°C ({state})")
+            else:
+                led.setText(f"QTRM-{qtrm_index}")
+            return
         if field is None:
             field = self._current_filter_field()
-        led = self.led_matrix._leds[qtrm_index]
         if field is not None and decoded is not None and field in decoded:
             # Keep the QTRM number visible alongside the filtered value, on
             # the same line - otherwise it's ambiguous which cell is which
             # once every label has been replaced by a bare number.
-            led.setText(f"QTRM-{qtrm_index}: {_format_value(decoded[field])}")
+            led.setText(f"QTRM-{qtrm_index}: {_format_field(field, decoded[field])}")
         else:
             led.setText(f"QTRM-{qtrm_index}")
 
@@ -626,7 +712,7 @@ class StatusTab(QWidget):
             cell = QVBoxLayout()
             cell.setSpacing(2)
             cell.addWidget(QLabel(f"{label}:"))
-            cell.addWidget(QLabel(_format_value(value)))
+            cell.addWidget(QLabel(_format_field(key, value)))
             wrapper = QWidget()
             wrapper.setLayout(cell)
             grid.addWidget(wrapper, i // _DETAILS_WRAP_COLS, i % _DETAILS_WRAP_COLS)
@@ -640,7 +726,7 @@ class StatusTab(QWidget):
                 ch_form = QFormLayout(ch_box)
                 for key, value in ch_fields.items():
                     label = _CHANNEL_FIELD_LABELS.get(key, key.replace("_", " ").title())
-                    ch_form.addRow(f"{label}:", QLabel(str(value)))
+                    ch_form.addRow(f"{label}:", QLabel(_format_channel_field(key, value)))
                 channels_row.addWidget(ch_box)
             self.details_layout.addLayout(channels_row)
 

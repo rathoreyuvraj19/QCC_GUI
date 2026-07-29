@@ -17,7 +17,7 @@ individual click, only the clicked QTRM's cell is revealed - the rest of
 the array is left at pending grey, since it was never actually queried.
 """
 
-from PySide6.QtCore import Qt, QTimer, Signal
+from PySide6.QtCore import QEvent, QPoint, Qt, QTimer, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QGridLayout, QGroupBox, QHBoxLayout, QLabel, QPushButton, QScrollArea,
@@ -37,6 +37,7 @@ _PENDING_COLOR = QColor(*PENDING_RGB)
 _LINKED_COLOR = QColor(*SUCCESS_RGB)
 _NOT_LINKED_COLOR = QColor(*FAILURE_RGB)
 _TEXT_COLOR = "#1f2328"
+_TOOLTIP_BG = "#F3E5AB"  # vanilla - must match theme.py's QToolTip rule
 
 # No drawn box/border/background - just the "CP{n}" title text sits above
 # each group so the QTRM cells themselves can use the full width instead of
@@ -45,6 +46,42 @@ _CP_BOX_STYLE = (
     "QGroupBox { border: none; background: transparent; margin-top: 6px; padding: 4px 0px 0px 0px; }"
     "QGroupBox::title { subcontrol-origin: margin; left: 2px; padding: 0 2px; }"
 )
+
+# Custom hover popup, not QToolTip.showText() - confirmed by direct render
+# test that Qt's native tooltip for a _Led copies that widget's own QPalette
+# (mutated by set_color()'s background-color QSS) rather than the app-wide
+# vanilla QToolTip rule from theme.py, so the native tooltip always came out
+# green/red no matter what QSS or palette override was tried on the widget
+# itself. A hand-drawn Qt.ToolTip popup sidesteps that entirely - shown from
+# _Led.event()'s QEvent.ToolTip handler, which still only fires after the
+# app-wide reduced wake-up delay (main.py's _FastTooltipStyle), so the speed
+# fix from before still applies.
+_hover_popup = None
+
+
+def _get_hover_popup():
+    global _hover_popup
+    if _hover_popup is None:
+        _hover_popup = QLabel(None, Qt.ToolTip | Qt.FramelessWindowHint)
+        _hover_popup.setStyleSheet(
+            f"background-color: {_TOOLTIP_BG}; color: {_TEXT_COLOR};"
+            "border: 1px solid #d8c789; border-radius: 8px; padding: 6px 10px; font-size: 8pt;"
+        )
+    return _hover_popup
+
+
+def _show_hover_popup(global_pos: QPoint, text: str):
+    popup = _get_hover_popup()
+    popup.setText(text)
+    popup.adjustSize()
+    popup.move(global_pos)
+    popup.show()
+
+
+def _hide_hover_popup():
+    if _hover_popup is not None:
+        _hover_popup.hide()
+
 
 _LED_MIN_WIDTH = 46
 _LED_MIN_HEIGHT = 24
@@ -93,6 +130,16 @@ class _Led(QLabel):
         if self.clickable and event.button() == Qt.LeftButton:
             self.clicked.emit(self.qtrm_index)
         super().mousePressEvent(event)
+
+    def event(self, ev):
+        if ev.type() == QEvent.ToolTip:
+            text = self.toolTip()
+            if text:
+                _show_hover_popup(self.mapToGlobal(QPoint(0, self.height())), text)
+            return True
+        if ev.type() == QEvent.Leave:
+            _hide_hover_popup()
+        return super().event(ev)
 
     def set_color(self, color: QColor):
         self.setStyleSheet(

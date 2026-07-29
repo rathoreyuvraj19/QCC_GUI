@@ -10,6 +10,7 @@ __pycache__/
 *.spec
 rc_settings.json
 connection_settings.json
+temp_conversion_settings.json
 
 .claude/skills/run-qcc-qtrm-control/shots/
 

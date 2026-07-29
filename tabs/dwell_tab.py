@@ -42,10 +42,15 @@ from PySide6.QtWidgets import (
 
 from core.command_style import send_button_style
 from tabs.link_test_tab import LedMatrix, _NOT_LINKED_COLOR, _PENDING_COLOR
-from core.packet import NUM_QTRM, QTRMChannel
+from core.packet import NUM_QTRM, QTRMChannel, describe_atten, describe_phase
 
 PHASE_MAX = 63    # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
 ATTEN_MAX = 63    # 6-bit attenuation (frame_type.vhd: No_of_Attenuator_bits = 6)
+
+
+def _describe_channel_value(attr: str, raw: int) -> str:
+    """Physical value for a raw 6-bit phase/atten code - display only."""
+    return describe_phase(raw) if attr.endswith("phase") else describe_atten(raw)
 
 # Send button color/QSS from command_style.py, the single source of truth
 # every command tab shares - distinct from the app's default teal (used by
@@ -96,6 +101,13 @@ def _toggle_columns(kind: str):
 TX_TOGGLE_COLUMNS = _toggle_columns("tx_toggle")
 RX_TOGGLE_COLUMNS = _toggle_columns("rx_toggle")
 
+# The Phase/Atten columns - the ones whose display carries a converted value
+# in brackets and so need extra width (see DwellTab.__init__).
+NUMERIC_COLUMNS = [
+    i for i, (_, key, _) in enumerate(COLUMNS)
+    if isinstance(key, tuple) and len(key) == 4
+]
+
 
 def _default_channels():
     return [[QTRMChannel(control=CONTROL_DEFAULT) for _ in range(4)] for _ in range(NUM_QTRM)]
@@ -133,7 +145,13 @@ class DwellTableModel(QAbstractTableModel):
                 bit = TX_BIT if key[1] == "tx_toggle" else RX_BIT
                 return bool(channel.control & bit)
             _, attr, _, _ = key
-            return getattr(channel, attr)
+            raw = getattr(channel, attr)
+            # EditRole stays the bare 6-bit code so the cell editor is still
+            # a plain 0-63 spin box - only the displayed text carries the
+            # converted physical value in brackets alongside it.
+            if role == Qt.DisplayRole:
+                return f"{raw} ({_describe_channel_value(attr, raw)})"
+            return raw
         return None
 
     def setData(self, index, value, role=Qt.EditRole):
@@ -479,6 +497,14 @@ class DwellTab(QWidget):
         # width that comfortably fits the real label.
         for col in TX_TOGGLE_COLUMNS + RX_TOGGLE_COLUMNS:
             self.table.setColumnWidth(col, 90)
+        # resizeColumnsToContents measured the numeric columns against their
+        # startup value (all zeros, "0 (0.0°)"), so a later edit to a wide
+        # value would render truncated with "..." under Interactive resize
+        # mode. Widen them now to fit the worst case the bracket can produce.
+        fm = self.table.fontMetrics()
+        widest_numeric = fm.horizontalAdvance("63 (354.375°)") + 24
+        for col in NUMERIC_COLUMNS:
+            self.table.setColumnWidth(col, max(self.table.columnWidth(col), widest_numeric))
         self.table.verticalHeader().setMinimumWidth(30)
         layout.addWidget(self.table)
 

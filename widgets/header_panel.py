@@ -117,7 +117,7 @@ _FIELD_SECTIONS = [
         "INPUT_PPS_WIDTH_US",
     ]),
     ("PRT PRI (µs)", ["INPUT_PRT_PRI", "OUTPUT_PRT_PRI"]),
-    ("Misc", ["PPS_TIMESTAMP", "GENERATOR_STATUS", "CHIP_ID"]),
+    ("Misc", ["PPS_TIMESTAMP", "GENERATOR_STATUS", "DIP_SWITCH", "CHIP_ID"]),
 ]
 
 _QUERY_BTN_STYLE = (
@@ -468,6 +468,8 @@ class HeaderPanel(QWidget):
         self._set_field("PPS_TIMESTAMP", f"{h.pps_timestamp} µs")
         gen_status_str = f"SOB={'Internal' if h.sob_is_internal() else 'Bypass'}\nPRT={'Internal' if h.prt_is_internal() else 'Bypass'}"
         self._set_field("GENERATOR_STATUS", gen_status_str)
+        bits_str = " ".join(str(int(h.dip_switch_bit(b))) for b in range(7, -1, -1))
+        self._set_field("DIP_SWITCH", f"Bits[7..0]: {bits_str}\nDecimal: {h.dip_switch}")
         self._set_field("CHIP_ID", f"0x{h.chip_id:08X}")
 
         checksum_label = self.field_labels["CHECKSUM"]

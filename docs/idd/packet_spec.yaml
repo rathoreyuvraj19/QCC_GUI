@@ -227,7 +227,8 @@ message_body_response:
     - { offset: [42,43], name: input_pps_width_us,    size: 2, type: u16, desc: "Last PPS pulse width measured on input, microseconds" }
     - { offset: [44,47], name: pps_timestamp,         size: 4, type: u32, desc: "Microseconds since the last PPS edge, latched at each SOB edge (i_PPS_TIME_STAMP.s1 PIO @0x00F0) -- distinct from input_pps_count, the PPS edge counter" }
     - { offset: 48,      name: generator_status,      size: 1, type: u8, status: defined, desc: "Generator/mode status. Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE / speed toggle status (0=normal high-speed mode, 1=low-speed remote-programming mode). Bits 7-3: reserved (0x00).", enum_ref: generator_status_bits }
-    - { offset: [49,51], name: reserved,              size: 3, type: "u8[3]", desc: "Reserved" }
+    - { offset: 49,      name: dip_switch,            size: 1, type: u8, status: defined, desc: "Hardware DIP switch value. All 8 bits significant - no defined per-bit meaning, shown raw as bits 0-7 plus decimal." }
+    - { offset: [50,51], name: reserved,              size: 2, type: "u8[2]", desc: "Reserved" }
     - { offset: [52,55], name: chip_id,               size: 4, type: u32, desc: "Lower 32 bits of the 64-bit chip ID, positioned immediately before the Checksum" }
 
 # -----------------------------------------------------------------------------

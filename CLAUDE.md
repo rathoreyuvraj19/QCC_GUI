@@ -218,11 +218,31 @@ instructions and a file-by-file overview.
     it). Display precision is 3 decimals, which is lossless for 5.625
     steps but not for 360/63.
 
-11. **TODO - show dip switch value as a status in the GUI** (flagged
-    2026-07-30, not yet started) - the QCC/QTRM hardware dip switch value
-    isn't currently surfaced anywhere in the GUI. Needs: confirming which
-    byte/bit in `docs/idd/packet_spec.yaml` carries this (may not exist in
-    the IDD yet - check with Yuvraj), then displaying it as a status
-    (likely alongside the other GENERATOR_STATUS-derived fields in
-    `widgets/header_panel.py`'s "Last Received Header" sidebar, per the
-    pattern used for `QCC_MODE`/`SOB_STATE`/`PRT_STATE`).
+11. **Dip switch value shown as a GUI status - RESOLVED 2026-07-30** - per
+    Yuvraj, response header byte 83 (`message_body_response` offset 49,
+    previously the first byte of the 3-byte `reserved` field at offset
+    [49,51]) is now `DIP_SWITCH`, an 8-bit field with no defined per-bit
+    meaning - shown raw. The reserved run shrinks to 2 bytes (offset
+    [50,51], absolute bytes 84-85). `docs/idd/packet_spec.yaml` and
+    `core/packet.py`'s `QCCHeaderTx` (`_BODY_FMT`, `to_bytes`/`from_bytes`,
+    byte-layout docstring, new `dip_switch_bit()` helper mirroring
+    `sob_is_internal()`/`prt_is_internal()`) are updated to match. The
+    "Last Received Header" sidebar (`widgets/header_panel.py`) shows a new
+    **DIP_SWITCH** row in the "Misc" section, alongside `GENERATOR_STATUS`/
+    `CHIP_ID`, displaying all 8 bits individually (`Bits[7..0]: b7 b6 ... b0`)
+    plus the decimal value - same two-line label style already used for
+    `GENERATOR_STATUS`'s SOB/PRT text. This is QCC-header-level, not
+    per-QTRM, so `tabs/status_tab.py`'s Details panel/hover popup (which
+    only decodes per-QTRM phase/atten codes) is unaffected.
+    `docs/idd/QCC_Protocol.docx` byte 83 row is now updated too (Field
+    Name -> `DIP_SWITCH`, bit columns restored to generic `b7..b0` labels
+    like other unstructured-byte fields (not zeroed like `GENERATOR_STATUS`'s
+    row, since DIP_SWITCH has no defined per-bit meaning), Value in Hex ->
+    `0xXX`, Remarks noting all 8 bits are significant with no per-bit
+    meaning). Rows 82 (`GENERATOR_STATUS`)/84/85 (`Reserved-16`/`Reserved-17`)
+    untouched. Note also that
+    `docs/idd/QCC_Protocol.yaml` (a separate raw docx-extraction dump,
+    distinct from the hand-maintained `packet_spec.yaml`) is already stale
+    on byte 82 (still lists `Reserved-14` instead of `GENERATOR_STATUS`
+    from item 7) - it was left alone since it isn't part of the code-sync
+    chain, but flagging in case it's meant to be regenerated.

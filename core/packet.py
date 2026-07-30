@@ -1103,7 +1103,8 @@ class QCCHeaderTx:
     75-76   INPUT_PPS_WIDTH_US     2     uint16
     77-80   PPS_TIMESTAMP          4     uint32  Microseconds since last PPS edge, latched at each SOB edge; distinct from INPUT_PPS_COUNT (the edge counter)
     81      GENERATOR_STATUS       1     byte    Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE (0=normal high-speed, 1=low-speed remote-programming). Bits 7-3: reserved.
-    82-84   RESERVED1              3     byte[3]
+    82      DIP_SWITCH             1     byte    Hardware DIP switch value, all 8 bits significant.
+    83-84   RESERVED1              2     byte[2]
     85-88   CHIP_ID                4     uint32  Lower 32 bits of a 64-bit chip ID
     89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
     """
@@ -1122,7 +1123,7 @@ class QCCHeaderTx:
     QCC_COMMAND_REMOTE_PROGRAMMING = 0xFF
 
     # Everything except the final checksum byte (89 bytes).
-    _BODY_FMT = "<BBHBBIBBHIIIB4sBBHHHIIIIIHHHHIIHIB3sI"
+    _BODY_FMT = "<BBHBBIBBHIIIB4sBBHHHIIIIIHHHHIIHIBB2sI"
 
     def __init__(self):
         self.destination_id = 0
@@ -1156,6 +1157,7 @@ class QCCHeaderTx:
         self.input_pps_width_us = 0
         self.pps_timestamp = 0
         self.generator_status = 0  # Bit 0: SOB_STATE, Bit 1: PRT_STATE, Bit 2: QCC_MODE
+        self.dip_switch = 0  # Hardware DIP switch value, all 8 bits significant
         self.chip_id = 0
         self.checksum_ok = None
 
@@ -1181,6 +1183,10 @@ class QCCHeaderTx:
             | ((int(qcc_mode_low_speed) & 0x01) << 2)
         )
 
+    def dip_switch_bit(self, bit: int) -> bool:
+        """Return True if the given bit (0-7) of DIP_SWITCH is on."""
+        return bool((self.dip_switch >> bit) & 0x01)
+
     def to_bytes(self) -> bytes:
         body = struct.pack(
             self._BODY_FMT,
@@ -1199,7 +1205,8 @@ class QCCHeaderTx:
             self.input_pps_width_us,
             self.pps_timestamp,
             self.generator_status,
-            bytes(3),
+            self.dip_switch,
+            bytes(2),
             self.chip_id,
         )
         assert len(body) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE - 1
@@ -1224,6 +1231,7 @@ class QCCHeaderTx:
             input_pps_width_us,
             pps_timestamp,
             generator_status,
+            dip_switch,
             _reserved1,
             chip_id,
             chk,
@@ -1262,6 +1270,7 @@ class QCCHeaderTx:
         obj.input_pps_width_us = input_pps_width_us
         obj.pps_timestamp = pps_timestamp
         obj.generator_status = generator_status & 0xFF
+        obj.dip_switch = dip_switch & 0xFF
         obj.chip_id = chip_id
         obj.checksum_ok = crc8(raw[:-1]) == chk
         return obj

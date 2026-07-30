@@ -29,7 +29,7 @@ destructive red in both modes).
 import csv
 from datetime import datetime
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, QTimer, Signal
 from PySide6.QtGui import QColor, QFont
 from PySide6.QtWidgets import (
     QButtonGroup, QComboBox, QFileDialog, QFrame, QGridLayout, QHBoxLayout,
@@ -793,20 +793,49 @@ class RemoteProgrammingTab(QWidget):
             return
         golden = self.image_is_golden
         scope = "GOLDEN" if golden else "CURRENT"
-        # Deliberately .warning (not .question) - this commits firmware to
+        # Deliberately Warning (not Question) - this commits firmware to
         # flash, the same destructive class of action as memory_tab.py's NVM
         # write, so it gets the warning icon rather than a neutral prompt.
-        confirm = QMessageBox.warning(
-            self, "Program firmware",
+        # Built as an instance rather than the static QMessageBox.warning()
+        # helper so the informative label can be reached and flashed.
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Warning)
+        box.setWindowTitle("Program firmware")
+        box.setText(
             f"Command {self._target_scope_text()} to reprogram from the "
             f"already-uploaded {scope} SPI image?\n\n"
-            "WARNING: Authenticate first, then Program. Authenticate is the "
-            "non-destructive check that the staged image is valid — Program "
-            "commits it to flash whether or not that check has been run.\n\n"
             "Each addressed SmartFusion2 flashes itself and may reboot — "
-            "no replies are expected while devices reprogram.",
-            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+            "no replies are expected while devices reprogram."
         )
+        box.setInformativeText(
+            "⚠  WARNING: Authenticate first, then Program.\n"
+            "Authenticate is the non-destructive check that the staged image "
+            "is valid — Program commits it to flash whether or not that "
+            "check has been run."
+        )
+        box.setStandardButtons(QMessageBox.Yes | QMessageBox.No)
+        box.setDefaultButton(QMessageBox.No)
+
+        # Pulse the warning so it can't be skimmed past. Deliberately a slow
+        # ~1 Hz toggle, not a rapid strobe - fast flashing (>3 Hz) is a
+        # photosensitivity hazard, and this still reads as "emergency".
+        warning_label = box.findChild(QLabel, "qt_msgbox_informativelabel")
+        if warning_label is not None:
+            flash_timer = QTimer(box)
+            flash_state = {"on": True}
+
+            def _flash():
+                flash_state["on"] = not flash_state["on"]
+                warning_label.setStyleSheet(
+                    f"color: {_FAIL_COLOR}; font-weight: 700;" if flash_state["on"]
+                    else "color: rgba(238, 238, 238, 0.45); font-weight: 700;"
+                )
+
+            _flash()
+            flash_timer.timeout.connect(_flash)
+            flash_timer.start(500)
+
+        confirm = box.exec()
         if confirm == QMessageBox.Yes:
             self.program_requested.emit(golden)
 
@@ -829,8 +858,8 @@ class RemoteProgrammingTab(QWidget):
         for op, btn in ((OP_AUTHENTICATE, self.auth_btn),
                         (OP_VERIFY, self.verify_btn),
                         (OP_PROGRAM, self.program_btn)):
-            btn.setEnabled(ops_ok or self._active_iap_op == op)
-        self.upload_btn.setEnabled(ops_ok and bool(self._image))
+            btn.setEnabled((ops_ok and not self._programmed) or self._active_iap_op == op)
+        self.upload_btn.setEnabled(ops_ok and not self._programmed and bool(self._image))
         # Export needs actual LRU data, not the gate - the table stays
         # valid after Return to High Speed re-locks operations.
         self.export_lru_btn.setEnabled(self._lru_has_data and not self._session_active)

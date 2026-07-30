@@ -217,3 +217,12 @@ instructions and a file-by-file overview.
     (that's the only line that needs to move; every display derives from
     it). Display precision is 3 decimals, which is lossless for 5.625
     steps but not for 360/63.
+
+11. **TODO - show dip switch value as a status in the GUI** (flagged
+    2026-07-30, not yet started) - the QCC/QTRM hardware dip switch value
+    isn't currently surfaced anywhere in the GUI. Needs: confirming which
+    byte/bit in `docs/idd/packet_spec.yaml` carries this (may not exist in
+    the IDD yet - check with Yuvraj), then displaying it as a status
+    (likely alongside the other GENERATOR_STATUS-derived fields in
+    `widgets/header_panel.py`'s "Last Received Header" sidebar, per the
+    pattern used for `QCC_MODE`/`SOB_STATE`/`PRT_STATE`).

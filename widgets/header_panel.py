@@ -344,12 +344,21 @@ class HeaderPanel(QWidget):
             return
 
         interval_s = self.resend_delay_spin.value()
-        self.query_status_requested.emit(False)
+        # Latch resend state BEFORE emitting - query_status_requested is a
+        # direct (same-thread) connection, so mark_query_pending() below
+        # runs synchronously inside this emit() call. If _auto_resending
+        # were still False at that point, mark_query_pending()'s "only
+        # disable if not auto-resending" check would disable query_btn -
+        # and since no response ever arriving means show_frame()/
+        # mark_query_no_response() (the only other places that re-enable
+        # it) never run either, the button would stay permanently disabled
+        # while still reading "Resending - click to Stop", unclickable.
         if interval_s > 0:
             self._auto_resending = True
             self.query_btn.setStyleSheet(_QUERY_BTN_ACTIVE_STYLE)
             self.query_btn.setText("◉ Resending - click to Stop")
             self._resend_timer.start(int(interval_s * 1000))
+        self.query_status_requested.emit(False)
 
     def stop_auto_resend(self) -> None:
         """Stop the auto-resend timer if active - safe to call unconditionally

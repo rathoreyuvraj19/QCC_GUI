@@ -105,7 +105,8 @@ _FIELD_SECTIONS = [
         "MESSAGE_NUMBER", "CHECKSUM",
     ]),
     ("Timestamp", ["DATE", "MONTH", "YEAR", "TIME_OF_DAY"]),
-    ("QCC Message Counters", ["QCC_QUERY_COUNT", "QCC_RESPONSE_COUNT", "QCC_FIRMWARE_NO"]),
+    ("QCC Message Counters", ["QCC_QUERY_COUNT", "QCC_RESPONSE_COUNT"]),
+    ("Firmware", ["APPLICATION_FIRMWARE_VERSION", "RTL_FIRMWARE_VERSION"]),
     ("Board Health", ["FPGA_TEMPERATURE", "BOARD_TEMPERATURE", "BOARD_HUMIDITY"]),
     ("SOB / PRT / PPS Counters", [
         "INPUT_SOB_COUNT", "INPUT_PRT_COUNT", "INPUT_PPS_COUNT",
@@ -457,7 +458,8 @@ class HeaderPanel(QWidget):
         self._set_field("TIME_OF_DAY", str(h.time_of_day))
         self._set_field("QCC_QUERY_COUNT", str(h.qcc_query_count))
         self._set_field("QCC_RESPONSE_COUNT", str(h.qcc_response_count))
-        self._set_field("QCC_FIRMWARE_NO", str(h.qcc_firmware_no))
+        self._set_field("APPLICATION_FIRMWARE_VERSION", str(h.application_firmware_version))
+        self._set_field("RTL_FIRMWARE_VERSION", str(h.rtl_firmware_version))
         self._set_field("QCC_COMMAND", _QCC_COMMAND_NAMES.get(h.qcc_command, f"0x{h.qcc_command:02X}"))
         self._set_field("FPGA_TEMPERATURE", str(h.fpga_temperature))
         self._set_field("BOARD_TEMPERATURE", str(h.board_temperature))

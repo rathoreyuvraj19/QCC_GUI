@@ -1082,8 +1082,9 @@ class QCCHeaderTx:
     14-17   TIME_OF_DAY            4     uint32  Echoed, exact format still TBD
     18-21   QCC_QUERY_COUNT        4     uint32  Response-only: count of messages received by QCC (queries)
     22-25   QCC_RESPONSE_COUNT     4     uint32  Response-only: count of messages QCC has responded to
-    26      QCC_FIRMWARE_NO        1     byte    Response-only: QCC firmware version/build number
-    27-30   RESERVED0              4     byte[4]
+    26      APPLICATION_FIRMWARE_VERSION 1 byte  Response-only: application firmware version/build number, hardcoded in the QCC C application code
+    27      RTL_FIRMWARE_VERSION   1     byte    Response-only: RTL firmware version/build number, read from a PIO register
+    28-30   RESERVED0              3     byte[3]
     31      RESERVED_B             1     byte
     32      QCC_COMMAND            1     byte    Echoes which command (see QCC_COMMAND_* below) produced this response
     33-34   FPGA_TEMPERATURE       2     int16   10-bit 2's complement in bits 0-9, bits 10-15 = 0
@@ -1123,7 +1124,7 @@ class QCCHeaderTx:
     QCC_COMMAND_REMOTE_PROGRAMMING = 0xFF
 
     # Everything except the final checksum byte (89 bytes).
-    _BODY_FMT = "<BBHBBIBBHIIIB4sBBHHHIIIIIHHHHIIHIBB2sI"
+    _BODY_FMT = "<BBHBBIBBHIIIBB3sBBHHHIIIIIHHHHIIHIBB2sI"
 
     def __init__(self):
         self.destination_id = 0
@@ -1138,7 +1139,8 @@ class QCCHeaderTx:
         self.time_of_day = 0
         self.qcc_query_count = 0
         self.qcc_response_count = 0
-        self.qcc_firmware_no = 0
+        self.application_firmware_version = 0
+        self.rtl_firmware_version = 0
         self.qcc_command = 0
         self.fpga_temperature = 0  # signed, -512..511 (10-bit 2's complement)
         self.board_temperature = 0
@@ -1194,7 +1196,7 @@ class QCCHeaderTx:
             self.echo_byte, self.command_ack, self.message_number,
             self.date, self.month, self.year, self.time_of_day,
             self.qcc_query_count, self.qcc_response_count,
-            self.qcc_firmware_no, bytes(4), 0,
+            self.application_firmware_version, self.rtl_firmware_version, bytes(3), 0,
             self.qcc_command,
             (self.fpga_temperature & 0x3FF), self.board_temperature, self.board_humidity,
             self.input_sob_count, self.input_prt_count, self.input_pps_count,
@@ -1220,7 +1222,7 @@ class QCCHeaderTx:
             echo_byte, command_ack, message_number,
             date, month, year, time_of_day,
             qcc_query_count, qcc_response_count,
-            qcc_firmware_no, _reserved0, _reserved_b,
+            application_firmware_version, rtl_firmware_version, _reserved0, _reserved_b,
             qcc_command,
             fpga_temp_raw, board_temperature, board_humidity,
             input_sob_count, input_prt_count, input_pps_count,
@@ -1250,7 +1252,8 @@ class QCCHeaderTx:
         obj.time_of_day = time_of_day
         obj.qcc_query_count = qcc_query_count
         obj.qcc_response_count = qcc_response_count
-        obj.qcc_firmware_no = qcc_firmware_no
+        obj.application_firmware_version = application_firmware_version
+        obj.rtl_firmware_version = rtl_firmware_version
         obj.qcc_command = qcc_command
         fpga_temp_raw &= 0x3FF
         obj.fpga_temperature = fpga_temp_raw - 1024 if fpga_temp_raw >= 512 else fpga_temp_raw

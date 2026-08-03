@@ -32,13 +32,13 @@ from core.packet import (
     build_dwell_frame, build_memory_write_frame,
     QCCHeaderRx, QCCHeaderTx, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
     build_sob_body, build_prt_body, build_pps_body,
-    build_header_only_frame,
+    build_header_only_frame, CHIP_ID_RESPONSE_SIZE,
 )
 from core.rc_settings import (
     rc_settings, COMMAND_ID_DWELL, COMMAND_ID_LINK_TEST, COMMAND_ID_STATUS,
     COMMAND_ID_RX_CAL, COMMAND_ID_TX_CAL, COMMAND_ID_ISOLATION,
     COMMAND_ID_SOFT_RESET, COMMAND_ID_MEMORY_OPERATION, COMMAND_ID_QCC_STATUS,
-    COMMAND_ID_QCC_RESET,
+    COMMAND_ID_QCC_RESET, COMMAND_ID_CHIP_ID_READ,
 )
 from core.command_style import send_button_style
 from connection_settings import connection_settings
@@ -372,6 +372,7 @@ class MainWindow(QMainWindow):
         self.header_panel = HeaderPanel()
         self.header_panel.query_status_requested.connect(self._on_query_qcc_status)
         self.header_panel.qcc_reset_requested.connect(self._on_qcc_reset)
+        self.header_panel.chip_id_requested.connect(self._on_read_chip_id)
 
         columns.addWidget(left_column, 1)
         columns.addWidget(self.header_panel)
@@ -1230,6 +1231,30 @@ class MainWindow(QMainWindow):
         self._awaiting_kind = None
         self.header_panel.mark_reset_no_response()
 
+    def _on_read_chip_id(self):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+
+        # CHIP_ID_READ's TX side is header-only, same shape as QCC Status/
+        # QCC Reset - only its Response deviates from the standard header
+        # (see _on_frame_received's "chip_id_read" branch below).
+        header = rc_settings.build_header(COMMAND_ID_CHIP_ID_READ)
+        frame = build_header_only_frame(header)
+
+        self._awaiting_kind = "chip_id_read"
+        self.header_panel.mark_chip_id_pending()
+        self._begin_wait(self._on_chip_id_timeout)
+        self._send_frame(frame)
+
+    def _on_chip_id_timeout(self):
+        if self._awaiting_kind != "chip_id_read":
+            return
+        self._awaiting_kind = None
+        self.header_panel.mark_chip_id_no_response()
+
     def _on_dwell_send(self):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
@@ -1625,6 +1650,25 @@ class MainWindow(QMainWindow):
         kind, self._awaiting_kind = self._awaiting_kind, None
 
         self._last_received_frame = raw
+
+        # CHIP_ID_READ's Response is a bare 10-byte frame, NOT the
+        # standard 90-byte header - it can't go through show_frame() (or
+        # the RX Test Window, which also expects the standard header/frame
+        # shapes), so it's dispatched to its own display method and
+        # returns early instead of falling through to the shared
+        # show_frame() call below.
+        if kind == "chip_id_read":
+            if len(raw) != CHIP_ID_RESPONSE_SIZE:
+                QMessageBox.warning(
+                    self, "Parse error",
+                    f"Expected a {CHIP_ID_RESPONSE_SIZE}-byte CHIP_ID_READ response, got "
+                    f"{len(raw)} bytes - the other end may not support CHIP_ID_READ yet.",
+                )
+                self.header_panel.mark_chip_id_no_response()
+                return
+            self.header_panel.show_chip_id_response(raw)
+            return
+
         if self._rx_test_window is not None:
             self._rx_test_window.show_frame(raw)
 

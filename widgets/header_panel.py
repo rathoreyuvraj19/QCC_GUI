@@ -37,7 +37,7 @@ from PySide6.QtWidgets import (
     QPushButton, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
-from core.packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QCCHeaderTx
+from core.packet import ChipIdResponse, FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QCCHeaderTx
 from widgets.spin_field import DoubleSpinField
 
 _PANEL_WIDTH = 340
@@ -118,7 +118,8 @@ _FIELD_SECTIONS = [
         "INPUT_PPS_WIDTH_US",
     ]),
     ("PRT PRI (µs)", ["INPUT_PRT_PRI", "OUTPUT_PRT_PRI"]),
-    ("Misc", ["PPS_TIMESTAMP", "GENERATOR_STATUS", "DIP_SWITCH", "CHIP_ID"]),
+    ("Misc", ["PPS_TIMESTAMP", "GENERATOR_STATUS", "DIP_SWITCH"]),
+    ("Chip ID (separate query)", ["CHIP_ID"]),
 ]
 
 _QUERY_BTN_STYLE = (
@@ -168,6 +169,7 @@ class HeaderPanel(QWidget):
 
     query_status_requested = Signal(bool)          # is_auto_resend
     qcc_reset_requested = Signal()
+    chip_id_requested = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -235,6 +237,13 @@ class HeaderPanel(QWidget):
             "QTRM-targeted command). Asks for confirmation before sending."
         )
         self.reset_btn.clicked.connect(self._on_reset_btn_clicked)
+
+        # Read Chip ID button is NOT in this row - it's built and placed
+        # right next to the CHIP_ID row itself, in the "Chip ID (separate
+        # query)" section below (see the _FIELD_SECTIONS loop), since it's
+        # a self-contained query/response pair distinct from the rest of
+        # this panel's fields, not something that belongs alongside
+        # Query QCC Status/QCC Reset.
 
         # Normal button size, not stretched to the panel's full width - a
         # stretched pill reads as a section header, not a clickable action.
@@ -304,6 +313,22 @@ class HeaderPanel(QWidget):
             card_layout.addWidget(section_label)
 
             card_layout.addLayout(self._build_form_section(names))
+
+            if section_title == "Chip ID (separate query)":
+                self.chip_id_btn = QPushButton("Read Chip ID")
+                self.chip_id_btn.setStyleSheet(_QUERY_BTN_STYLE)
+                self.chip_id_btn.setToolTip(
+                    "Sends CHIP_ID_READ - a separate query/response pair from the rest\n"
+                    "of this panel. The Response is NOT the standard 90-byte header\n"
+                    "(QCC's 64-bit chip ID doesn't fit the old 4-byte field), so it\n"
+                    "only updates the CHIP_ID row above, not the rest of this panel."
+                )
+                self.chip_id_btn.clicked.connect(self._on_chip_id_btn_clicked)
+                chip_id_btn_row = QHBoxLayout()
+                chip_id_btn_row.addStretch(1)
+                chip_id_btn_row.addWidget(self.chip_id_btn)
+                chip_id_btn_row.addStretch(1)
+                card_layout.addLayout(chip_id_btn_row)
 
         layout.addWidget(card)
 
@@ -378,6 +403,9 @@ class HeaderPanel(QWidget):
         if resp != QMessageBox.Yes:
             return
         self.qcc_reset_requested.emit()
+
+    def _on_chip_id_btn_clicked(self) -> None:
+        self.chip_id_requested.emit()
 
     def _make_value_label(self, name: str) -> QLabel:
         value_label = QLabel("-")
@@ -481,7 +509,6 @@ class HeaderPanel(QWidget):
         self._set_field("GENERATOR_STATUS", gen_status_str)
         bits_str = " ".join(str(int(h.dip_switch_bit(b))) for b in range(7, -1, -1))
         self._set_field("DIP_SWITCH", f"Bits[7..0]: {bits_str}\nDecimal: {h.dip_switch}")
-        self._set_field("CHIP_ID", f"0x{h.chip_id:08X}")
 
         checksum_label = self.field_labels["CHECKSUM"]
         new_checksum_text = "OK" if h.checksum_ok else "FAIL"
@@ -519,6 +546,31 @@ class HeaderPanel(QWidget):
     def mark_reset_no_response(self):
         self.reset_btn.setEnabled(True)
         self.query_status_label.setText("No response")
+
+    def mark_chip_id_pending(self):
+        self.chip_id_btn.setEnabled(False)
+        self.query_status_label.setText("Reading Chip ID...")
+
+    def mark_chip_id_no_response(self):
+        self.chip_id_btn.setEnabled(True)
+        self.query_status_label.setText("No response")
+
+    def show_chip_id_response(self, raw: bytes) -> None:
+        """Handles CHIP_ID_READ's own 10-byte response frame - NOT routed
+        through show_frame(), since it isn't the standard 90-byte header."""
+        r = ChipIdResponse.from_bytes(raw)
+        hex_str = f"{r.chip_id:016X}"
+        # QLabel's word-wrap only breaks at whitespace - a bare 16-digit
+        # hex string is one unbroken token, so without an explicit split it
+        # just overflows past the value column's max width (and the
+        # sidebar's right edge) instead of wrapping, the same reason
+        # GENERATOR_STATUS/DIP_SWITCH's values below use an explicit "\n".
+        text = f"0x{hex_str[:8]}\n{hex_str[8:]}"
+        if not r.checksum_ok:
+            text += " (checksum FAIL)"
+        self._set_field("CHIP_ID", text)
+        self.chip_id_btn.setEnabled(True)
+        self.query_status_label.setText("")
 
     def clear(self):
         self.clear_highlights()

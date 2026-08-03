@@ -38,12 +38,17 @@ from PySide6.QtWidgets import (
 )
 
 from core.packet import (
-    QTRMSlot, QCCHeaderTx, QTRM_SLOT_SIZE, NUM_QTRM, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
+    QTRMSlot, QCCHeaderRx, QCCHeaderTx, QTRM_SLOT_SIZE, NUM_QTRM, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
     TOTAL_PACKET_SIZE, CMD_RESERVED, CMD_SOFT_RESET, crc8,
     STATUS_TYPE_ACK, STATUS_TYPE_LINK, STATUS_TYPE_HEALTH,
     STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
     DIAGNOSTIC_TYPE_DETAILED_HEALTH, LINK_SENTINEL,
+    build_chip_id_response,
 )
+
+# Mock chip ID returned for CHIP_ID_READ (QCC_COMMAND 0x08) queries - an
+# arbitrary fixed 64-bit test value, no real hardware meaning.
+_MOCK_CHIP_ID = 0x0123456789ABCDEF
 
 # Command types that never reply, regardless of Status Type bits: Reserved
 # (0x00, also what an untouched/zero-filled individual-target slot looks
@@ -237,7 +242,6 @@ _mock_header.output_prt_width_us = 40
 _mock_header.input_pps_width_us = 50
 _mock_header.pps_timestamp = 600
 _mock_header.set_generator_state(sob_internal=True, prt_internal=False)
-_mock_header.chip_id = 0x12345678
 _mock_header_bytes = _mock_header.to_bytes()
 
 _MOCK_FIXED_HEADER = _mock_header_bytes[:FIXED_HEADER_SIZE]
@@ -438,10 +442,22 @@ class ResponderWorker(QThread):
                 self.error.emit(f"Received {len(data)} bytes from {addr}, expected {TOTAL_PACKET_SIZE} - dropped")
                 continue
 
-            response, replied = build_mock_response_frame(
-                data, self.fixed_header, self.qcc_header, self.fault_indices, self.fault_mode,
-                self.auto_echo_header,
-            )
+            # CHIP_ID_READ (QCC_COMMAND 0x08) is the one command whose
+            # Response is NOT the standard 90-byte header - see
+            # build_chip_id_response()/CHIP_ID_RESPONSE_SIZE in
+            # core/packet.py. Every other command (including QCC_STATUS/
+            # QCC_RESET) still gets the same fixed-shape standard reply
+            # below regardless of which one it actually was - this mock
+            # doesn't otherwise discriminate on QCC_COMMAND.
+            query_header = QCCHeaderRx.from_bytes(data[: FIXED_HEADER_SIZE + QCC_HEADER_SIZE])
+            if query_header.qcc_command == QCCHeaderRx.QCC_COMMAND_CHIP_ID_READ:
+                response = build_chip_id_response(QCCHeaderRx.QCC_COMMAND_CHIP_ID_READ, _MOCK_CHIP_ID)
+                replied = []
+            else:
+                response, replied = build_mock_response_frame(
+                    data, self.fixed_header, self.qcc_header, self.fault_indices, self.fault_mode,
+                    self.auto_echo_header,
+                )
             try:
                 self._sock.sendto(response, addr)
             except OSError as e:

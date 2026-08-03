@@ -21,7 +21,8 @@ import time
 from PySide6.QtCore import QThread, Signal
 
 from core.packet import (
-    RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_QCC_LEVEL_FRAME_SIZE, TOTAL_PACKET_SIZE,
+    CHIP_ID_RESPONSE_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_QCC_LEVEL_FRAME_SIZE,
+    TOTAL_PACKET_SIZE,
 )
 
 # Every TX frame is 2970 bytes except Remote Programming, which has three
@@ -31,7 +32,8 @@ from core.packet import (
 # other RP command except bitstream DATA chunks, and 4196 bytes [header +
 # 10-byte command + 4096-byte payload] for those chunks (the real
 # file-upload data). RX is always 2970 except Mode Step 2/Mode Back
-# responses, which echo the bare 90-byte frame back.
+# responses (bare 90-byte frame) and CHIP_ID_READ responses (bare 10-byte
+# frame, see core/packet.py's ChipIdResponse).
 _VALID_TX_SIZES = (TOTAL_PACKET_SIZE, RP_QCC_LEVEL_FRAME_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE)
 
 
@@ -83,11 +85,12 @@ class UdpWorker(QThread):
             # RX is always the standard 2970-byte frame, EXCEPT Mode Step 2/
             # Mode Back responses, which echo back the bare 90-byte
             # QCC-level frame they were sent as (see core/packet.py's
-            # RP_QCC_LEVEL_FRAME_SIZE comment).
-            if len(data) not in (TOTAL_PACKET_SIZE, RP_QCC_LEVEL_FRAME_SIZE):
+            # RP_QCC_LEVEL_FRAME_SIZE comment), and CHIP_ID_READ responses,
+            # which are a bare 10-byte frame (see CHIP_ID_RESPONSE_SIZE).
+            if len(data) not in (TOTAL_PACKET_SIZE, RP_QCC_LEVEL_FRAME_SIZE, CHIP_ID_RESPONSE_SIZE):
                 self.error.emit(
                     f"Received {len(data)} bytes from {addr}, expected "
-                    f"{TOTAL_PACKET_SIZE} or {RP_QCC_LEVEL_FRAME_SIZE} - dropped"
+                    f"{TOTAL_PACKET_SIZE}, {RP_QCC_LEVEL_FRAME_SIZE}, or {CHIP_ID_RESPONSE_SIZE} - dropped"
                 )
                 continue
 

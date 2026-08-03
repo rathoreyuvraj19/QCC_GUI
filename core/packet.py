@@ -796,6 +796,7 @@ class QCCHeaderRx:
     QCC_COMMAND_PRT_INTERNAL_GEN = 0x05
     QCC_COMMAND_SOB_INTERNAL_GEN = 0x06
     QCC_COMMAND_PPS_INTERNAL_GEN = 0x07
+    QCC_COMMAND_CHIP_ID_READ = 0x08
     QCC_COMMAND_REMOTE_PROGRAMMING = 0xFF
 
     # Everything except the final checksum byte (89 bytes).
@@ -1106,7 +1107,7 @@ class QCCHeaderTx:
     81      GENERATOR_STATUS       1     byte    Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE (0=normal high-speed, 1=low-speed remote-programming). Bits 7-3: reserved.
     82      DIP_SWITCH             1     byte    Hardware DIP switch value, all 8 bits significant.
     83-84   RESERVED1              2     byte[2]
-    85-88   CHIP_ID                4     uint32  Lower 32 bits of a 64-bit chip ID
+    85-88   RESERVED2              4     byte[4] Reserved - previously CHIP_ID (u32, lower 32 bits only); the full 64-bit chip ID is now read via its own CHIP_ID_READ command/response pair, which doesn't use this header shape at all - see build_chip_id_response()/ChipIdResponse below.
     89      CHECKSUM               1     byte    CRC-8/CCITT over bytes 0-88
     """
 
@@ -1121,10 +1122,11 @@ class QCCHeaderTx:
     QCC_COMMAND_PRT_INTERNAL_GEN = 0x05
     QCC_COMMAND_SOB_INTERNAL_GEN = 0x06
     QCC_COMMAND_PPS_INTERNAL_GEN = 0x07
+    QCC_COMMAND_CHIP_ID_READ = 0x08
     QCC_COMMAND_REMOTE_PROGRAMMING = 0xFF
 
     # Everything except the final checksum byte (89 bytes).
-    _BODY_FMT = "<BBHBBIBBHIIIBB3sBBHHHIIIIIHHHHIIHIBB2sI"
+    _BODY_FMT = "<BBHBBIBBHIIIBB3sBBHHHIIIIIHHHHIIHIBB2s4s"
 
     def __init__(self):
         self.destination_id = 0
@@ -1160,7 +1162,6 @@ class QCCHeaderTx:
         self.pps_timestamp = 0
         self.generator_status = 0  # Bit 0: SOB_STATE, Bit 1: PRT_STATE, Bit 2: QCC_MODE
         self.dip_switch = 0  # Hardware DIP switch value, all 8 bits significant
-        self.chip_id = 0
         self.checksum_ok = None
 
     def sob_is_internal(self) -> bool:
@@ -1209,7 +1210,7 @@ class QCCHeaderTx:
             self.generator_status,
             self.dip_switch,
             bytes(2),
-            self.chip_id,
+            bytes(4),
         )
         assert len(body) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE - 1
         return body + struct.pack("<B", crc8(body))
@@ -1235,7 +1236,7 @@ class QCCHeaderTx:
             generator_status,
             dip_switch,
             _reserved1,
-            chip_id,
+            _reserved2,
             chk,
         ) = struct.unpack(cls._BODY_FMT + "B", raw)
 
@@ -1274,6 +1275,43 @@ class QCCHeaderTx:
         obj.pps_timestamp = pps_timestamp
         obj.generator_status = generator_status & 0xFF
         obj.dip_switch = dip_switch & 0xFF
+        obj.checksum_ok = crc8(raw[:-1]) == chk
+        return obj
+
+
+# ---------------------------------------------------------------------------
+# CHIP_ID_READ (QCC_COMMAND 0x08) Response - NOT the standard 90-byte
+# QCCHeaderTx shape. QCC's 64-bit chip ID doesn't fit the 4 bytes
+# previously reserved for it inside the standard header, so it gets its
+# own minimal, standalone response frame instead: [1-byte command
+# echo][8-byte chip ID][1-byte CRC-8 checksum] = 10 bytes total. The TX
+# (query) side is unaffected - still the standard header-only frame, same
+# shape as QCC_STATUS/QCC_RESET (see build_header_only_frame()).
+# ---------------------------------------------------------------------------
+
+CHIP_ID_RESPONSE_SIZE = 10
+
+
+def build_chip_id_response(command_id: int, chip_id: int) -> bytes:
+    """Build the 10-byte CHIP_ID_READ response frame."""
+    body = struct.pack("<BQ", command_id & 0xFF, chip_id & 0xFFFFFFFFFFFFFFFF)
+    return body + struct.pack("<B", crc8(body))
+
+
+class ChipIdResponse:
+    """Parsed CHIP_ID_READ response - see build_chip_id_response() above."""
+
+    def __init__(self):
+        self.command_id = 0
+        self.chip_id = 0
+        self.checksum_ok = None
+
+    @classmethod
+    def from_bytes(cls, raw: bytes) -> "ChipIdResponse":
+        assert len(raw) == CHIP_ID_RESPONSE_SIZE
+        command_id, chip_id, chk = struct.unpack("<BQB", raw)
+        obj = cls()
+        obj.command_id = command_id
         obj.chip_id = chip_id
         obj.checksum_ok = crc8(raw[:-1]) == chk
         return obj

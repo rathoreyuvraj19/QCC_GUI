@@ -97,6 +97,7 @@ qcc_commands:
   - { value: 0x05, name: PRT_INTERNAL_GEN,    status: defined, desc: "No DMA triggered; configures the PRT internal generator using the parameters in message_body.", triggers_dma_write: false, qtrm_data_block_state: tbd }
   - { value: 0x06, name: SOB_INTERNAL_GEN,    status: defined, desc: "No DMA triggered; configures the SOB internal generator using the width in message_body.", triggers_dma_write: false, qtrm_data_block_state: tbd }
   - { value: 0x07, name: PPS_INTERNAL_GEN,    status: defined, desc: "No DMA triggered; configures the PPS internal generator using the width in message_body.", triggers_dma_write: false, qtrm_data_block_state: tbd }
+  - { value: 0x08, name: CHIP_ID_READ,        status: defined, desc: "No DMA triggered; TX frame is header-only (same shape as QCC_STATUS/QCC_RESET). Does NOT get the standard 90-byte Response header - QCC replies with a separate minimal frame instead, see chip_id_read_response below.", triggers_dma_write: false, qtrm_data_block_state: tbd }
   - { value: 0xFF, name: REMOTE_PROGRAMMING,  status: defined, desc: "No DMA triggered. Selects a Remote Programming session; byte 34 (message_body offset 0) is a SubCommand selector - see remote_programming_subcommands below. Does NOT use the standard 56-byte message_body frame shape - see remote_programming_framing below.", triggers_dma_write: false, qtrm_data_block_state: tbd }
 
 # -----------------------------------------------------------------------------
@@ -159,6 +160,10 @@ message_body_tx:
         - { offset: [0,1],  name: pps_width, size: 2, type: u16, desc: "PPS pulse width" }
         - { offset: [2,55], name: reserved,  size: 54, type: "u8[54]", desc: "Unused in this command" }
       note: "No DMA triggered; configures the PPS internal generator using this width."
+    CHIP_ID_READ:
+      status: defined
+      fields: []
+      note: "No command data needed - no DMA triggered; identical TX shape to QCC_STATUS (header-only, QTRM data block zero-filled). The Response does NOT use the standard 90-byte header though - see chip_id_read_response below."
     REMOTE_PROGRAMMING:
       status: defined
       fields:
@@ -229,8 +234,26 @@ message_body_response:
     - { offset: [44,47], name: pps_timestamp,         size: 4, type: u32, desc: "Microseconds since the last PPS edge, latched at each SOB edge (i_PPS_TIME_STAMP.s1 PIO @0x00F0) -- distinct from input_pps_count, the PPS edge counter" }
     - { offset: 48,      name: generator_status,      size: 1, type: u8, status: defined, desc: "Generator/mode status. Bit 0: SOB_STATE (0=bypass, 1=internal). Bit 1: PRT_STATE (0=bypass, 1=internal). Bit 2: QCC_MODE / speed toggle status (0=normal high-speed mode, 1=low-speed remote-programming mode). Bits 7-3: reserved (0x00).", enum_ref: generator_status_bits }
     - { offset: 49,      name: dip_switch,            size: 1, type: u8, status: defined, desc: "Hardware DIP switch value. All 8 bits significant - no defined per-bit meaning, shown raw as bits 0-7 plus decimal." }
-    - { offset: [50,51], name: reserved,              size: 2, type: "u8[2]", desc: "Reserved" }
-    - { offset: [52,55], name: chip_id,               size: 4, type: u32, desc: "Lower 32 bits of the 64-bit chip ID, positioned immediately before the Checksum" }
+    - { offset: [50,51], name: reserved_b,            size: 2, type: "u8[2]", desc: "Reserved" }
+    - { offset: [52,55], name: reserved_c,            size: 4, type: "u8[4]", desc: "Reserved - previously chip_id (lower 32 bits only); the full 64-bit chip ID is now read via its own CHIP_ID_READ command/response pair (see chip_id_read_response below), since 4 bytes here isn't enough room for the full 64-bit value." }
+
+# -----------------------------------------------------------------------------
+# CHIP_ID_READ (QCC_COMMAND 0x08) Response - NOT the standard 90-byte
+# header shape. QCC's 64-bit chip ID doesn't fit the 4 bytes previously
+# reserved for it inside message_body_response, so it now has its own
+# minimal, standalone response frame instead of trying to widen the
+# standard header. TX (the query) is still the standard header-only shape
+# (see CHIP_ID_READ under message_body_tx above) - only the Response
+# deviates.
+# -----------------------------------------------------------------------------
+
+chip_id_read_response:
+  total_size_bytes: 10
+  shape: "[1-byte command echo][8-byte chip ID][1-byte checksum]"
+  fields:
+    - { offset: 0,   name: command_id, size: 1, type: u8,  desc: "Echo of QCC_COMMAND (0x08 / CHIP_ID_READ), identifying this frame as a chip-ID-read response." }
+    - { offset: [1,8], name: chip_id,  size: 8, type: u64, desc: "Full 64-bit chip ID (all 64 bits, unlike the old 4-byte truncated field this replaces)." }
+    - { offset: 9,   name: checksum,  size: 1, type: u8,  desc: "CRC-8/CCITT over bytes 0-8, same polynomial/params as the standard 90-byte header checksum." }
 
 # -----------------------------------------------------------------------------
 # generator_status (message_body_response offset 48 / absolute byte 82)

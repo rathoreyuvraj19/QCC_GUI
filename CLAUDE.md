@@ -228,8 +228,8 @@ instructions and a file-by-file overview.
     byte-layout docstring, new `dip_switch_bit()` helper mirroring
     `sob_is_internal()`/`prt_is_internal()`) are updated to match. The
     "Last Received Header" sidebar (`widgets/header_panel.py`) shows a new
-    **DIP_SWITCH** row in the "Misc" section, alongside `GENERATOR_STATUS`/
-    `CHIP_ID`, displaying all 8 bits individually (`Bits[7..0]: b7 b6 ... b0`)
+    **DIP_SWITCH** row in the "Misc" section, alongside `GENERATOR_STATUS`,
+    displaying all 8 bits individually (`Bits[7..0]: b7 b6 ... b0`)
     plus the decimal value - same two-line label style already used for
     `GENERATOR_STATUS`'s SOB/PRT text. This is QCC-header-level, not
     per-QTRM, so `tabs/status_tab.py`'s Details panel/hover popup (which
@@ -246,3 +246,30 @@ instructions and a file-by-file overview.
     on byte 82 (still lists `Reserved-14` instead of `GENERATOR_STATUS`
     from item 7) - it was left alone since it isn't part of the code-sync
     chain, but flagging in case it's meant to be regenerated.
+
+12. **QCC chip ID moved to its own CHIP_ID_READ command/response pair, out
+    of the standard response header** - per Yuvraj, the chip ID is 64 bits,
+    not 32, so it doesn't fit the response header's old 4-byte `CHIP_ID`
+    field (bytes 85-88). Those 4 bytes are reserved again
+    (`RESERVED2`/`reserved_c` in `core/packet.py`/`packet_spec.yaml`).
+    Reading the chip ID is now a separate exchange: TX is `QCC_COMMAND`
+    `0x08` (`CHIP_ID_READ`), header-only, same shape as `QCC_STATUS`/
+    `QCC_RESET`. The Response is NOT the standard 90-byte header - it's a
+    standalone 10-byte frame (`[1-byte command echo][8-byte chip
+    ID][1-byte CRC-8]`, see `ChipIdResponse`/`build_chip_id_response()`/
+    `CHIP_ID_RESPONSE_SIZE` in `core/packet.py`). `core/udp_worker.py`
+    accepts this size on RX alongside the standard 2970/90-byte shapes.
+    The HeaderPanel (`widgets/header_panel.py`) gained a "Read Chip ID"
+    button next to Query QCC Status/QCC Reset, and its own `CHIP_ID` row
+    in a new "Chip ID (separate query)" section, populated by
+    `show_chip_id_response()` rather than the usual `show_frame()` path
+    (`main_window.py`'s `_on_frame_received` special-cases the
+    `chip_id_read` kind before the normal header dispatch, the same way it
+    already does for Remote Programming's multi-frame sessions).
+    **Not yet covered**: `apps/status_responder_app.py`'s mock QCC
+    responder doesn't special-case any `QCC_COMMAND` value (it always
+    replies with the same fixed-shape frame regardless of which command
+    triggered the query, a pre-existing simplification that already
+    applied to `QCC_STATUS`/`QCC_RESET` too) - it won't return a real
+    10-byte reply to a `CHIP_ID_READ` query, so this can't be exercised
+    end-to-end against the mock yet.

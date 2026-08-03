@@ -85,6 +85,11 @@ COMMAND_ID_QCC_STATUS = QCCHeaderRx.QCC_COMMAND_QCC_STATUS
 # buffers/counters via PIO pin (QCC-level action, distinct from Soft
 # Reset's QTRM-targeted command above - see module docstring).
 COMMAND_ID_QCC_RESET = QCCHeaderRx.QCC_COMMAND_QCC_RESET
+# The HeaderPanel's "Read Chip ID" button - header-only TX frame, same
+# shape as QCC_STATUS/QCC_RESET, but the Response is NOT the standard
+# 90-byte header - see ChipIdResponse/build_chip_id_response() in
+# core/packet.py.
+COMMAND_ID_CHIP_ID_READ = QCCHeaderRx.QCC_COMMAND_CHIP_ID_READ
 
 
 class RCSettings:

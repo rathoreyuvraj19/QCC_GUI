@@ -32,7 +32,7 @@ from core.packet import (
     build_dwell_frame, build_memory_write_frame,
     QCCHeaderRx, QCCHeaderTx, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
     build_sob_body, build_prt_body, build_pps_body,
-    build_header_only_frame, CHIP_ID_RESPONSE_SIZE,
+    build_header_only_frame, CHIP_ID_RESPONSE_SIZE, FrameError,
 )
 from core.rc_settings import (
     rc_settings, COMMAND_ID_DWELL, COMMAND_ID_LINK_TEST, COMMAND_ID_STATUS,
@@ -156,6 +156,187 @@ def _find_available_udp_port(preferred: int) -> int:
     return preferred
 
 
+# ---------------------------------------------------------------------------
+# Command dispatch table
+#
+# Only one command is ever in flight (single request/response link), tracked
+# by MainWindow._awaiting_kind. Each kind used to be spelled out three times -
+# a near-identical _on_<kind>_timeout method, a branch of a ~200-line if-chain
+# in _on_frame_received, and its own _<kind>_target instance attribute - so
+# adding a command meant editing three places that had to stay in lockstep.
+# One entry here now drives all three (see _begin_wait/_on_response_timeout/
+# _on_frame_received).
+#
+# The callbacks take the MainWindow as `w` rather than being bound methods, so
+# this stays a module-level constant that doesn't care when the tabs get
+# built.
+#
+# Two kinds are deliberately NOT fully table-driven, because their RX side
+# genuinely doesn't fit the shape:
+#   - "chip_id_read"      - its response is a bare 10-byte frame, not the
+#                           standard 90-byte header, so it can't go through
+#                           show_frame()/the RX Test Window at all. Listed
+#                           here for its timeout only; _on_frame_received
+#                           special-cases the receive side.
+#   - "remote_programming" - a multi-frame session with its own timers, owned
+#                           by RemoteProgController. Not in this table;
+#                           _on_frame_received routes to it before any
+#                           dispatch happens.
+# ---------------------------------------------------------------------------
+
+
+def _parse_link(w, raw):
+    """Per-QTRM Link-reply flags - the reply shape for most commands."""
+    return parse_link_test_response(raw)
+
+
+def _parse_status(w, raw):
+    """Per-QTRM decoded status, keyed on whichever status type is in flight."""
+    status_type = w._status_type_in_flight
+    diagnostic_type = w._status_sub_type_in_flight if status_type == STATUS_TYPE_DIAGNOSTIC else 0
+    return parse_status_frame(raw, status_type, diagnostic_type)
+
+
+def _parse_header_checksum(w, raw):
+    """
+    The timing commands (SOB/PRT/PPS) have no per-QTRM result to decode - the
+    only thing to check is that a reply came back with a valid header
+    checksum.
+    """
+    return QCCHeaderTx.from_bytes(raw[0:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]).checksum_ok
+
+
+class _Command:
+    """
+    One in-flight command kind.
+
+    parser            (w, raw) -> parsed result, or None to skip parsing.
+                      Raises FrameError if the frame doesn't match the shape.
+    on_result         (w, parsed, target) -> None. Updates the owning tab.
+    on_timeout        (w, target) -> None. Updates the owning tab.
+    on_response_time  (w, microseconds) -> None, or None if the tab has no
+                      response-time readout (Isolation doesn't).
+    target_attr       Name of the MainWindow attribute holding the target QTRM
+                      index for single-QTRM variants, popped back to None when
+                      the reply lands or the wait times out. None for
+                      all-QTRM commands.
+    """
+
+    __slots__ = ("parser", "on_result", "on_timeout", "on_response_time", "target_attr")
+
+    def __init__(self, on_timeout, on_result=None, parser=None,
+                 on_response_time=None, target_attr=None):
+        self.on_timeout = on_timeout
+        self.on_result = on_result
+        self.parser = parser
+        self.on_response_time = on_response_time
+        self.target_attr = target_attr
+
+
+_COMMANDS = {
+    "qcc_status": _Command(
+        on_timeout=lambda w, t: w.header_panel.mark_query_no_response(),
+    ),
+    "qcc_reset": _Command(
+        on_timeout=lambda w, t: w.header_panel.mark_reset_no_response(),
+    ),
+    # Receive side is special-cased in _on_frame_received (10-byte response).
+    "chip_id_read": _Command(
+        on_timeout=lambda w, t: w.header_panel.mark_chip_id_no_response(),
+    ),
+    "dwell": _Command(
+        parser=_parse_link,
+        on_result=lambda w, r, t: w.dwell_tab.show_results(r),
+        on_response_time=lambda w, us: w.dwell_tab.show_response_time(us),
+        on_timeout=lambda w, t: w.dwell_tab.show_no_response(),
+    ),
+    "link_test": _Command(
+        parser=_parse_link,
+        on_result=lambda w, r, t: w.link_test_tab.show_results(r),
+        on_response_time=lambda w, us: w.link_test_tab.show_response_time(us),
+        on_timeout=lambda w, t: w.link_test_tab.show_no_response(),
+    ),
+    "individual_link_test": _Command(
+        parser=_parse_link,
+        target_attr="_individual_link_qtrm",
+        on_result=lambda w, r, t: w.link_test_tab.show_individual_result(t, r[t]),
+        on_response_time=lambda w, us: w.link_test_tab.show_individual_response_time(us),
+        on_timeout=lambda w, t: w.link_test_tab.show_individual_no_response(t),
+    ),
+    "memory_write": _Command(
+        parser=_parse_link,
+        target_attr="_memory_write_target",
+        on_result=lambda w, r, t: w.memory_tab.show_result(t, r[t]),
+        on_response_time=lambda w, us: w.memory_tab.show_response_time(us),
+        on_timeout=lambda w, t: w.memory_tab.show_no_response(t),
+    ),
+    "memory_write_all": _Command(
+        parser=_parse_link,
+        on_result=lambda w, r, t: w.memory_tab.show_all_results(r),
+        on_response_time=lambda w, us: w.memory_tab.show_response_time(us),
+        on_timeout=lambda w, t: w.memory_tab.show_all_no_response(),
+    ),
+    "rx_cal": _Command(
+        parser=_parse_link,
+        target_attr="_rx_cal_target",
+        on_result=lambda w, r, t: w.rx_cal_tab.show_result(r[t]),
+        on_response_time=lambda w, us: w.rx_cal_tab.show_response_time(us),
+        on_timeout=lambda w, t: w.rx_cal_tab.show_no_response(),
+    ),
+    "tx_cal": _Command(
+        parser=_parse_link,
+        target_attr="_tx_cal_target",
+        on_result=lambda w, r, t: w.tx_cal_tab.show_result(r[t]),
+        on_response_time=lambda w, us: w.tx_cal_tab.show_response_time(us),
+        on_timeout=lambda w, t: w.tx_cal_tab.show_no_response(),
+    ),
+    # Isolation is the one tab with no response-time readout - hence no
+    # on_response_time here (it was never shown for these two kinds).
+    "isolation_all": _Command(
+        parser=_parse_link,
+        on_result=lambda w, r, t: w.isolation_tab.show_all_results(r),
+        on_timeout=lambda w, t: w.isolation_tab.show_all_no_response(),
+    ),
+    "isolation_individual": _Command(
+        parser=_parse_link,
+        target_attr="_individual_isolation_qtrm",
+        on_result=lambda w, r, t: w.isolation_tab.show_individual_result(t, r[t]),
+        on_timeout=lambda w, t: w.isolation_tab.show_individual_no_response(t),
+    ),
+    "status_all": _Command(
+        parser=_parse_status,
+        on_result=lambda w, r, t: w.status_tab.show_results(r),
+        on_response_time=lambda w, us: w.status_tab.show_response_time(us),
+        on_timeout=lambda w, t: w.status_tab.show_no_response(),
+    ),
+    "status_individual": _Command(
+        parser=_parse_status,
+        target_attr="_individual_status_qtrm",
+        on_result=lambda w, r, t: w.status_tab.show_individual_result(t, r[t]),
+        on_response_time=lambda w, us: w.status_tab.show_individual_response_time(us),
+        on_timeout=lambda w, t: w.status_tab.show_individual_no_response(t),
+    ),
+    "timing_sob": _Command(
+        parser=_parse_header_checksum,
+        on_result=lambda w, ok, t: w.timing_tab.show_sob_result(ok),
+        on_response_time=lambda w, us: w.timing_tab.show_sob_response_time(us),
+        on_timeout=lambda w, t: w.timing_tab.show_sob_no_response(),
+    ),
+    "timing_prt": _Command(
+        parser=_parse_header_checksum,
+        on_result=lambda w, ok, t: w.timing_tab.show_prt_result(ok),
+        on_response_time=lambda w, us: w.timing_tab.show_prt_response_time(us),
+        on_timeout=lambda w, t: w.timing_tab.show_prt_no_response(),
+    ),
+    "timing_pps": _Command(
+        parser=_parse_header_checksum,
+        on_result=lambda w, ok, t: w.timing_tab.show_pps_result(ok),
+        on_response_time=lambda w, us: w.timing_tab.show_pps_response_time(us),
+        on_timeout=lambda w, t: w.timing_tab.show_pps_no_response(),
+    ),
+}
+
+
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
@@ -188,10 +369,9 @@ class MainWindow(QMainWindow):
         self.resize(width, height)
 
         self.worker: UdpWorker | None = None
-        # None | "dwell" | "memory_write" | "memory_write_all" | "link_test" |
-        # "individual_link_test" | "rx_cal" | "tx_cal" | "isolation_all" |
-        # "isolation_individual" | "status_all" | "status_individual" |
-        # "timing_sob" | "timing_prt" | "timing_pps"
+        # Which command is in flight: None, any key of _COMMANDS, or
+        # "remote_programming" (a multi-frame session that isn't in that
+        # table - see _on_frame_received). Set via _begin_wait().
         self._awaiting_kind = None
         self._individual_link_qtrm = None
         self._rx_cal_target = None
@@ -1030,13 +1210,20 @@ class MainWindow(QMainWindow):
 
     # -- response timing / timeout ----------------------------------------
 
-    def _begin_wait(self, timeout_callback):
-        """Start a timeout watchdog; timeout_callback fires if nothing comes back within RESPONSE_TIMEOUT_MS."""
+    def _begin_wait(self, kind: str):
+        """
+        Latch `kind` as the in-flight command and arm its timeout watchdog.
+
+        _awaiting_kind is set here rather than separately at each call site
+        (as it used to be) so the latched kind and the armed watchdog can
+        never disagree - both come from this one argument.
+        """
+        self._awaiting_kind = kind
         if self._pending_timer is not None:
             self._pending_timer.stop()
         self._pending_timer = QTimer(self)
         self._pending_timer.setSingleShot(True)
-        self._pending_timer.timeout.connect(timeout_callback)
+        self._pending_timer.timeout.connect(lambda: self._on_response_timeout(kind))
         self._pending_timer.start(RESPONSE_TIMEOUT_MS)
 
     def _end_wait(self):
@@ -1064,93 +1251,31 @@ class MainWindow(QMainWindow):
         self.header_panel.clear_highlights()
         self.worker.send_frame(frame)
 
-    def _on_dwell_timeout(self):
-        if self._awaiting_kind != "dwell":
-            return
-        self._awaiting_kind = None
-        self.dwell_tab.show_no_response()
+    def _take_target(self, spec: _Command):
+        """
+        Pop the in-flight target QTRM index for a single-QTRM command,
+        clearing it so a later stray frame can't reuse a stale one. None for
+        all-QTRM commands, which don't latch a target at all.
+        """
+        if spec.target_attr is None:
+            return None
+        target = getattr(self, spec.target_attr)
+        setattr(self, spec.target_attr, None)
+        return target
 
-    def _on_memory_write_timeout(self):
-        if self._awaiting_kind != "memory_write":
-            return
-        self._awaiting_kind = None
-        qtrm_index, self._memory_write_target = self._memory_write_target, None
-        self.memory_tab.show_no_response(qtrm_index)
+    def _on_response_timeout(self, kind: str):
+        """
+        Nothing came back within RESPONSE_TIMEOUT_MS - tell the owning tab.
 
-    def _on_memory_write_all_timeout(self):
-        if self._awaiting_kind != "memory_write_all":
+        Guarded on `kind` still being the one in flight, so a watchdog left
+        over from a command that already got its reply (or that an
+        auto-resend tick superseded) does nothing.
+        """
+        if self._awaiting_kind != kind:
             return
         self._awaiting_kind = None
-        self.memory_tab.show_all_no_response()
-
-    def _on_link_test_timeout(self):
-        if self._awaiting_kind != "link_test":
-            return
-        self._awaiting_kind = None
-        self.link_test_tab.show_no_response()
-
-    def _on_individual_link_test_timeout(self):
-        if self._awaiting_kind != "individual_link_test":
-            return
-        self._awaiting_kind = None
-        qtrm_index, self._individual_link_qtrm = self._individual_link_qtrm, None
-        self.link_test_tab.show_individual_no_response(qtrm_index)
-
-    def _on_rx_cal_timeout(self):
-        if self._awaiting_kind != "rx_cal":
-            return
-        self._awaiting_kind = None
-        self.rx_cal_tab.show_no_response()
-
-    def _on_tx_cal_timeout(self):
-        if self._awaiting_kind != "tx_cal":
-            return
-        self._awaiting_kind = None
-        self.tx_cal_tab.show_no_response()
-
-    def _on_isolation_all_timeout(self):
-        if self._awaiting_kind != "isolation_all":
-            return
-        self._awaiting_kind = None
-        self.isolation_tab.show_all_no_response()
-
-    def _on_isolation_individual_timeout(self):
-        if self._awaiting_kind != "isolation_individual":
-            return
-        self._awaiting_kind = None
-        qtrm_index, self._individual_isolation_qtrm = self._individual_isolation_qtrm, None
-        self.isolation_tab.show_individual_no_response(qtrm_index)
-
-    def _on_status_all_timeout(self):
-        if self._awaiting_kind != "status_all":
-            return
-        self._awaiting_kind = None
-        self.status_tab.show_no_response()
-
-    def _on_status_individual_timeout(self):
-        if self._awaiting_kind != "status_individual":
-            return
-        self._awaiting_kind = None
-        qtrm_index, self._individual_status_qtrm = self._individual_status_qtrm, None
-        self.status_tab.show_individual_no_response(qtrm_index)
-
-    def _on_timing_sob_timeout(self):
-        if self._awaiting_kind != "timing_sob":
-            return
-        self._awaiting_kind = None
-        self.timing_tab.show_sob_no_response()
-
-    def _on_timing_prt_timeout(self):
-        if self._awaiting_kind != "timing_prt":
-            return
-        self._awaiting_kind = None
-        self.timing_tab.show_prt_no_response()
-
-    def _on_timing_pps_timeout(self):
-        if self._awaiting_kind != "timing_pps":
-            return
-        self._awaiting_kind = None
-        self.timing_tab.show_pps_no_response()
+        spec = _COMMANDS[kind]
+        spec.on_timeout(self, self._take_target(spec))
 
     def _check_not_busy(self, silent: bool = False) -> bool:
         """
@@ -1198,16 +1323,9 @@ class MainWindow(QMainWindow):
         header = rc_settings.build_header(COMMAND_ID_QCC_STATUS)
         frame = build_header_only_frame(header)
 
-        self._awaiting_kind = "qcc_status"
         self.header_panel.mark_query_pending()
-        self._begin_wait(self._on_qcc_status_timeout)
+        self._begin_wait("qcc_status")
         self._send_frame(frame)
-
-    def _on_qcc_status_timeout(self):
-        if self._awaiting_kind != "qcc_status":
-            return
-        self._awaiting_kind = None
-        self.header_panel.mark_query_no_response()
 
     def _on_qcc_reset(self):
         if self.worker is None:
@@ -1220,16 +1338,9 @@ class MainWindow(QMainWindow):
         header = rc_settings.build_header(COMMAND_ID_QCC_RESET)
         frame = build_header_only_frame(header)
 
-        self._awaiting_kind = "qcc_reset"
         self.header_panel.mark_reset_pending()
-        self._begin_wait(self._on_qcc_reset_timeout)
+        self._begin_wait("qcc_reset")
         self._send_frame(frame)
-
-    def _on_qcc_reset_timeout(self):
-        if self._awaiting_kind != "qcc_reset":
-            return
-        self._awaiting_kind = None
-        self.header_panel.mark_reset_no_response()
 
     def _on_read_chip_id(self):
         if self.worker is None:
@@ -1244,16 +1355,9 @@ class MainWindow(QMainWindow):
         header = rc_settings.build_header(COMMAND_ID_CHIP_ID_READ)
         frame = build_header_only_frame(header)
 
-        self._awaiting_kind = "chip_id_read"
         self.header_panel.mark_chip_id_pending()
-        self._begin_wait(self._on_chip_id_timeout)
+        self._begin_wait("chip_id_read")
         self._send_frame(frame)
-
-    def _on_chip_id_timeout(self):
-        if self._awaiting_kind != "chip_id_read":
-            return
-        self._awaiting_kind = None
-        self.header_panel.mark_chip_id_no_response()
 
     def _on_dwell_send(self):
         if self.worker is None:
@@ -1264,9 +1368,8 @@ class MainWindow(QMainWindow):
 
         frame = build_dwell_frame(self.dwell_tab.get_channels(), header=rc_settings.build_header(COMMAND_ID_DWELL))
 
-        self._awaiting_kind = "dwell"
         self.dwell_tab.mark_pending()
-        self._begin_wait(self._on_dwell_timeout)
+        self._begin_wait("dwell")
         self._send_frame(frame)
 
     def _on_memory_write(self, data_type: int, qtrm_index: int, payload: bytes):
@@ -1281,10 +1384,9 @@ class MainWindow(QMainWindow):
             header=rc_settings.build_header(COMMAND_ID_MEMORY_OPERATION),
         )
 
-        self._awaiting_kind = "memory_write"
         self._memory_write_target = qtrm_index
         self.memory_tab.mark_pending()
-        self._begin_wait(self._on_memory_write_timeout)
+        self._begin_wait("memory_write")
         self._send_frame(frame)
 
     def _on_memory_write_all(self, data_type: int, payload: bytes):
@@ -1299,9 +1401,8 @@ class MainWindow(QMainWindow):
             header=rc_settings.build_header(COMMAND_ID_MEMORY_OPERATION),
         )
 
-        self._awaiting_kind = "memory_write_all"
         self.memory_tab.mark_all_pending()
-        self._begin_wait(self._on_memory_write_all_timeout)
+        self._begin_wait("memory_write_all")
         self._send_frame(frame)
 
     def _on_link_test_clicked(self, is_auto_resend: bool = False):
@@ -1329,9 +1430,8 @@ class MainWindow(QMainWindow):
 
         frame = build_link_test_frame(header=rc_settings.build_header(COMMAND_ID_LINK_TEST))
 
-        self._awaiting_kind = "link_test"
         self.link_test_tab.mark_pending()
-        self._begin_wait(self._on_link_test_timeout)
+        self._begin_wait("link_test")
         self._send_frame(frame)
 
     def _on_individual_link_test_clicked(self, qtrm_index: int):
@@ -1343,10 +1443,9 @@ class MainWindow(QMainWindow):
 
         frame = build_individual_link_frame(qtrm_index, header=rc_settings.build_header(COMMAND_ID_LINK_TEST))
 
-        self._awaiting_kind = "individual_link_test"
         self._individual_link_qtrm = qtrm_index
         self.link_test_tab.mark_individual_pending(qtrm_index)
-        self._begin_wait(self._on_individual_link_test_timeout)
+        self._begin_wait("individual_link_test")
         self._send_frame(frame)
 
     def _on_rx_cal_send(self, qtrm_index, channel, phase, atten, tx_isolation_for_others):
@@ -1362,10 +1461,9 @@ class MainWindow(QMainWindow):
             header=rc_settings.build_header(COMMAND_ID_RX_CAL),
         )
 
-        self._awaiting_kind = "rx_cal"
         self._rx_cal_target = qtrm_index
         self.rx_cal_tab.mark_pending()
-        self._begin_wait(self._on_rx_cal_timeout)
+        self._begin_wait("rx_cal")
         self._send_frame(frame)
 
     def _on_tx_cal_send(self, qtrm_index, channel, phase, atten, tx_isolation_for_others):
@@ -1381,10 +1479,9 @@ class MainWindow(QMainWindow):
             header=rc_settings.build_header(COMMAND_ID_TX_CAL),
         )
 
-        self._awaiting_kind = "tx_cal"
         self._tx_cal_target = qtrm_index
         self.tx_cal_tab.mark_pending()
-        self._begin_wait(self._on_tx_cal_timeout)
+        self._begin_wait("tx_cal")
         self._send_frame(frame)
 
     def _on_isolation_send_all(self, tx_isolation: bool):
@@ -1399,9 +1496,8 @@ class MainWindow(QMainWindow):
             header=rc_settings.build_header(COMMAND_ID_ISOLATION),
         )
 
-        self._awaiting_kind = "isolation_all"
         self.isolation_tab.mark_all_pending()
-        self._begin_wait(self._on_isolation_all_timeout)
+        self._begin_wait("isolation_all")
         self._send_frame(frame)
 
     def _on_isolation_send_one(self, qtrm_index: int, tx_isolation: bool):
@@ -1416,10 +1512,9 @@ class MainWindow(QMainWindow):
             header=rc_settings.build_header(COMMAND_ID_ISOLATION),
         )
 
-        self._awaiting_kind = "isolation_individual"
         self._individual_isolation_qtrm = qtrm_index
         self.isolation_tab.mark_individual_pending(qtrm_index)
-        self._begin_wait(self._on_isolation_individual_timeout)
+        self._begin_wait("isolation_individual")
         self._send_frame(frame)
 
     def _on_status_send_all(self, status_type: int, sub_status_type: int,
@@ -1451,11 +1546,10 @@ class MainWindow(QMainWindow):
             header=rc_settings.build_header(COMMAND_ID_STATUS),
         )
 
-        self._awaiting_kind = "status_all"
         self._status_type_in_flight = status_type
         self._status_sub_type_in_flight = sub_status_type
         self.status_tab.mark_pending()
-        self._begin_wait(self._on_status_all_timeout)
+        self._begin_wait("status_all")
         self._send_frame(frame)
 
     def _on_status_send_one(self, qtrm_index: int, status_type: int, sub_status_type: int,
@@ -1472,12 +1566,11 @@ class MainWindow(QMainWindow):
             header=rc_settings.build_header(COMMAND_ID_STATUS),
         )
 
-        self._awaiting_kind = "status_individual"
         self._individual_status_qtrm = qtrm_index
         self._status_type_in_flight = status_type
         self._status_sub_type_in_flight = sub_status_type
         self.status_tab.mark_individual_pending(qtrm_index)
-        self._begin_wait(self._on_status_individual_timeout)
+        self._begin_wait("status_individual")
         self._send_frame(frame)
 
     def _on_reset_all_clicked(self):
@@ -1508,9 +1601,8 @@ class MainWindow(QMainWindow):
         header = rc_settings.build_header(command_id, message_body=build_sob_body(sob_width_us))
         frame = build_header_only_frame(header)
 
-        self._awaiting_kind = "timing_sob"
         self.timing_tab.mark_sob_pending()
-        self._begin_wait(self._on_timing_sob_timeout)
+        self._begin_wait("timing_sob")
         self._send_frame(frame)
 
     def _on_timing_prt_send(self, external_loopback: bool, prt_count: int, pri_width_us: int, prt_width_us: int):
@@ -1525,9 +1617,8 @@ class MainWindow(QMainWindow):
         header = rc_settings.build_header(command_id, message_body=message_body)
         frame = build_header_only_frame(header)
 
-        self._awaiting_kind = "timing_prt"
         self.timing_tab.mark_prt_pending()
-        self._begin_wait(self._on_timing_prt_timeout)
+        self._begin_wait("timing_prt")
         self._send_frame(frame)
 
     def _on_timing_pps_send(self, pps_width_us: int):
@@ -1545,9 +1636,8 @@ class MainWindow(QMainWindow):
         )
         frame = build_header_only_frame(header)
 
-        self._awaiting_kind = "timing_pps"
         self.timing_tab.mark_pps_pending()
-        self._begin_wait(self._on_timing_pps_timeout)
+        self._begin_wait("timing_pps")
         self._send_frame(frame)
 
     # -- Remote Programming session handlers ------------------------------
@@ -1677,161 +1767,29 @@ class MainWindow(QMainWindow):
         # tab/command it came from.
         self.header_panel.show_frame(raw)
 
-        if kind == "qcc_status":
+        # kind is None for a stray/unsolicited frame with nothing in flight
+        # (e.g. one that arrived after its own timeout already fired) -
+        # nothing to update beyond the header panel above.
+        spec = _COMMANDS.get(kind)
+        if spec is None:
             return
 
-        if kind == "qcc_reset":
+        target = self._take_target(spec)
+
+        # Response time first, so a round-trip that did come back still
+        # reports its timing even if the payload then fails to parse.
+        if elapsed_us is not None and spec.on_response_time is not None:
+            spec.on_response_time(self, elapsed_us)
+
+        if spec.parser is None:  # qcc_status/qcc_reset - header panel is the whole result
             return
 
-        if kind == "link_test":
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.link_test_tab.show_results(results)
-            if elapsed_us is not None:
-                self.link_test_tab.show_response_time(elapsed_us)
+        try:
+            parsed = spec.parser(self, raw)
+        except FrameError as e:
+            QMessageBox.warning(self, "Parse error", str(e))
             return
-
-        if kind == "dwell":
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.dwell_tab.show_results(results)
-            if elapsed_us is not None:
-                self.dwell_tab.show_response_time(elapsed_us)
-            return
-
-        if kind == "memory_write":
-            qtrm_index, self._memory_write_target = self._memory_write_target, None
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.memory_tab.show_result(qtrm_index, results[qtrm_index])
-            if elapsed_us is not None:
-                self.memory_tab.show_response_time(elapsed_us)
-            return
-
-        if kind == "memory_write_all":
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.memory_tab.show_all_results(results)
-            if elapsed_us is not None:
-                self.memory_tab.show_response_time(elapsed_us)
-            return
-
-        if kind == "individual_link_test":
-            qtrm_index, self._individual_link_qtrm = self._individual_link_qtrm, None
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.link_test_tab.show_individual_result(qtrm_index, results[qtrm_index])
-            if elapsed_us is not None:
-                self.link_test_tab.show_individual_response_time(elapsed_us)
-            return
-
-        if kind == "rx_cal":
-            qtrm_index, self._rx_cal_target = self._rx_cal_target, None
-            if elapsed_us is not None:
-                self.rx_cal_tab.show_response_time(elapsed_us)
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.rx_cal_tab.show_result(results[qtrm_index])
-            return
-
-        if kind == "tx_cal":
-            qtrm_index, self._tx_cal_target = self._tx_cal_target, None
-            if elapsed_us is not None:
-                self.tx_cal_tab.show_response_time(elapsed_us)
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.tx_cal_tab.show_result(results[qtrm_index])
-            return
-
-        if kind == "isolation_all":
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.isolation_tab.show_all_results(results)
-            return
-
-        if kind == "isolation_individual":
-            qtrm_index, self._individual_isolation_qtrm = self._individual_isolation_qtrm, None
-            try:
-                results = parse_link_test_response(raw)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.isolation_tab.show_individual_result(qtrm_index, results[qtrm_index])
-            return
-
-        if kind == "status_all":
-            status_type = self._status_type_in_flight
-            diagnostic_type = self._status_sub_type_in_flight if status_type == STATUS_TYPE_DIAGNOSTIC else 0
-            if elapsed_us is not None:
-                self.status_tab.show_response_time(elapsed_us)
-            try:
-                results = parse_status_frame(raw, status_type, diagnostic_type)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.status_tab.show_results(results)
-            return
-
-        if kind == "status_individual":
-            qtrm_index, self._individual_status_qtrm = self._individual_status_qtrm, None
-            status_type = self._status_type_in_flight
-            diagnostic_type = self._status_sub_type_in_flight if status_type == STATUS_TYPE_DIAGNOSTIC else 0
-            if elapsed_us is not None:
-                self.status_tab.show_individual_response_time(elapsed_us)
-            try:
-                results = parse_status_frame(raw, status_type, diagnostic_type)
-            except AssertionError as e:
-                QMessageBox.warning(self, "Parse error", str(e))
-                return
-            self.status_tab.show_individual_result(qtrm_index, results[qtrm_index])
-            return
-
-        if kind in ("timing_sob", "timing_prt", "timing_pps"):
-            # These commands have no per-QTRM result to parse - the only
-            # thing to check is that a response came back at all with a
-            # valid header checksum (already shown in the header panel above).
-            header = QCCHeaderTx.from_bytes(raw[0:FIXED_HEADER_SIZE + QCC_HEADER_SIZE])
-            if kind == "timing_sob":
-                if elapsed_us is not None:
-                    self.timing_tab.show_sob_response_time(elapsed_us)
-                self.timing_tab.show_sob_result(header.checksum_ok)
-            elif kind == "timing_prt":
-                if elapsed_us is not None:
-                    self.timing_tab.show_prt_response_time(elapsed_us)
-                self.timing_tab.show_prt_result(header.checksum_ok)
-            else:
-                if elapsed_us is not None:
-                    self.timing_tab.show_pps_response_time(elapsed_us)
-                self.timing_tab.show_pps_result(header.checksum_ok)
-            return
-
-        # kind is None here - a stray/unsolicited frame with nothing in
-        # flight (e.g. arrived after its own timeout already fired). Nothing
-        # to update.
+        spec.on_result(self, parsed, target)
 
     def closeEvent(self, event):
         # connection_settings is only ever mutated by _on_connection_field_changed,

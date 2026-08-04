@@ -7,6 +7,26 @@ of truth for the packet layout (derived from `QCC_90Byte_Header_BitTable.docx`
 and the QTRM Message Format IDD). See [README.md](README.md) for setup/run
 instructions and a file-by-file overview.
 
+## Tests
+
+```bash
+python -m unittest discover -s tests -t .
+```
+
+Stdlib `unittest`, headless, no extra install. **Run these after any IDD
+change.** `tests/test_packet.py` checks every field offset in
+`core/packet.py` against `docs/idd/packet_spec.yaml` instead of against
+hand-copied constants, so the two can't drift apart unnoticed - which is the
+failure mode this protocol actually has (a field that moves still produces a
+right-length frame that passes its own checksum and means something else
+entirely by the time it reaches the QCC). `tests/test_dispatch.py` checks
+`main_window.py`'s `_COMMANDS` table against its `_begin_wait` call sites.
+
+Parsers in `core/packet.py` raise `FrameError` (a `ValueError`) on anything
+that came off the wire; `assert` is reserved for the builders' own
+invariants, since `python -O` strips asserts and would otherwise silently
+disable every malformed-frame check.
+
 ## Invariants to preserve
 
 - **`delay_us` must stay comparable to Wireshark** (Yuvraj's explicit

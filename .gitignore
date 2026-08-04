@@ -4,9 +4,13 @@ __pycache__/
 .claude/scheduled_tasks.lock
 
 # PyInstaller build output / spec, and the RC Settings tab's local runtime
-# save file - all machine-specific/generated, not source.
-# build/
-# dist/
+# save file - all machine-specific/generated, not source. dist/ in particular
+# bundles a frozen copy of core/, tabs/, widgets/ and apps/ inside
+# _internal/, so tracking it puts a second, stale copy of every source module
+# in the repo - grep/"find in files" then hits both. Tagged releases live in
+# releases/, which IS tracked.
+build/
+dist/
 *.spec
 rc_settings.json
 connection_settings.json

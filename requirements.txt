@@ -1,3 +1,15 @@
-PySide6>=6.11
-openpyxl>=3.1
-matplotlib>=3.6
+# Runtime dependencies. Upper bounds are deliberate: this app is packaged
+# with PyInstaller and handed to field machines, so a surprise major-version
+# bump between a working build and the next one is worth preventing.
+PySide6>=6.11,<7
+openpyxl>=3.1,<4
+matplotlib>=3.6,<4
+
+# Used by tests/test_packet.py to read docs/idd/packet_spec.yaml (the packet
+# source of truth) and check core/packet.py's field offsets against it. Not
+# imported by the app itself.
+PyYAML>=6.0,<7
+
+# Not installed here - needed only to build the distributable .exe:
+#   pip install pyinstaller
+#   python build.py

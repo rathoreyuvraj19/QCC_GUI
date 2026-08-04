@@ -61,9 +61,26 @@ python main.py   # opens the real window
 
 ## Test
 
-No automated test suite in this repo as of 2026-07-08 (no `tests/` dir,
-no pytest config). `packet.py`-style modules are written to be unit-testable
-standalone but nothing currently exercises them.
+```bash
+python -m unittest discover -s tests -t .
+```
+
+Stdlib `unittest`, no extra install (`pytest tests/` also works). Neither
+file needs a QApplication or a display, so both run headless.
+
+- `tests/test_packet.py` — the wire format. Mostly **offsets**: every field
+  position in `core/packet.py` is checked against `docs/idd/packet_spec.yaml`
+  rather than a hand-copied constant, plus round-trips, checksum coverage,
+  and `FrameError` on malformed frames. **Run this after any IDD change** —
+  a field that silently moves still produces a right-length frame that
+  passes its own checksum.
+- `tests/test_dispatch.py` — `main_window.py`'s `_COMMANDS` table. Parses the
+  file with `ast` to check every `_begin_wait("<kind>")` has a matching table
+  entry and vice versa, since a mismatch fails silently at runtime (the
+  command sends, then nothing ever updates).
+
+These cover protocol and dispatch wiring, not rendering — use the driver
+above for anything visual.
 
 ## Gotchas
 

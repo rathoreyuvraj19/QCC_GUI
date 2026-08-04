@@ -25,6 +25,30 @@ internal (de)serialization boundary for QCCHeaderTx anymore.
 
 import struct
 
+
+class FrameError(ValueError):
+    """
+    A received frame didn't match the layout it was parsed as (wrong total
+    size, wrong slot size, unknown status type, ...).
+
+    Raised by the parse_*/from_bytes entry points below - i.e. everywhere
+    this module looks at bytes that came off the wire. Deliberately NOT an
+    `assert`: asserts are for our own invariants (a builder producing the
+    wrong length is a bug in this file), and `python -O` strips them, which
+    would silently turn a malformed frame into a struct.error or a wrong
+    parse instead of a clean, catchable failure. Builders keep their
+    asserts; parsers raise this.
+
+    Subclasses ValueError so callers can catch either.
+    """
+
+
+def _require_size(raw: bytes, expected: int, what: str) -> None:
+    """Guard for a parser's input length - raises FrameError, never asserts."""
+    if len(raw) != expected:
+        raise FrameError(f"expected a {expected}-byte {what}, got {len(raw)} bytes")
+
+
 FIXED_HEADER_SIZE = 32
 QCC_HEADER_SIZE = 58
 QTRM_SLOT_SIZE = 30
@@ -297,7 +321,7 @@ def build_link_test_frame(header: bytes = None) -> bytes:
 
 def parse_link_test_response(raw_frame: bytes):
     """Return a list of NUM_QTRM bools: True where that QTRM's Link reply is valid."""
-    assert len(raw_frame) == TOTAL_PACKET_SIZE, f"expected {TOTAL_PACKET_SIZE} bytes, got {len(raw_frame)}"
+    _require_size(raw_frame, TOTAL_PACKET_SIZE, "response frame")
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     return [
         is_link_response_ok(raw_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE])
@@ -555,8 +579,11 @@ def parse_status_frame(raw_frame: bytes, status_type: int, diagnostic_type: int 
     status type echoed back, bad checksum, wrong message length, etc.),
     otherwise the parsed fields for that status type.
     """
-    assert len(raw_frame) == TOTAL_PACKET_SIZE, f"expected {TOTAL_PACKET_SIZE} bytes, got {len(raw_frame)}"
-    parser = _STATUS_PARSERS[status_type]
+    _require_size(raw_frame, TOTAL_PACKET_SIZE, "response frame")
+    try:
+        parser = _STATUS_PARSERS[status_type]
+    except KeyError:
+        raise FrameError(f"no parser for status type 0x{status_type:X}") from None
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     return [
         parser(raw_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE], diagnostic_type)
@@ -845,7 +872,7 @@ class QCCHeaderRx:
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "QCCHeaderRx":
-        assert len(raw) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+        _require_size(raw, FIXED_HEADER_SIZE + QCC_HEADER_SIZE, "command header")
         (
             destination_id, source_id, packet_size,
             echo_byte, command_ack, message_number,
@@ -1014,7 +1041,7 @@ def extract_rp_slots(raw: bytes) -> list:
     slot format (0xAA header + XOR over all 30), which doesn't apply here;
     decode the returned slices with bootloader_packet.parse_slot instead.
     """
-    assert len(raw) == TOTAL_PACKET_SIZE
+    _require_size(raw, TOTAL_PACKET_SIZE, "response frame")
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     return [
         raw[base + i * QTRM_SLOT_SIZE: base + i * QTRM_SLOT_SIZE + RP_INNER_CMD_SIZE]
@@ -1217,7 +1244,7 @@ class QCCHeaderTx:
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "QCCHeaderTx":
-        assert len(raw) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
+        _require_size(raw, FIXED_HEADER_SIZE + QCC_HEADER_SIZE, "response header")
         (
             destination_id, source_id, packet_size,
             echo_byte, command_ack, message_number,
@@ -1308,7 +1335,7 @@ class ChipIdResponse:
 
     @classmethod
     def from_bytes(cls, raw: bytes) -> "ChipIdResponse":
-        assert len(raw) == CHIP_ID_RESPONSE_SIZE
+        _require_size(raw, CHIP_ID_RESPONSE_SIZE, "CHIP_ID_READ response")
         command_id, chip_id, chk = struct.unpack("<BQB", raw)
         obj = cls()
         obj.command_id = command_id
@@ -1397,7 +1424,7 @@ class QTRMSlot:
 
     @classmethod
     def from_bytes(cls, qtrm_id: int, raw: bytes) -> "QTRMSlot":
-        assert len(raw) == QTRM_SLOT_SIZE
+        _require_size(raw, QTRM_SLOT_SIZE, "QTRM slot")
         header, size_id, cmd_type, status_byte, dwell_id, freq_id = raw[0:6]
         channels = []
         for i in range(4):
@@ -1441,7 +1468,7 @@ def build_tx_frame(qtrm_slots) -> bytes:
 
 def parse_rx_frame(raw: bytes):
     """Parse a full 2970-byte frame received from QCC (QCC -> GUI direction)."""
-    assert len(raw) == TOTAL_PACKET_SIZE, f"expected {TOTAL_PACKET_SIZE} bytes, got {len(raw)}"
+    _require_size(raw, TOTAL_PACKET_SIZE, "response frame")
     header_raw = raw[0:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
     qcc_header = QCCHeaderTx.from_bytes(header_raw)
 

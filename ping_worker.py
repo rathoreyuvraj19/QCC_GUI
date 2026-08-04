@@ -27,8 +27,13 @@ class PingWorker(QThread):
                 capture_output=True, text=True, timeout=3,
                 creationflags=subprocess.CREATE_NO_WINDOW,
             )
-        except Exception:
-            self.result.emit(False, "ping failed to run")
+        except subprocess.TimeoutExpired:
+            self.result.emit(False, "ping timed out")
+            return
+        except OSError as e:
+            # ping.exe missing or not launchable - report why rather than
+            # collapsing every failure into one opaque message.
+            self.result.emit(False, f"ping failed to run: {e.strerror or e}")
             return
 
         match = _TIME_RE.search(proc.stdout)

@@ -610,6 +610,7 @@ class MainWindow(QMainWindow):
     def _on_tab_changed(self, index):
         self.status_tab.stop_auto_resend()
         self.link_test_tab.stop_auto_resend()
+        self.dwell_tab.stop_auto_resend()
         self.status_tab.reset_to_idle()
         self.rx_cal_tab.reset_to_idle()
         self.tx_cal_tab.reset_to_idle()
@@ -855,6 +856,7 @@ class MainWindow(QMainWindow):
         self.header_panel.stop_auto_resend()
         self.link_test_tab.stop_auto_resend()
         self.status_tab.stop_auto_resend()
+        self.dwell_tab.stop_auto_resend()
         if self.worker is not None:
             # Disconnect the status signal first - worker.stop() blocks
             # until the thread actually exits, and its queued "Stopped"
@@ -1359,11 +1361,25 @@ class MainWindow(QMainWindow):
         self._begin_wait("chip_id_read")
         self._send_frame(frame)
 
-    def _on_dwell_send(self):
+    def _on_dwell_send(self, is_auto_resend: bool = False):
         if self.worker is None:
-            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            if not is_auto_resend:
+                QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
-        if not self._check_not_busy():
+
+        if is_auto_resend:
+            # Same reasoning as _on_link_test_clicked's auto-resend branch:
+            # if nothing else is in flight, cancel any still-pending wait for
+            # our own last tick and send again now rather than waiting the
+            # full timeout out; if something unrelated is in flight, skip
+            # this tick quietly.
+            if self._awaiting_kind not in (None, "dwell"):
+                return
+            self._awaiting_kind = None
+            if self._pending_timer is not None:
+                self._pending_timer.stop()
+                self._pending_timer = None
+        elif not self._check_not_busy():
             return
 
         frame = build_dwell_frame(self.dwell_tab.get_channels(), header=rc_settings.build_header(COMMAND_ID_DWELL))

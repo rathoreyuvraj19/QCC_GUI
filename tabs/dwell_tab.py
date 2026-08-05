@@ -32,7 +32,7 @@ all-on/all-off/mixed.
 
 import csv
 
-from PySide6.QtCore import QAbstractTableModel, QEvent, Qt, QModelIndex, Signal
+from PySide6.QtCore import QAbstractTableModel, QEvent, Qt, QModelIndex, QTimer, Signal
 from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView, QFileDialog, QHBoxLayout, QHeaderView, QLabel,
@@ -43,6 +43,7 @@ from PySide6.QtWidgets import (
 from core.command_style import send_button_style
 from tabs.link_test_tab import LedMatrix, _NOT_LINKED_COLOR, _PENDING_COLOR
 from core.packet import NUM_QTRM, QTRMChannel, describe_atten, describe_phase
+from widgets.spin_field import DoubleSpinField
 
 PHASE_MAX = 63    # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
 ATTEN_MAX = 63    # 6-bit attenuation (frame_type.vhd: No_of_Attenuator_bits = 6)
@@ -427,10 +428,14 @@ def save_channels_to_csv(path: str, channels):
 
 
 class DwellTab(QWidget):
-    send_requested = Signal()
+    send_requested = Signal(bool)          # is_auto_resend
 
     def __init__(self, parent=None):
         super().__init__(parent)
+        self._auto_resending = False
+        self._resend_timer = QTimer(self)
+        self._resend_timer.setTimerType(Qt.PreciseTimer)
+        self._resend_timer.timeout.connect(lambda: self.send_requested.emit(True))
 
         content = QWidget()
         layout = QVBoxLayout(content)
@@ -448,8 +453,12 @@ class DwellTab(QWidget):
 
         self.send_btn = QPushButton("Send Dwell")
         self.send_btn.setStyleSheet(_SEND_BTN_STYLE)
-        self.send_btn.clicked.connect(self.send_requested.emit)
+        self.send_btn.clicked.connect(self._on_send_btn_clicked)
         top_row.addWidget(self.send_btn)
+
+        top_row.addWidget(QLabel("Resend every (s):"))
+        self.resend_spin = DoubleSpinField(0.0, 300.0, 0.0, step=0.01, decimals=2, field_width=64)
+        top_row.addWidget(self.resend_spin)
 
         self.summary_label = QLabel("Not yet run")
         self.response_time_label = QLabel("")
@@ -523,6 +532,27 @@ class DwellTab(QWidget):
         outer = QHBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
+
+    # -- send (with optional auto-resend) ----------------------------------
+
+    def _on_send_btn_clicked(self):
+        if self._auto_resending:
+            self.stop_auto_resend()
+            return
+
+        interval_s = self.resend_spin.value()
+        self.send_requested.emit(False)
+        if interval_s > 0:
+            self._auto_resending = True
+            self.send_btn.setText("Stop")
+            self._resend_timer.start(round(interval_s * 1000))
+
+    def stop_auto_resend(self):
+        """Stop the auto-resend timer if active - safe to call unconditionally
+        (e.g. on disconnect) even when no resend is in progress."""
+        self._resend_timer.stop()
+        self._auto_resending = False
+        self.send_btn.setText("Send Dwell")
 
     def _on_invalid_data(self, message: str):
         # Non-modal, positioned right at the cell that was just edited,

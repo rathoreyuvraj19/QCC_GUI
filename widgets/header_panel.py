@@ -185,6 +185,7 @@ class HeaderPanel(QWidget):
         # instead of popping a "Busy" dialog every interval).
         self._auto_resending = False
         self._resend_timer = QTimer(self)
+        self._resend_timer.setTimerType(Qt.PreciseTimer)
         self._resend_timer.timeout.connect(lambda: self.query_status_requested.emit(True))
 
         # name -> normal style to revert to when cleared. A field appears
@@ -264,7 +265,7 @@ class HeaderPanel(QWidget):
         delay_row = QHBoxLayout()
         delay_label = QLabel("Resend every (s):")
         delay_label.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 8pt;")
-        self.resend_delay_spin = DoubleSpinField(0.0, 300.0, 0.0, step=0.1, decimals=1, field_width=64)
+        self.resend_delay_spin = DoubleSpinField(0.0, 300.0, 0.0, step=0.01, decimals=2, field_width=64)
         delay_row.addStretch(1)
         delay_row.addWidget(delay_label)
         delay_row.addWidget(self.resend_delay_spin)
@@ -383,7 +384,7 @@ class HeaderPanel(QWidget):
             self._auto_resending = True
             self.query_btn.setStyleSheet(_QUERY_BTN_ACTIVE_STYLE)
             self.query_btn.setText("◉ Resending - click to Stop")
-            self._resend_timer.start(int(interval_s * 1000))
+            self._resend_timer.start(round(interval_s * 1000))
         self.query_status_requested.emit(False)
 
     def stop_auto_resend(self) -> None:

@@ -225,6 +225,7 @@ class LinkTestTab(QWidget):
         super().__init__(parent)
         self._auto_resending = False
         self._resend_timer = QTimer(self)
+        self._resend_timer.setTimerType(Qt.PreciseTimer)
         self._resend_timer.timeout.connect(lambda: self.send_requested.emit(True))
 
         content = QWidget()
@@ -239,7 +240,7 @@ class LinkTestTab(QWidget):
         top_row.addWidget(self.send_btn)
 
         top_row.addWidget(QLabel("Resend every (s):"))
-        self.resend_spin = DoubleSpinField(0.0, 300.0, 0.0, step=0.1, decimals=1, field_width=64)
+        self.resend_spin = DoubleSpinField(0.0, 300.0, 0.0, step=0.01, decimals=2, field_width=64)
         top_row.addWidget(self.resend_spin)
 
         self.summary_label = QLabel("Not yet run")
@@ -281,7 +282,7 @@ class LinkTestTab(QWidget):
         if interval_s > 0:
             self._auto_resending = True
             self.send_btn.setText("Stop")
-            self._resend_timer.start(int(interval_s * 1000))
+            self._resend_timer.start(round(interval_s * 1000))
 
     def stop_auto_resend(self):
         """Stop the auto-resend timer if active - safe to call unconditionally

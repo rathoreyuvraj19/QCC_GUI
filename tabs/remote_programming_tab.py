@@ -1165,7 +1165,7 @@ class RemoteProgrammingTab(QWidget):
             self.gaps_table.item(q, 2).setText("—")
             self.gaps_table.item(q, 3).setText("—")
         self.progress_bar.setValue(0)
-        self.progress_bar.setFormat("programming… %v / %m")
+        self.progress_bar.setFormat("uploading… %v / %m")
         self.chunk_label.setText("")
 
     def on_chunk_progress(self, idx: int, count: int):

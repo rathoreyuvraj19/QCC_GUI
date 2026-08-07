@@ -9,16 +9,24 @@ configured interval, and UdpWorker's own RTT timing (_last_send_time, a
 single scalar) is only meaningful with exactly one frame in flight - never
 true here once the interval is anywhere near or below the real RTT.
 
-Owns its own socket (ephemeral local port, connected to the same QCC IP/
-port the interactive worker uses) and its own send+receive loop on one
-thread - sending is perf_counter()-paced, receiving is drained
-non-blockingly between sends, and frames are paired by the header's
-MESSAGE_NUMBER (which strictly increases on every rc_settings.build_header()
-call) rather than by arrival order, since many frames are outstanding at
-once at any interval below the real round-trip time.
+Owns its own socket and its own send+receive loop on one thread - sending
+is perf_counter()-paced, receiving is drained non-blockingly between
+sends, and frames are paired by the header's MESSAGE_NUMBER (which
+strictly increases on every rc_settings.build_header() call) rather than
+by arrival order, since many frames are outstanding at once at any
+interval below the real round-trip time.
+
+Binds to the SAME local port the interactive UdpWorker uses, not an
+arbitrary ephemeral one - confirmed against real hardware that the QCC
+sends responses to the port it's paired with, not to whichever port a
+query actually came from (symmetric reply-to-sender, which the mock
+responder in status_responder_app.py does, does NOT hold on real
+hardware). main_window.py pauses the interactive UdpWorker to free that
+port before starting this, and reconnects it after stopping.
 
 Usage:
-    worker = BurnTestWorker(qcc_ip, qcc_port, BurnTestWorker.PAYLOAD_LINK_TEST, interval_s=0.001)
+    worker = BurnTestWorker(qcc_ip, qcc_port, BurnTestWorker.PAYLOAD_LINK_TEST,
+                             interval_s=0.001, local_port=local_port)
     worker.stats_ready.connect(...)        # dict, ~10 Hz
     worker.rows_ready.connect(...)         # list of CSV rows (core.frame_logger.CSV_COLUMNS order), ~10 Hz
     worker.link_result_ready.connect(...)  # list of 96 bools, ~10 Hz, Link Test payload only
@@ -107,18 +115,29 @@ class BurnTestWorker(QThread):
     link_result_ready = Signal(object)    # list: 96 bools, most recent Link Test reply
 
     def __init__(self, qcc_ip: str, qcc_port: int, payload_kind: str,
-                 interval_s: float, parent=None):
+                 interval_s: float, local_port: int, parent=None):
         super().__init__(parent)
         self.qcc_ip = qcc_ip
         self.qcc_port = qcc_port
         self.payload_kind = payload_kind
         self.interval_s = interval_s
+        self.local_port = local_port
         self._running = False
 
     def run(self):
         try:
             sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            sock.bind(("0.0.0.0", 0))
+            # Real QCC hardware sends its responses to the port it's
+            # actually paired with (the interactive connection's Local
+            # Port), not to whichever port a query happened to come from -
+            # confirmed against real hardware, where binding to an
+            # arbitrary ephemeral port (like UdpWorker does for a normal
+            # connect) got 100% timeouts even though the interactive link
+            # kept working fine on its own port. main_window.py pauses the
+            # interactive UdpWorker and hands this exact port over for the
+            # run's duration, then reconnects it afterward.
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            sock.bind(("0.0.0.0", self.local_port))
             sock.connect((self.qcc_ip, self.qcc_port))
             sock.setblocking(False)
         except OSError as e:

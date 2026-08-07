@@ -546,7 +546,7 @@ class MainWindow(QMainWindow):
 
         self.burn_test_tab = BurnTestTab()
         self.burn_test_tab.start_requested.connect(self._on_burn_test_start)
-        self.burn_test_tab.stop_requested.connect(self._on_burn_test_stop)
+        self.burn_test_tab.stop_requested.connect(self._on_burn_test_stop_clicked)
         self.tabs.addTab(self.burn_test_tab, "Burn Test")
 
         # Status tab's matrix resets to idle whenever the current tab
@@ -1756,8 +1756,10 @@ class MainWindow(QMainWindow):
             return
         reply = QMessageBox.question(
             self, "Start Burn Test",
-            "This sends a sustained, fast stream of frames to the QCC "
-            "until stopped. Continue?",
+            "This pauses the interactive connection and sends a sustained, "
+            "fast stream of frames to the QCC until stopped - the "
+            "interactive link reconnects automatically once you stop it. "
+            "Continue?",
         )
         if reply != QMessageBox.Yes:
             return
@@ -1776,9 +1778,27 @@ class MainWindow(QMainWindow):
         self.status_tab.stop_auto_resend()
         self.dwell_tab.stop_auto_resend()
 
+        # Real QCC hardware sends its responses to the port it's paired
+        # with (this Local Port), not to whichever port a query actually
+        # came from - see core/burn_test_worker.py's module docstring. So
+        # Burn Test can't just open its own independent socket; the
+        # interactive connection has to give up this exact port for the
+        # run's duration. Deliberately NOT calling _disconnect() here - it
+        # calls _on_burn_test_stop(), which would immediately close the
+        # CSV logger just opened above, before the run even starts.
+        local_port = self.local_port_edit.value()
         qcc_ip = self.qcc_ip_edit.text().strip()
         qcc_port = self.qcc_port_edit.value()
-        self._burn_test_worker = BurnTestWorker(qcc_ip, qcc_port, config["payload"], config["interval_s"])
+        self.worker.status.disconnect(self._on_connect_status)
+        self.worker.stop()
+        self.worker = None
+        self.connect_btn.setText("Connect")
+        self.connect_btn.setStyleSheet("")
+        self.connect_btn.setEnabled(False)
+        self.conn_status_label.setText("Paused for Burn Test")
+
+        self._burn_test_worker = BurnTestWorker(
+            qcc_ip, qcc_port, config["payload"], config["interval_s"], local_port)
         self._burn_test_worker.error.connect(self._on_burn_test_error)
         self._burn_test_worker.stats_ready.connect(self.burn_test_tab.show_stats)
         self._burn_test_worker.rows_ready.connect(self._burn_test_logger.append_rows)
@@ -1805,8 +1825,14 @@ class MainWindow(QMainWindow):
             self._burn_test_logger.stop()
 
     def _on_burn_test_stop(self):
-        """Safe to call unconditionally (e.g. on disconnect/close) even when
-        no burn test is running - mirrors stop_auto_resend()'s pattern."""
+        """Generic cleanup - safe to call unconditionally (disconnect/close/
+        bind-failure/manual stop) even when no burn test is running, same
+        spirit as stop_auto_resend(). Deliberately does NOT reconnect the
+        interactive link that was paused to run this - see
+        _on_burn_test_stop_clicked, the one path where that's wanted;
+        reconnecting from here too would fire even while the app is
+        closing (closeEvent also calls this)."""
+        self.connect_btn.setEnabled(True)
         if self._burn_test_worker is not None:
             self._burn_test_worker.stop()
             self._burn_test_worker = None
@@ -1819,6 +1845,15 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
         self.burn_test_tab.reset_to_idle()
 
+    def _on_burn_test_stop_clicked(self):
+        """The tab's own Stop button - unlike the generic cleanup above,
+        this is the one path where restoring the interactive connection
+        that was paused to free its port for the run is actually wanted."""
+        had_worker = self._burn_test_worker is not None
+        self._on_burn_test_stop()
+        if had_worker and self.worker is None:
+            self._on_connect_clicked()
+
     def _on_burn_test_error(self, msg: str):
         # Only the fatal bind failure (thread never entered its loop) stops
         # the run. Transient per-frame send/receive errors during a live
@@ -1828,7 +1863,9 @@ class MainWindow(QMainWindow):
         # stress test this feature exists for.
         if msg.startswith("Burn Test could not open a UDP socket"):
             QMessageBox.warning(self, "Burn Test", msg)
-            self._on_burn_test_stop()
+            # Also try to restore the interactive link paused to attempt
+            # this run, same as a normal Stop-button click would.
+            self._on_burn_test_stop_clicked()
 
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
         # Fed before elapsed_us's below -1.0 -> None normalization - the

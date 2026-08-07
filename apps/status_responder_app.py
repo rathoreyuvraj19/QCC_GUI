@@ -29,6 +29,7 @@ Run directly:  python status_responder_app.py
 import socket
 import struct
 import sys
+import time
 
 from PySide6.QtCore import QRegularExpression, Qt, QThread, Signal
 from PySide6.QtGui import QGuiApplication, QRegularExpressionValidator
@@ -607,6 +608,12 @@ class StatusResponderWindow(QMainWindow):
 
         self.worker: ResponderWorker | None = None
         self._frame_count = 0
+        # Throttles _on_frame_processed's log/count UI updates - without
+        # this, a high-rate sender (e.g. the main GUI's Burn Test mode)
+        # drives an unbounded-growth QPlainTextEdit append and a cross-
+        # thread signal delivery on every single frame, which visibly lags
+        # and leaks memory within seconds at ~1kHz.
+        self._last_log_update = 0.0
 
         # The byte grid (90+ small fixed-size cells) doesn't compress - on a
         # window shorter than its natural height it used to get squeezed by
@@ -778,6 +785,9 @@ class StatusResponderWindow(QMainWindow):
         box, layout = titled_group_box("Activity Log")
         self.log_view = QPlainTextEdit()
         self.log_view.setReadOnly(True)
+        # Bounds memory unconditionally regardless of how long/fast a
+        # sender (e.g. Burn Test mode) drives this responder.
+        self.log_view.setMaximumBlockCount(2000)
         layout.addWidget(self.log_view)
         return box
 
@@ -836,6 +846,13 @@ class StatusResponderWindow(QMainWindow):
 
     def _on_frame_processed(self, query: bytes, response: bytes, replied: list, addr: tuple):
         self._frame_count += 1
+        # Count every frame, but only paint the label/log at ~10Hz - at a
+        # sustained high rate (e.g. Burn Test mode), painting on every
+        # single frame is the actual bottleneck, not the underlying work.
+        now = time.perf_counter()
+        if now - self._last_log_update < 0.1:
+            return
+        self._last_log_update = now
         self.count_label.setText(f"Frames processed: {self._frame_count}")
 
         host, port = addr

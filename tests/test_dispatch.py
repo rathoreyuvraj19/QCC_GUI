@@ -30,7 +30,10 @@ _MAIN_WINDOW_PY = os.path.join(
 
 # Kinds that are latched without going through _begin_wait, because they
 # aren't one-shot request/response commands.
-_NOT_IN_TABLE = {"remote_programming"}  # multi-frame session, owns its own timers
+_NOT_IN_TABLE = {
+    "remote_programming",  # multi-frame session, owns its own timers
+    "burn_test",  # fire-and-forget stream, owns its own worker/timing - see core/burn_test_worker.py
+}
 
 
 def _begin_wait_kinds():

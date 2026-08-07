@@ -43,6 +43,8 @@ from core.rc_settings import (
 from core.command_style import send_button_style
 from connection_settings import connection_settings
 from core.frame_logger import FrameLogger
+from core.burn_test_logger import BurnTestLogger
+from core.burn_test_worker import BurnTestWorker
 from core.udp_worker import UdpWorker
 from ping_worker import PingWorker
 from widgets.header_panel import HeaderPanel
@@ -57,6 +59,7 @@ from tabs.dwell_tab import DwellTab
 from tabs.memory_tab import MemoryTab
 from tabs.timing_tab import TimingTab
 from tabs.remote_programming_tab import RemoteProgrammingTab
+from tabs.burn_test_tab import BurnTestTab
 from apps.remote_prog_controller import (
     RemoteProgController, OP_AUTHENTICATE, OP_LINK_CHECK, OP_LRU_INFO,
     OP_MODE_BACK, OP_MODE_STEP1, OP_MODE_STEP2, OP_PROGRAM,
@@ -408,6 +411,16 @@ class MainWindow(QMainWindow):
         self._frame_logger.stats_changed.connect(self._on_log_stats_changed)
         self._frame_logger.error.connect(self._on_logger_error)
 
+        # Burn Test - fire-and-forget high-rate stream, deliberately
+        # isolated from the worker/_frame_logger above (see
+        # core/burn_test_worker.py's module docstring for why). The worker
+        # itself is created/destroyed per run in _on_burn_test_start/_stop;
+        # the logger, like _frame_logger, lives on the main window.
+        self._burn_test_worker: BurnTestWorker | None = None
+        self._burn_test_logger = BurnTestLogger(self)
+        self._burn_test_logger.error.connect(
+            lambda msg: QMessageBox.warning(self, "Burn Test logging", msg))
+
         # Open plot dialogs (Tools -> Plot Log File…) - kept in a list
         # rather than a single reused reference like the RX/TX/responder
         # windows above, since comparing two burn-test CSVs side by side
@@ -530,6 +543,11 @@ class MainWindow(QMainWindow):
 
         self.rc_settings_tab = RCSettingsTab()
         self.tabs.addTab(self.rc_settings_tab, "RC Settings")
+
+        self.burn_test_tab = BurnTestTab()
+        self.burn_test_tab.start_requested.connect(self._on_burn_test_start)
+        self.burn_test_tab.stop_requested.connect(self._on_burn_test_stop)
+        self.tabs.addTab(self.burn_test_tab, "Burn Test")
 
         # Status tab's matrix resets to idle whenever the current tab
         # changes (to it or away from it) - a previous query's results
@@ -847,6 +865,7 @@ class MainWindow(QMainWindow):
         # lock via session_finished) before the worker goes away, so a
         # chunk watchdog never fires into a dead connection.
         self.remote_prog_ctrl.cancel()
+        self._on_burn_test_stop()
         # A dead/absent worker can't carry any more resend ticks - stop
         # every tab's own auto-resend timer too, or their toggle buttons
         # stay latched "Resending"/"Stop" forever with nothing left to send
@@ -1721,6 +1740,96 @@ class MainWindow(QMainWindow):
     def _on_rp_iap_timeout_changed(self, seconds: int):
         self.remote_prog_ctrl.iap_window_ms = seconds * 1000
 
+    # -- Burn Test ----------------------------------------------------------
+    # Fire-and-forget high-rate stream, deliberately kept off self.worker/
+    # _COMMANDS/_begin_wait - see core/burn_test_worker.py's module
+    # docstring. The only integration point with the rest of the app is
+    # holding the _awaiting_kind busy-lock for the whole run, the same way
+    # "remote_programming" does, so manual sends and RP sessions correctly
+    # refuse to start while a burn test is active.
+
+    def _on_burn_test_start(self, config: dict):
+        if self.worker is None:
+            QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
+            return
+        if not self._check_not_busy():
+            return
+        reply = QMessageBox.question(
+            self, "Start Burn Test",
+            "This sends a sustained, fast stream of frames to the QCC "
+            "until stopped. Continue?",
+        )
+        if reply != QMessageBox.Yes:
+            return
+
+        if config["log_path"]:
+            err = self._burn_test_logger.start(config["log_path"])
+            if err:
+                QMessageBox.warning(self, "Burn Test logging", f"Could not start logging:\n{err}")
+                return
+
+        # A leftover auto-resend elsewhere would otherwise sit there
+        # uselessly (its Send button refused by _check_not_busy above) for
+        # the whole run - same calls _disconnect() already makes.
+        self.header_panel.stop_auto_resend()
+        self.link_test_tab.stop_auto_resend()
+        self.status_tab.stop_auto_resend()
+        self.dwell_tab.stop_auto_resend()
+
+        qcc_ip = self.qcc_ip_edit.text().strip()
+        qcc_port = self.qcc_port_edit.value()
+        self._burn_test_worker = BurnTestWorker(qcc_ip, qcc_port, config["payload"], config["interval_s"])
+        self._burn_test_worker.error.connect(self._on_burn_test_error)
+        self._burn_test_worker.stats_ready.connect(self.burn_test_tab.show_stats)
+        self._burn_test_worker.rows_ready.connect(self._burn_test_logger.append_rows)
+        self._burn_test_worker.link_result_ready.connect(self.burn_test_tab.show_link_results)
+        self._burn_test_worker.status.connect(self._on_burn_test_worker_status)
+        self._burn_test_worker.start()
+
+        self._awaiting_kind = "burn_test"
+        self.burn_test_tab.mark_running()
+
+    def _on_burn_test_worker_status(self, msg: str):
+        # The worker emits this exactly once, as the very last thing it
+        # does before its thread exits (every code path in
+        # BurnTestWorker.run() reaches it, including the bind-failure
+        # early-return). Queued signals from the same sender thread are
+        # delivered in emission order, so by the time this arrives, that
+        # same final run()'s last rows_ready/stats_ready have already been
+        # delivered too - closing the logger only here (instead of
+        # synchronously right after worker.stop() returns, in
+        # _on_burn_test_stop below) is what guarantees the last batch of
+        # rows actually lands in the CSV instead of arriving into an
+        # already-closed logger and being silently dropped.
+        if msg == "Burn Test stopped":
+            self._burn_test_logger.stop()
+
+    def _on_burn_test_stop(self):
+        """Safe to call unconditionally (e.g. on disconnect/close) even when
+        no burn test is running - mirrors stop_auto_resend()'s pattern."""
+        if self._burn_test_worker is not None:
+            self._burn_test_worker.stop()
+            self._burn_test_worker = None
+        else:
+            # No worker ever ran (or it's already gone) - nothing pending
+            # to flush, so nothing stops _on_burn_test_worker_status above
+            # from ever firing to close this on its own.
+            self._burn_test_logger.stop()
+        if self._awaiting_kind == "burn_test":
+            self._awaiting_kind = None
+        self.burn_test_tab.reset_to_idle()
+
+    def _on_burn_test_error(self, msg: str):
+        # Only the fatal bind failure (thread never entered its loop) stops
+        # the run. Transient per-frame send/receive errors during a live
+        # run are already reflected in the tab's "Errors" counter
+        # (BurnTestWorker.stats_ready) - popping a dialog for every one of
+        # those would flood the UI during exactly the kind of sustained
+        # stress test this feature exists for.
+        if msg.startswith("Burn Test could not open a UDP socket"):
+            QMessageBox.warning(self, "Burn Test", msg)
+            self._on_burn_test_stop()
+
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
         # Fed before elapsed_us's below -1.0 -> None normalization - the
         # logger does its own "negative means unknown" handling and pairs
@@ -1818,6 +1927,7 @@ class MainWindow(QMainWindow):
         # Flushes any in-flight query row and closes the CSV cleanly - rows
         # are already on disk (flushed per-row), this just finalizes.
         self._frame_logger.stop()
+        self._on_burn_test_stop()
         if self.worker is not None:
             try:
                 self.worker.stop()

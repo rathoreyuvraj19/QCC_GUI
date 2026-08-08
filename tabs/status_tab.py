@@ -347,8 +347,19 @@ class StatusTab(QWidget):
         row.addWidget(self.diagnostic_type_label)
         row.addWidget(self.diagnostic_type_combo)
 
-        self.temp_cutoff_label = QLabel("Temp Cutoff:")
-        self.temp_cutoff_spin = SpinField(0, 255, _DEFAULT_TEMP_CUTOFF, field_width=56)
+        self.temp_cutoff_label = QLabel("Temp Cutoff (°C):")
+        # Entered/displayed in degrees C (matches the Details panel's "raw
+        # (X.X°C)" format) rather than the raw 0-255 wire byte - converted
+        # via temp_conversion_settings so it tracks the same formula used
+        # everywhere else temperature_status is shown. Range is the C
+        # equivalent of the raw byte's [0, 255] span.
+        _cutoff_lo = temp_conversion_settings.convert(0)
+        _cutoff_hi = temp_conversion_settings.convert(255)
+        self.temp_cutoff_spin = DoubleSpinField(
+            min(_cutoff_lo, _cutoff_hi), max(_cutoff_lo, _cutoff_hi),
+            temp_conversion_settings.convert(_DEFAULT_TEMP_CUTOFF),
+            step=0.1, decimals=1, field_width=64,
+        )
         self.temp_cutoff_spin.spin.valueChanged.connect(self._on_temp_cutoff_changed)
         row.addWidget(self.temp_cutoff_label)
         row.addWidget(self.temp_cutoff_spin)
@@ -508,7 +519,7 @@ class StatusTab(QWidget):
             and self._current_filter_field() == _TEMP_FIELD
             and decoded is not None
             and _TEMP_FIELD in decoded
-            and decoded[_TEMP_FIELD] > self.temp_cutoff_spin.value()
+            and temp_conversion_settings.convert(decoded[_TEMP_FIELD]) > self.temp_cutoff_spin.value()
         )
 
     def _apply_temp_highlight(self, results):

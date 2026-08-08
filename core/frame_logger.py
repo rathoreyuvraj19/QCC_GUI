@@ -20,9 +20,9 @@ docs/idd/packet_spec.yaml), so it's the join key. The GUI's link is strictly
 one-command-in-flight (main_window's _check_not_busy), so at most one query
 is ever pending here.
 
-Rows are appended and flushed to disk as they happen - a crash at hour 30
-of a burn test loses at most the one in-flight row, and memory use stays
-flat no matter how long the run is. Usage:
+Rows are appended and flushed to disk every _FLUSH_EVERY_N_ROWS rows (see
+below) - a crash loses at most that many trailing rows, and memory use
+stays flat no matter how long the run is. Usage:
 
     logger = FrameLogger(parent)
     logger.stats_changed.connect(on_stats)   # (rows, ok, missing, errors)
@@ -69,6 +69,15 @@ RESULT_TIMEOUT = "TIMEOUT"
 RESULT_CRC_FAIL = "CRC_FAIL"
 RESULT_MSG_NUM_MISMATCH = "MSG_NUM_MISMATCH"
 RESULT_UNSOLICITED = "UNSOLICITED"
+
+# Rows between explicit fsyncs. A crash loses at most this many rows
+# instead of one - fine for a burn-test log - in exchange for not making
+# every single frame at a fast resend rate (e.g. Dwell tab's 0.01s
+# auto-resend) pay for a synchronous disk flush, which was slow enough to
+# make the GUI thread fall behind the worker thread's frame_received
+# signals and back them up in Qt's event queue (unbounded RAM growth,
+# apparent hang after ~2e5 frames).
+_FLUSH_EVERY_N_ROWS = 50
 
 # qtrm_ok_count/qtrm_not_ok_list summarize the 96 per-QTRM columns for
 # quick filtering (a non-empty qtrm_not_ok_list cell = at least one QTRM
@@ -132,6 +141,7 @@ class FrameLogger(QObject):
         self._writer = None
         self.path = None
         self._pending = None
+        self._unflushed = 0
         self._flush_timer = QTimer(self)
         self._flush_timer.setSingleShot(True)
         self._flush_timer.timeout.connect(self._on_pending_expired)
@@ -153,6 +163,7 @@ class FrameLogger(QObject):
             return str(e)
         self._file, self._writer, self.path = f, writer, path
         self._pending = None
+        self._unflushed = 0
         self.rows = self.ok = self.missing = self.errors = self.qtrm_fails = 0
         return None
 
@@ -280,7 +291,10 @@ class FrameLogger(QObject):
             return
         try:
             self._writer.writerow(row)
-            self._file.flush()
+            self._unflushed += 1
+            if self._unflushed >= _FLUSH_EVERY_N_ROWS:
+                self._file.flush()
+                self._unflushed = 0
         except OSError as e:
             # Disk full / file yanked mid-run - stop cleanly rather than
             # erroring on every subsequent frame.

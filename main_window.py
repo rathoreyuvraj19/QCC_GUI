@@ -76,6 +76,15 @@ from apps.remote_prog_tester_app import RemoteProgTesterWindow
 
 RESPONSE_TIMEOUT_MS = 1000
 
+# Minimum gap between HeaderPanel/RX Test Window repaints on the RX path.
+# At a fast auto-resend rate (Dwell tab goes down to 0.01s) each received
+# frame otherwise triggers ~30-70 widget-mutation calls synchronously on
+# the GUI thread; if that falls behind the worker thread's frame_received
+# emission rate, Qt queues the backlog (each holding a 2970-byte frame) in
+# its cross-thread event queue - unbounded RAM growth and an apparent
+# hang after enough frames. 10Hz is plenty for a human to read.
+DISPLAY_UPDATE_MIN_INTERVAL_S = 0.1
+
 # Ping button colors - full QPushButton{...} selector-block form (not the
 # flat "background-color: x;" property-only form) since QSS :hover/:pressed
 # pseudo-states are only recognized inside a selector block - the flat form
@@ -387,6 +396,7 @@ class MainWindow(QMainWindow):
         self._pending_timer = None
         self._rx_test_window: RxTestWindow | None = None
         self._tx_test_window: TxTestWindow | None = None
+        self._last_display_update = 0.0
         self._last_sent_frame: bytes | None = None
         self._last_received_frame: bytes | None = None
         self._responder_window: StatusResponderWindow | None = None
@@ -1721,6 +1731,20 @@ class MainWindow(QMainWindow):
     def _on_rp_iap_timeout_changed(self, seconds: int):
         self.remote_prog_ctrl.iap_window_ms = seconds * 1000
 
+    def _update_frame_display(self, raw: bytes):
+        """RX Test Window + HeaderPanel repaint, throttled to
+        DISPLAY_UPDATE_MIN_INTERVAL_S - see that constant's comment. Always
+        shows the most recently received frame; frames arriving faster than
+        the throttle window are still logged (_frame_logger.log_rx runs
+        unthrottled in _on_frame_received) but skip the widget repaint."""
+        now = time.monotonic()
+        if now - self._last_display_update < DISPLAY_UPDATE_MIN_INTERVAL_S:
+            return
+        self._last_display_update = now
+        if self._rx_test_window is not None:
+            self._rx_test_window.show_frame(raw)
+        self.header_panel.show_frame(raw)
+
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
         # Fed before elapsed_us's below -1.0 -> None normalization - the
         # logger does its own "negative means unknown" handling and pairs
@@ -1744,9 +1768,7 @@ class MainWindow(QMainWindow):
         # was never armed for this kind).
         if self._awaiting_kind == "remote_programming":
             self._last_received_frame = raw
-            if self._rx_test_window is not None:
-                self._rx_test_window.show_frame(raw)
-            self.header_panel.show_frame(raw)
+            self._update_frame_display(raw)
             if elapsed_us is not None:
                 self.remote_programming_tab.show_response_time(elapsed_us)
             self.remote_prog_ctrl.on_frame(raw, elapsed_us)
@@ -1775,13 +1797,10 @@ class MainWindow(QMainWindow):
             self.header_panel.show_chip_id_response(raw)
             return
 
-        if self._rx_test_window is not None:
-            self._rx_test_window.show_frame(raw)
-
         # One global HeaderPanel now (not one per tab) - it always shows
         # whatever frame was most recently received, regardless of which
         # tab/command it came from.
-        self.header_panel.show_frame(raw)
+        self._update_frame_display(raw)
 
         # kind is None for a stray/unsolicited frame with nothing in flight
         # (e.g. one that arrived after its own timeout already fired) -

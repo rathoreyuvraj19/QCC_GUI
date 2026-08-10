@@ -596,10 +596,15 @@ class DwellTab(QWidget):
     def get_channels(self):
         return self.model.get_channels()
 
-    def mark_pending(self):
+    def mark_pending(self, reset_colors: bool = True):
+        # reset_colors=False on auto-resend ticks - see link_test_tab.py's
+        # mark_pending() docstring for why unconditionally resetting the
+        # LED matrix here fights the throttled result repaint in
+        # main_window.py and leaves the matrix looking stuck grey.
         self.summary_label.setText("Sent - waiting for response...")
         self.response_time_label.setText("")
-        self.led_matrix.set_all(_PENDING_COLOR)
+        if reset_colors:
+            self.led_matrix.set_all(_PENDING_COLOR)
 
     def show_results(self, linked_flags):
         acked_count = sum(1 for v in linked_flags if v)

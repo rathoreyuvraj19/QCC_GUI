@@ -291,7 +291,7 @@ class LinkTestTab(QWidget):
         self._auto_resending = False
         self.send_btn.setText("Send Link Test")
 
-    def mark_pending(self):
+    def mark_pending(self, reset_colors: bool = True):
         # No artificial reveal delay - LEDs turn green/red the instant a
         # real response arrives (show_results), or red on an actual
         # timeout (show_no_response, driven by main_window.py's real
@@ -299,9 +299,23 @@ class LinkTestTab(QWidget):
         # recieve a command", per Yuvraj. A fixed cosmetic delay here used
         # to hold results back for a full second even when the response
         # had already arrived.
+        #
+        # reset_colors=False on auto-resend ticks: the LED repaint
+        # (led_matrix.set_all/set_results, each a 96-cell setStyleSheet
+        # sweep) is the dominant per-frame GUI cost during a fast resend,
+        # so main_window.py throttles the actual result repaint to
+        # DISPLAY_UPDATE_MIN_INTERVAL_S (0.1s) regardless of how fast the
+        # resend timer ticks (as low as 0.01s). If mark_pending() reset
+        # every cell to grey on every tick anyway, that unthrottled reset
+        # would win the paint race far more often than the throttled
+        # colored result ever does, leaving the matrix looking stuck grey
+        # even though responses are arriving fine (confirmed via the
+        # header sidebar still updating normally). Leaving the previous
+        # result's colors in place between ticks avoids that.
         self.summary_label.setText("Sent - waiting for response...")
         self.response_time_label.setText("")
-        self.led_matrix.set_all(_PENDING_COLOR)
+        if reset_colors:
+            self.led_matrix.set_all(_PENDING_COLOR)
 
     def show_results(self, linked_flags):
         linked_count = sum(1 for v in linked_flags if v)

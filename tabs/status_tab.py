@@ -791,7 +791,7 @@ class StatusTab(QWidget):
         self._update_matrix_visibility()
         self._clear_details_to_placeholder()
 
-    def mark_pending(self):
+    def mark_pending(self, reset_colors: bool = True):
         # No artificial reveal delay - LEDs turn green/red the instant a
         # real response arrives (show_results), or red on an actual
         # timeout (show_no_response, driven by main_window.py's real
@@ -799,12 +799,18 @@ class StatusTab(QWidget):
         # recieve a command", per Yuvraj. A fixed cosmetic delay here used
         # to hold results back for a full second even when the response
         # had already arrived.
+        #
+        # reset_colors=False on auto-resend ticks - see link_test_tab.py's
+        # mark_pending() docstring for why unconditionally resetting the
+        # LED matrix here fights the throttled result repaint in
+        # main_window.py and leaves the matrix looking stuck grey.
         self.summary_label.setText("Sent - waiting for response...")
         self.response_time_label.setText("")
         self._results = None
         self._last_mode = "all"
-        self.led_matrix.set_all(_PENDING_COLOR)
-        self._reset_led_texts()
+        if reset_colors:
+            self.led_matrix.set_all(_PENDING_COLOR)
+            self._reset_led_texts()
         self.tx_forward_matrix.set_all_state("pending")
 
     def show_results(self, results):

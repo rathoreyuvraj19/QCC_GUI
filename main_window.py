@@ -1394,7 +1394,7 @@ class MainWindow(QMainWindow):
 
         frame = build_dwell_frame(self.dwell_tab.get_channels(), header=rc_settings.build_header(COMMAND_ID_DWELL))
 
-        self.dwell_tab.mark_pending()
+        self.dwell_tab.mark_pending(reset_colors=not is_auto_resend)
         self._begin_wait("dwell")
         self._send_frame(frame)
 
@@ -1456,7 +1456,7 @@ class MainWindow(QMainWindow):
 
         frame = build_link_test_frame(header=rc_settings.build_header(COMMAND_ID_LINK_TEST))
 
-        self.link_test_tab.mark_pending()
+        self.link_test_tab.mark_pending(reset_colors=not is_auto_resend)
         self._begin_wait("link_test")
         self._send_frame(frame)
 
@@ -1574,7 +1574,7 @@ class MainWindow(QMainWindow):
 
         self._status_type_in_flight = status_type
         self._status_sub_type_in_flight = sub_status_type
-        self.status_tab.mark_pending()
+        self.status_tab.mark_pending(reset_colors=not is_auto_resend)
         self._begin_wait("status_all")
         self._send_frame(frame)
 

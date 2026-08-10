@@ -1731,12 +1731,17 @@ class MainWindow(QMainWindow):
     def _on_rp_iap_timeout_changed(self, seconds: int):
         self.remote_prog_ctrl.iap_window_ms = seconds * 1000
 
-    def _update_frame_display(self, raw: bytes):
+    def _update_frame_display(self, raw: bytes) -> bool:
         """RX Test Window + HeaderPanel repaint, throttled to
         DISPLAY_UPDATE_MIN_INTERVAL_S - see that constant's comment. Always
         shows the most recently received frame; frames arriving faster than
         the throttle window are still logged (_frame_logger.log_rx runs
-        unthrottled in _on_frame_received) but skip the widget repaint."""
+        unthrottled in _on_frame_received) but skip the widget repaint.
+        Returns whether it actually repainted - _on_frame_received also
+        gates the per-command result display (e.g. Link Test/Status/Dwell's
+        96-cell LED matrix, each cell a setStyleSheet() call) on this same
+        return value/cadence, since THAT turned out to be the dominant
+        per-frame GUI cost during a fast resend, not the header panel."""
         # A stray/late CHIP_ID_READ response (bare 10-byte frame, see
         # CHIP_ID_RESPONSE_SIZE) can reach here if it arrives after
         # _awaiting_kind was already reset away from "chip_id_read" (e.g. a
@@ -1744,14 +1749,15 @@ class MainWindow(QMainWindow):
         # - the standard header parse below needs at least a 90-byte
         # header, so skip display for anything shorter rather than crashing.
         if len(raw) < FIXED_HEADER_SIZE + QCC_HEADER_SIZE:
-            return
+            return False
         now = time.monotonic()
         if now - self._last_display_update < DISPLAY_UPDATE_MIN_INTERVAL_S:
-            return
+            return False
         self._last_display_update = now
         if self._rx_test_window is not None:
             self._rx_test_window.show_frame(raw)
         self.header_panel.show_frame(raw)
+        return True
 
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
         # Fed before elapsed_us's below -1.0 -> None normalization - the
@@ -1807,8 +1813,10 @@ class MainWindow(QMainWindow):
 
         # One global HeaderPanel now (not one per tab) - it always shows
         # whatever frame was most recently received, regardless of which
-        # tab/command it came from.
-        self._update_frame_display(raw)
+        # tab/command it came from. show_display also gates the
+        # per-command result dispatch below (LED matrix repaint etc.) on
+        # the same throttle cadence - see _update_frame_display's docstring.
+        show_display = self._update_frame_display(raw)
 
         # kind is None for a stray/unsolicited frame with nothing in flight
         # (e.g. one that arrived after its own timeout already fired) -
@@ -1817,7 +1825,12 @@ class MainWindow(QMainWindow):
         if spec is None:
             return
 
+        # Always taken regardless of show_display - just clears the
+        # in-flight target attribute so a later stray frame can't reuse a
+        # stale one, not a display update.
         target = self._take_target(spec)
+        if not show_display:
+            return
 
         # Response time first, so a round-trip that did come back still
         # reports its timing even if the payload then fails to parse.

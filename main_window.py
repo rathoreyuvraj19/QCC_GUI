@@ -1737,6 +1737,14 @@ class MainWindow(QMainWindow):
         shows the most recently received frame; frames arriving faster than
         the throttle window are still logged (_frame_logger.log_rx runs
         unthrottled in _on_frame_received) but skip the widget repaint."""
+        # A stray/late CHIP_ID_READ response (bare 10-byte frame, see
+        # CHIP_ID_RESPONSE_SIZE) can reach here if it arrives after
+        # _awaiting_kind was already reset away from "chip_id_read" (e.g. a
+        # slow reply landing after the request's own timeout already fired)
+        # - the standard header parse below needs at least a 90-byte
+        # header, so skip display for anything shorter rather than crashing.
+        if len(raw) < FIXED_HEADER_SIZE + QCC_HEADER_SIZE:
+            return
         now = time.monotonic()
         if now - self._last_display_update < DISPLAY_UPDATE_MIN_INTERVAL_S:
             return

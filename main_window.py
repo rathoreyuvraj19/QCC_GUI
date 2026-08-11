@@ -666,6 +666,17 @@ class MainWindow(QMainWindow):
         self.local_port_edit = SpinField(1, 65535, connection_settings.local_port, field_width=64)
         self.local_port_edit.spin.valueChanged.connect(self._on_connection_field_changed)
 
+        # GUI Source Port - the port outgoing queries are sent FROM. Defaults
+        # to (and, for anyone who never touches it, stays equal to) GUI
+        # Listen Port, which keeps the original single-socket behavior.
+        # Split out as its own field because some QCC firmware sends its
+        # reply to a fixed destination port that doesn't necessarily match
+        # whatever port a query happened to arrive from - letting the two
+        # diverge here lets the GUI Listen Port be set to match that fixed
+        # port independently of what source port queries go out on.
+        self.source_port_edit = SpinField(1, 65535, connection_settings.source_port, field_width=64)
+        self.source_port_edit.spin.valueChanged.connect(self._on_connection_field_changed)
+
         self.qcc_ip_edit = QLineEdit(connection_settings.qcc_ip)
         self.qcc_ip_edit.textChanged.connect(self._on_connection_field_changed)
         self.qcc_port_edit = SpinField(1, 65535, connection_settings.qcc_port, field_width=64)
@@ -684,13 +695,23 @@ class MainWindow(QMainWindow):
 
         self.qcc_ip_edit.setMinimumWidth(120)
 
+        # Two stacked rows, not one - the fifth port/IP field (GUI Source
+        # Port, added alongside the other four) no longer fits in a single
+        # row at the app's normal window width without squeezing the
+        # Connect/Disconnect/Ping/Timing Generation buttons down below
+        # their own text (clipped labels like "onnect"/"ming Generation").
+        fields_row = QHBoxLayout()
+        fields_row.addWidget(QLabel("GUI Listen Port:"))
+        fields_row.addWidget(self.local_port_edit)
+        fields_row.addWidget(QLabel("GUI Source Port:"))
+        fields_row.addWidget(self.source_port_edit)
+        fields_row.addWidget(QLabel("QCC IP:"))
+        fields_row.addWidget(self.qcc_ip_edit)
+        fields_row.addWidget(QLabel("QCC Listen Port:"))
+        fields_row.addWidget(self.qcc_port_edit)
+        fields_row.addStretch(1)
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("Local Port:"))
-        row.addWidget(self.local_port_edit)
-        row.addWidget(QLabel("QCC IP:"))
-        row.addWidget(self.qcc_ip_edit)
-        row.addWidget(QLabel("QCC Port:"))
-        row.addWidget(self.qcc_port_edit)
         row.addWidget(self.connect_btn)
         row.addWidget(self.conn_status_label)
         row.addWidget(self.ping_btn)
@@ -811,6 +832,7 @@ class MainWindow(QMainWindow):
             "color: #00adb5; font-size: 13pt; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
         )
         outer.addWidget(title_label)
+        outer.addLayout(fields_row)
         outer.addLayout(row)
         outer.addLayout(warning_row)
         return box
@@ -881,24 +903,25 @@ class MainWindow(QMainWindow):
         self.conn_status_label.setText(status_text)
 
     def _on_connection_field_changed(self, *_args):
-        # Local Port/QCC IP/QCC Port all describe an existing connection -
-        # changing any of them while connected means that connection no
-        # longer reflects what's configured, so drop it rather than keep
-        # sending/listening against stale settings.
+        # GUI Listen Port/GUI Source Port/QCC IP/QCC Listen Port all describe
+        # an existing connection - changing any of them while connected
+        # means that connection no longer reflects what's configured, so
+        # drop it rather than keep sending/listening against stale settings.
         if self.worker is not None:
             self._disconnect("Disconnected (connection settings changed)")
 
         # Persist immediately (same "no explicit Save button" pattern as
-        # RC Settings) so these three fields remember their last value
-        # across restarts. Skipped while QCC IP/Port is a temporary
-        # auto-fill for an open Status Responder or Remote Programming
-        # Tester (both force IP to 127.0.0.1 and may bump the port to find
-        # a free one) - that's not a real setting the user typed, and gets
-        # correctly re-persisted once the respective "_closed" handler
-        # restores the real value and fires this same handler again.
+        # RC Settings) so these fields remember their last value across
+        # restarts. Skipped while QCC IP/Port is a temporary auto-fill for
+        # an open Status Responder or Remote Programming Tester (both force
+        # IP to 127.0.0.1 and may bump the port to find a free one) - that's
+        # not a real setting the user typed, and gets correctly re-persisted
+        # once the respective "_closed" handler restores the real value and
+        # fires this same handler again.
         if not (self._qcc_ip_overridden_for_responder or self._qcc_port_overridden_for_responder
                 or self._rp_tester_ip_overridden or self._rp_tester_port_overridden):
             connection_settings.local_port = self.local_port_edit.value()
+            connection_settings.source_port = self.source_port_edit.value()
             connection_settings.qcc_ip = self.qcc_ip_edit.text().strip()
             connection_settings.qcc_port = self.qcc_port_edit.value()
             connection_settings.save()
@@ -917,10 +940,11 @@ class MainWindow(QMainWindow):
             return
 
         local_port = self.local_port_edit.value()
+        source_port = self.source_port_edit.value()
         qcc_ip = self.qcc_ip_edit.text().strip()
         qcc_port = self.qcc_port_edit.value()
 
-        self.worker = UdpWorker(local_port, qcc_ip, qcc_port)
+        self.worker = UdpWorker(local_port, qcc_ip, qcc_port, source_port=source_port)
         self.worker.frame_received.connect(self._on_frame_received)
         self.worker.frame_sent.connect(self._on_frame_sent)
         self.worker.error.connect(self._on_worker_error)

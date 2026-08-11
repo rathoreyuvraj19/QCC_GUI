@@ -13,6 +13,14 @@ Usage:
     worker.send_frame(some_2970_byte_bytes_object)
     ...
     worker.stop()
+
+local_port is the GUI Listen Port - always bound and always the one
+recvfrom() reads from. source_port (optional, defaults to local_port) is
+the GUI Source Port - the port sendto() uses. They're the same bound
+socket, as before, whenever the two match; source_port only opens a
+second, send-only socket when it's set to something different (e.g. a QCC
+that sends its replies to a fixed port independent of whatever port a
+query happened to arrive from).
 """
 
 import socket
@@ -49,21 +57,30 @@ class UdpWorker(QThread):
     error = Signal(str)
     status = Signal(str)
 
-    def __init__(self, local_port: int, qcc_ip: str, qcc_port: int, parent=None):
+    def __init__(self, local_port: int, qcc_ip: str, qcc_port: int, source_port: int = None, parent=None):
         super().__init__(parent)
         self.local_port = local_port
         self.qcc_ip = qcc_ip
         self.qcc_port = qcc_port
-        self._sock = None
+        self.source_port = source_port if source_port is not None else local_port
+        self._recv_sock = None
+        self._send_sock = None  # same object as _recv_sock when source_port == local_port
         self._running = False
         self._last_send_time = None
 
     def run(self):
         try:
-            self._sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-            self._sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            self._sock.bind(("0.0.0.0", self.local_port))
-            self._sock.settimeout(0.5)  # allow periodic check of self._running
+            self._recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            self._recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            self._recv_sock.bind(("0.0.0.0", self.local_port))
+            self._recv_sock.settimeout(0.5)  # allow periodic check of self._running
+
+            if self.source_port == self.local_port:
+                self._send_sock = self._recv_sock
+            else:
+                self._send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                self._send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                self._send_sock.bind(("0.0.0.0", self.source_port))
         except OSError as e:
             self.error.emit(f"Failed to bind local UDP port {self.local_port}: {e}")
             return
@@ -73,7 +90,7 @@ class UdpWorker(QThread):
 
         while self._running:
             try:
-                data, addr = self._sock.recvfrom(65536)
+                data, addr = self._recv_sock.recvfrom(65536)
                 recv_time = time.perf_counter()
             except socket.timeout:
                 continue
@@ -101,9 +118,12 @@ class UdpWorker(QThread):
                 elapsed_us = -1.0
             self.frame_received.emit(data, elapsed_us)
 
-        if self._sock:
-            self._sock.close()
-            self._sock = None
+        if self._send_sock and self._send_sock is not self._recv_sock:
+            self._send_sock.close()
+        if self._recv_sock:
+            self._recv_sock.close()
+        self._recv_sock = None
+        self._send_sock = None
         self.status.emit("Stopped")
 
     def send_frame(self, frame: bytes):
@@ -112,12 +132,12 @@ class UdpWorker(QThread):
                 f"Refusing to send {len(frame)}-byte frame, expected one of {_VALID_TX_SIZES}"
             )
             return
-        if self._sock is None:
+        if self._send_sock is None:
             self.error.emit("Cannot send - socket not open yet")
             return
         try:
             self._last_send_time = time.perf_counter()
-            self._sock.sendto(frame, (self.qcc_ip, self.qcc_port))
+            self._send_sock.sendto(frame, (self.qcc_ip, self.qcc_port))
             self.frame_sent.emit(frame)
         except OSError as e:
             self._last_send_time = None

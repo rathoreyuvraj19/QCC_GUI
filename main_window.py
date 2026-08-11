@@ -79,6 +79,15 @@ from apps.remote_prog_tester_app import RemoteProgTesterWindow
 
 RESPONSE_TIMEOUT_MS = 1000
 
+# Minimum gap between HeaderPanel/RX Test Window repaints on the RX path.
+# At a fast auto-resend rate (Dwell tab goes down to 0.01s) each received
+# frame otherwise triggers ~30-70 widget-mutation calls synchronously on
+# the GUI thread; if that falls behind the worker thread's frame_received
+# emission rate, Qt queues the backlog (each holding a 2970-byte frame) in
+# its cross-thread event queue - unbounded RAM growth and an apparent
+# hang after enough frames. 10Hz is plenty for a human to read.
+DISPLAY_UPDATE_MIN_INTERVAL_S = 0.1
+
 # Ping button colors - full QPushButton{...} selector-block form (not the
 # flat "background-color: x;" property-only form) since QSS :hover/:pressed
 # pseudo-states are only recognized inside a selector block - the flat form
@@ -390,6 +399,7 @@ class MainWindow(QMainWindow):
         self._pending_timer = None
         self._rx_test_window: RxTestWindow | None = None
         self._tx_test_window: TxTestWindow | None = None
+        self._last_display_update = 0.0
         self._last_sent_frame: bytes | None = None
         self._last_received_frame: bytes | None = None
         self._responder_window: StatusResponderWindow | None = None
@@ -674,6 +684,17 @@ class MainWindow(QMainWindow):
         self.local_port_edit = SpinField(1, 65535, connection_settings.local_port, field_width=64)
         self.local_port_edit.spin.valueChanged.connect(self._on_connection_field_changed)
 
+        # GUI Source Port - the port outgoing queries are sent FROM. Defaults
+        # to (and, for anyone who never touches it, stays equal to) GUI
+        # Listen Port, which keeps the original single-socket behavior.
+        # Split out as its own field because some QCC firmware sends its
+        # reply to a fixed destination port that doesn't necessarily match
+        # whatever port a query happened to arrive from - letting the two
+        # diverge here lets the GUI Listen Port be set to match that fixed
+        # port independently of what source port queries go out on.
+        self.source_port_edit = SpinField(1, 65535, connection_settings.source_port, field_width=64)
+        self.source_port_edit.spin.valueChanged.connect(self._on_connection_field_changed)
+
         self.qcc_ip_edit = QLineEdit(connection_settings.qcc_ip)
         self.qcc_ip_edit.textChanged.connect(self._on_connection_field_changed)
         self.qcc_port_edit = SpinField(1, 65535, connection_settings.qcc_port, field_width=64)
@@ -692,13 +713,23 @@ class MainWindow(QMainWindow):
 
         self.qcc_ip_edit.setMinimumWidth(120)
 
+        # Two stacked rows, not one - the fifth port/IP field (GUI Source
+        # Port, added alongside the other four) no longer fits in a single
+        # row at the app's normal window width without squeezing the
+        # Connect/Disconnect/Ping/Timing Generation buttons down below
+        # their own text (clipped labels like "onnect"/"ming Generation").
+        fields_row = QHBoxLayout()
+        fields_row.addWidget(QLabel("GUI Listen Port:"))
+        fields_row.addWidget(self.local_port_edit)
+        fields_row.addWidget(QLabel("GUI Source Port:"))
+        fields_row.addWidget(self.source_port_edit)
+        fields_row.addWidget(QLabel("QCC IP:"))
+        fields_row.addWidget(self.qcc_ip_edit)
+        fields_row.addWidget(QLabel("QCC Listen Port:"))
+        fields_row.addWidget(self.qcc_port_edit)
+        fields_row.addStretch(1)
+
         row = QHBoxLayout()
-        row.addWidget(QLabel("Local Port:"))
-        row.addWidget(self.local_port_edit)
-        row.addWidget(QLabel("QCC IP:"))
-        row.addWidget(self.qcc_ip_edit)
-        row.addWidget(QLabel("QCC Port:"))
-        row.addWidget(self.qcc_port_edit)
         row.addWidget(self.connect_btn)
         row.addWidget(self.conn_status_label)
         row.addWidget(self.ping_btn)
@@ -819,6 +850,7 @@ class MainWindow(QMainWindow):
             "color: #00adb5; font-size: 13pt; font-weight: 700; letter-spacing: 0.6px; background: transparent;"
         )
         outer.addWidget(title_label)
+        outer.addLayout(fields_row)
         outer.addLayout(row)
         outer.addLayout(warning_row)
         return box
@@ -890,24 +922,25 @@ class MainWindow(QMainWindow):
         self.conn_status_label.setText(status_text)
 
     def _on_connection_field_changed(self, *_args):
-        # Local Port/QCC IP/QCC Port all describe an existing connection -
-        # changing any of them while connected means that connection no
-        # longer reflects what's configured, so drop it rather than keep
-        # sending/listening against stale settings.
+        # GUI Listen Port/GUI Source Port/QCC IP/QCC Listen Port all describe
+        # an existing connection - changing any of them while connected
+        # means that connection no longer reflects what's configured, so
+        # drop it rather than keep sending/listening against stale settings.
         if self.worker is not None:
             self._disconnect("Disconnected (connection settings changed)")
 
         # Persist immediately (same "no explicit Save button" pattern as
-        # RC Settings) so these three fields remember their last value
-        # across restarts. Skipped while QCC IP/Port is a temporary
-        # auto-fill for an open Status Responder or Remote Programming
-        # Tester (both force IP to 127.0.0.1 and may bump the port to find
-        # a free one) - that's not a real setting the user typed, and gets
-        # correctly re-persisted once the respective "_closed" handler
-        # restores the real value and fires this same handler again.
+        # RC Settings) so these fields remember their last value across
+        # restarts. Skipped while QCC IP/Port is a temporary auto-fill for
+        # an open Status Responder or Remote Programming Tester (both force
+        # IP to 127.0.0.1 and may bump the port to find a free one) - that's
+        # not a real setting the user typed, and gets correctly re-persisted
+        # once the respective "_closed" handler restores the real value and
+        # fires this same handler again.
         if not (self._qcc_ip_overridden_for_responder or self._qcc_port_overridden_for_responder
                 or self._rp_tester_ip_overridden or self._rp_tester_port_overridden):
             connection_settings.local_port = self.local_port_edit.value()
+            connection_settings.source_port = self.source_port_edit.value()
             connection_settings.qcc_ip = self.qcc_ip_edit.text().strip()
             connection_settings.qcc_port = self.qcc_port_edit.value()
             connection_settings.save()
@@ -926,10 +959,11 @@ class MainWindow(QMainWindow):
             return
 
         local_port = self.local_port_edit.value()
+        source_port = self.source_port_edit.value()
         qcc_ip = self.qcc_ip_edit.text().strip()
         qcc_port = self.qcc_port_edit.value()
 
-        self.worker = UdpWorker(local_port, qcc_ip, qcc_port)
+        self.worker = UdpWorker(local_port, qcc_ip, qcc_port, source_port=source_port)
         self.worker.frame_received.connect(self._on_frame_received)
         self.worker.frame_sent.connect(self._on_frame_sent)
         self.worker.error.connect(self._on_worker_error)
@@ -1241,7 +1275,17 @@ class MainWindow(QMainWindow):
         """
         self._awaiting_kind = kind
         if self._pending_timer is not None:
+            # deleteLater(), not just stop()+drop the Python reference: this
+            # QTimer is parented to `self` (QTimer(self) below), so Qt's C++
+            # parent-child ownership keeps it alive as an orphaned child of
+            # MainWindow forever otherwise - losing the Python reference
+            # doesn't destroy it. Confirmed via findChildren(QTimer): 500
+            # command sends without this leaked 500 QTimer objects (one per
+            # _begin_wait call). At a 0.01s auto-resend interval that's ~100
+            # leaked timers/sec, which is what was driving the reported GUI
+            # RAM growth and eventual hang.
             self._pending_timer.stop()
+            self._pending_timer.deleteLater()
         self._pending_timer = QTimer(self)
         self._pending_timer.setSingleShot(True)
         self._pending_timer.timeout.connect(lambda: self._on_response_timeout(kind))
@@ -1258,6 +1302,7 @@ class MainWindow(QMainWindow):
         """
         if self._pending_timer is not None:
             self._pending_timer.stop()
+            self._pending_timer.deleteLater()
             self._pending_timer = None
 
     def _send_frame(self, frame: bytes):
@@ -1333,6 +1378,7 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
             if self._pending_timer is not None:
                 self._pending_timer.stop()
+                self._pending_timer.deleteLater()
                 self._pending_timer = None
         elif not self._check_not_busy():
             return
@@ -1397,13 +1443,14 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
             if self._pending_timer is not None:
                 self._pending_timer.stop()
+                self._pending_timer.deleteLater()
                 self._pending_timer = None
         elif not self._check_not_busy():
             return
 
         frame = build_dwell_frame(self.dwell_tab.get_channels(), header=rc_settings.build_header(COMMAND_ID_DWELL))
 
-        self.dwell_tab.mark_pending()
+        self.dwell_tab.mark_pending(reset_colors=not is_auto_resend)
         self._begin_wait("dwell")
         self._send_frame(frame)
 
@@ -1459,13 +1506,14 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
             if self._pending_timer is not None:
                 self._pending_timer.stop()
+                self._pending_timer.deleteLater()
                 self._pending_timer = None
         elif not self._check_not_busy():
             return
 
         frame = build_link_test_frame(header=rc_settings.build_header(COMMAND_ID_LINK_TEST))
 
-        self.link_test_tab.mark_pending()
+        self.link_test_tab.mark_pending(reset_colors=not is_auto_resend)
         self._begin_wait("link_test")
         self._send_frame(frame)
 
@@ -1571,6 +1619,7 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
             if self._pending_timer is not None:
                 self._pending_timer.stop()
+                self._pending_timer.deleteLater()
                 self._pending_timer = None
         elif not self._check_not_busy():
             return
@@ -1583,7 +1632,7 @@ class MainWindow(QMainWindow):
 
         self._status_type_in_flight = status_type
         self._status_sub_type_in_flight = sub_status_type
-        self.status_tab.mark_pending()
+        self.status_tab.mark_pending(reset_colors=not is_auto_resend)
         self._begin_wait("status_all")
         self._send_frame(frame)
 
@@ -1867,6 +1916,34 @@ class MainWindow(QMainWindow):
             # this run, same as a normal Stop-button click would.
             self._on_burn_test_stop_clicked()
 
+    def _update_frame_display(self, raw: bytes) -> bool:
+        """RX Test Window + HeaderPanel repaint, throttled to
+        DISPLAY_UPDATE_MIN_INTERVAL_S - see that constant's comment. Always
+        shows the most recently received frame; frames arriving faster than
+        the throttle window are still logged (_frame_logger.log_rx runs
+        unthrottled in _on_frame_received) but skip the widget repaint.
+        Returns whether it actually repainted - _on_frame_received also
+        gates the per-command result display (e.g. Link Test/Status/Dwell's
+        96-cell LED matrix, each cell a setStyleSheet() call) on this same
+        return value/cadence, since THAT turned out to be the dominant
+        per-frame GUI cost during a fast resend, not the header panel."""
+        # A stray/late CHIP_ID_READ response (bare 10-byte frame, see
+        # CHIP_ID_RESPONSE_SIZE) can reach here if it arrives after
+        # _awaiting_kind was already reset away from "chip_id_read" (e.g. a
+        # slow reply landing after the request's own timeout already fired)
+        # - the standard header parse below needs at least a 90-byte
+        # header, so skip display for anything shorter rather than crashing.
+        if len(raw) < FIXED_HEADER_SIZE + QCC_HEADER_SIZE:
+            return False
+        now = time.monotonic()
+        if now - self._last_display_update < DISPLAY_UPDATE_MIN_INTERVAL_S:
+            return False
+        self._last_display_update = now
+        if self._rx_test_window is not None:
+            self._rx_test_window.show_frame(raw)
+        self.header_panel.show_frame(raw)
+        return True
+
     def _on_frame_received(self, raw: bytes, elapsed_us: float):
         # Fed before elapsed_us's below -1.0 -> None normalization - the
         # logger does its own "negative means unknown" handling and pairs
@@ -1890,9 +1967,7 @@ class MainWindow(QMainWindow):
         # was never armed for this kind).
         if self._awaiting_kind == "remote_programming":
             self._last_received_frame = raw
-            if self._rx_test_window is not None:
-                self._rx_test_window.show_frame(raw)
-            self.header_panel.show_frame(raw)
+            self._update_frame_display(raw)
             if elapsed_us is not None:
                 self.remote_programming_tab.show_response_time(elapsed_us)
             self.remote_prog_ctrl.on_frame(raw, elapsed_us)
@@ -1921,13 +1996,12 @@ class MainWindow(QMainWindow):
             self.header_panel.show_chip_id_response(raw)
             return
 
-        if self._rx_test_window is not None:
-            self._rx_test_window.show_frame(raw)
-
         # One global HeaderPanel now (not one per tab) - it always shows
         # whatever frame was most recently received, regardless of which
-        # tab/command it came from.
-        self.header_panel.show_frame(raw)
+        # tab/command it came from. show_display also gates the
+        # per-command result dispatch below (LED matrix repaint etc.) on
+        # the same throttle cadence - see _update_frame_display's docstring.
+        show_display = self._update_frame_display(raw)
 
         # kind is None for a stray/unsolicited frame with nothing in flight
         # (e.g. one that arrived after its own timeout already fired) -
@@ -1936,7 +2010,12 @@ class MainWindow(QMainWindow):
         if spec is None:
             return
 
+        # Always taken regardless of show_display - just clears the
+        # in-flight target attribute so a later stray frame can't reuse a
+        # stale one, not a display update.
         target = self._take_target(spec)
+        if not show_display:
+            return
 
         # Response time first, so a round-trip that did come back still
         # reports its timing even if the payload then fails to parse.

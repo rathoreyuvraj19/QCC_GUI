@@ -1088,7 +1088,24 @@ class RemoteProgrammingTab(QWidget):
 
     def on_op_row(self, op: str, q: int, parsed):
         if op == OP_LINK_CHECK:
-            if isinstance(parsed, bl.MssLinkResponse):
+            if isinstance(parsed, bl.MssLinkResponse) and not parsed.checksum_ok:
+                # A slot whose bytes happen to start with BL_HEADER (0xAA)
+                # and carry CT_LINK/CT_LINK_RESPONSE in byte 2 is not proof
+                # a real QTRM answered - bl.parse_slot() only returns None
+                # for a fully all-zero slice, so stale/garbage bytes left
+                # in QCC's DMA buffer for a non-responding QTRM can still
+                # coincidentally parse as an MssLinkResponse. checksum_ok
+                # (computed the same way as every other checksum check in
+                # this app - header_panel/frame_logger/timing_tab all gate
+                # on it) is what actually distinguishes a real reply from
+                # that - this branch used to skip it entirely and mark
+                # such slots "Linked" with whatever garbage b1_b4 came
+                # along for the ride.
+                self.link_matrix.set_one(q, _FAIL_QCOLOR)
+                self.link_table.item(q, 1).setText("Bad Checksum")
+                self.link_table.item(q, 2).setText(
+                    " ".join(f"{b:02X}" for b in parsed.b1_b4))
+            elif isinstance(parsed, bl.MssLinkResponse):
                 self.link_matrix.set_one(q, _OK_QCOLOR)
                 self.link_table.item(q, 1).setText("Linked")
                 self.link_table.item(q, 2).setText(

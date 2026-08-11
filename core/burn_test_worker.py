@@ -36,7 +36,7 @@ and answering every query (100% loss, confirmed against real hardware
 
 Usage:
     worker = BurnTestWorker(qcc_ip, qcc_port, BurnTestWorker.PAYLOAD_LINK_TEST,
-                             interval_s=0.001, local_port=local_port)
+                             interval_s=0.001, local_port=local_port, source_port=source_port)
     worker.stats_ready.connect(...)        # dict, ~10 Hz
     worker.rows_ready.connect(...)         # list of CSV rows (core.frame_logger.CSV_COLUMNS order), ~10 Hz
     worker.link_result_ready.connect(...)  # list of 96 bools, ~10 Hz, Link Test payload only
@@ -127,20 +127,20 @@ class BurnTestWorker(QThread):
     frame_received = Signal(bytes)        # most recent raw reply, throttled to the same ~10Hz tick as stats_ready
 
     def __init__(self, qcc_ip: str, qcc_port: int, payload_kind: str,
-                 interval_s: float, local_port: int, parent=None):
+                 interval_s: float, local_port: int, source_port: int = None, parent=None):
         super().__init__(parent)
         self.qcc_ip = qcc_ip
         self.qcc_port = qcc_port
         self.payload_kind = payload_kind
         self.interval_s = interval_s
         self.local_port = local_port
+        self.source_port = source_port if source_port is not None else local_port
         self._running = False
 
     def run(self):
         try:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
             # Real QCC hardware sends its responses to the port it's
-            # actually paired with (the interactive connection's Local
+            # actually paired with (the interactive connection's GUI Listen
             # Port), not to whichever port a query happened to come from -
             # confirmed against real hardware, where binding to an
             # arbitrary ephemeral port (like UdpWorker does for a normal
@@ -148,23 +148,21 @@ class BurnTestWorker(QThread):
             # kept working fine on its own port. main_window.py pauses the
             # interactive UdpWorker and hands this exact port over for the
             # run's duration, then reconnects it afterward.
-            #
-            # Deliberately NOT sock.connect()'d - a connected UDP socket
-            # only accepts datagrams whose *source* address AND port match
-            # the connected peer exactly. QCC's reply-source port is a
-            # separate, DIP-derived port (its own outbound source port,
-            # documented as "QCC Source Port" in QCC_Protocol.docx's
-            # transport appendix), not self.qcc_port ("QCC Listen Port",
-            # the destination port queries are sent to) - so a connected
-            # socket silently discarded every real reply even though QCC
-            # was receiving and answering every query (confirmed 2026-08-11:
-            # Burn Test showed 100% loss while the interactive connection,
-            # which uses an unconnected recvfrom(), kept working fine on
-            # the same link). sendto()/recvfrom() below match UdpWorker's
-            # already-working RX model instead.
-            sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-            sock.bind(("0.0.0.0", self.local_port))
-            sock.setblocking(False)
+            recv_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            recv_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            recv_sock.bind(("0.0.0.0", self.local_port))
+            recv_sock.setblocking(False)
+
+            # Same GUI Source Port split as UdpWorker: sends go out on their
+            # own socket when source_port differs from local_port (e.g. to
+            # match Wireshark's expected 4xxx/5xxx port pairing), otherwise
+            # they share the one socket above.
+            if self.source_port == self.local_port:
+                send_sock = recv_sock
+            else:
+                send_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                send_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                send_sock.bind(("0.0.0.0", self.source_port))
         except OSError as e:
             self.error.emit(f"Burn Test could not open a UDP socket: {e}")
             # Always emit the "stopped" status exactly once per run(), on
@@ -175,12 +173,25 @@ class BurnTestWorker(QThread):
             self.status.emit("Burn Test stopped")
             return
 
+        # Deliberately NOT connect()'d - a connected UDP socket only
+        # accepts datagrams whose *source* address AND port match the
+        # connected peer exactly. QCC's reply-source port is a separate,
+        # DIP-derived port (its own outbound source port, documented as
+        # "QCC Source Port" in QCC_Protocol.docx's transport appendix), not
+        # self.qcc_port ("QCC Listen Port", the destination port queries
+        # are sent to) - so a connected socket silently discarded every
+        # real reply even though QCC was receiving and answering every
+        # query (confirmed 2026-08-11: Burn Test showed 100% loss while the
+        # interactive connection, which uses an unconnected recvfrom(),
+        # kept working fine on the same link). sendto()/recvfrom() below
+        # match UdpWorker's already-working RX model instead.
+
         is_link_test = self.payload_kind == self.PAYLOAD_LINK_TEST
         command_id = COMMAND_ID_LINK_TEST if is_link_test else COMMAND_ID_QCC_STATUS
         build_frame = build_link_test_frame if is_link_test else build_header_only_frame
 
         self._running = True
-        local_ip, local_port = sock.getsockname()
+        local_ip, local_port = recv_sock.getsockname()
         self.status.emit(
             f"Burn Test running from {local_ip}:{local_port} to {self.qcc_ip}:{self.qcc_port}")
 
@@ -197,7 +208,7 @@ class BurnTestWorker(QThread):
             # 1. Drain every response currently available, never blocking.
             while True:
                 try:
-                    data, _addr = sock.recvfrom(65536)
+                    data, _addr = recv_sock.recvfrom(65536)
                 except BlockingIOError:
                     break
                 except OSError as e:
@@ -222,7 +233,7 @@ class BurnTestWorker(QThread):
                 msg_number = rc_settings.peek_message_number()
                 header = rc_settings.build_header(command_id)
                 try:
-                    sock.sendto(build_frame(header), (self.qcc_ip, self.qcc_port))
+                    send_sock.sendto(build_frame(header), (self.qcc_ip, self.qcc_port))
                     pending[msg_number] = {
                         "send_perf": time.perf_counter(),
                         "tx_timestamp": _timestamp(),
@@ -297,7 +308,9 @@ class BurnTestWorker(QThread):
             "target_hz": (1.0 / self.interval_s) if self.interval_s > 0 else 0.0,
         })
 
-        sock.close()
+        if send_sock is not recv_sock:
+            send_sock.close()
+        recv_sock.close()
         # Queued signals from this thread are delivered to the GUI thread in
         # emission order, so by the time main_window.py's handler for THIS
         # status message runs, the rows_ready/stats_ready above (this

@@ -1836,6 +1836,7 @@ class MainWindow(QMainWindow):
         # calls _on_burn_test_stop(), which would immediately close the
         # CSV logger just opened above, before the run even starts.
         local_port = self.local_port_edit.value()
+        source_port = self.source_port_edit.value()
         qcc_ip = self.qcc_ip_edit.text().strip()
         qcc_port = self.qcc_port_edit.value()
         self.worker.status.disconnect(self._on_connect_status)
@@ -1847,7 +1848,8 @@ class MainWindow(QMainWindow):
         self.conn_status_label.setText("Paused for Burn Test")
 
         self._burn_test_worker = BurnTestWorker(
-            qcc_ip, qcc_port, config["payload"], config["interval_s"], local_port)
+            qcc_ip, qcc_port, config["payload"], config["interval_s"], local_port,
+            source_port=source_port)
         self._burn_test_worker.error.connect(self._on_burn_test_error)
         self._burn_test_worker.stats_ready.connect(self.burn_test_tab.show_stats)
         self._burn_test_worker.rows_ready.connect(self._burn_test_logger.append_rows)

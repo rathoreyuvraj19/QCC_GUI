@@ -18,11 +18,21 @@ interval below the real round-trip time.
 
 Binds to the SAME local port the interactive UdpWorker uses, not an
 arbitrary ephemeral one - confirmed against real hardware that the QCC
-sends responses to the port it's paired with, not to whichever port a
-query actually came from (symmetric reply-to-sender, which the mock
-responder in status_responder_app.py does, does NOT hold on real
-hardware). main_window.py pauses the interactive UdpWorker to free that
-port before starting this, and reconnects it after stopping.
+sends responses to the port it's paired with (its query destination, "QCC
+Listen Port"), not back to whichever port a query actually came from
+(symmetric reply-to-sender, which the mock responder in
+status_responder_app.py does, does NOT hold on real hardware). main_window.py
+pauses the interactive UdpWorker to free that port before starting this,
+and reconnects it after stopping.
+
+The socket is deliberately left unconnected (sendto()/recvfrom(), not
+connect()/send()/recv()) - QCC's reply arrives from its own separate,
+DIP-derived source port ("QCC Source Port" in QCC_Protocol.docx's
+transport appendix), not from qcc_port ("QCC Listen Port", the destination
+queries are sent to), so a connect()'d socket's peer-address/port RX
+filter silently discarded every real reply even while QCC was receiving
+and answering every query (100% loss, confirmed against real hardware
+2026-08-11).
 
 Usage:
     worker = BurnTestWorker(qcc_ip, qcc_port, BurnTestWorker.PAYLOAD_LINK_TEST,
@@ -30,6 +40,7 @@ Usage:
     worker.stats_ready.connect(...)        # dict, ~10 Hz
     worker.rows_ready.connect(...)         # list of CSV rows (core.frame_logger.CSV_COLUMNS order), ~10 Hz
     worker.link_result_ready.connect(...)  # list of 96 bools, ~10 Hz, Link Test payload only
+    worker.frame_received.connect(...)     # bytes, most recent raw reply, ~10 Hz
     worker.error.connect(...)
     worker.start()
     ...
@@ -113,6 +124,7 @@ class BurnTestWorker(QThread):
     stats_ready = Signal(object)          # dict: sent/ok/timeouts/errors/achieved_hz/target_hz
     rows_ready = Signal(object)           # list: batched CSV-ready rows
     link_result_ready = Signal(object)    # list: 96 bools, most recent Link Test reply
+    frame_received = Signal(bytes)        # most recent raw reply, throttled to the same ~10Hz tick as stats_ready
 
     def __init__(self, qcc_ip: str, qcc_port: int, payload_kind: str,
                  interval_s: float, local_port: int, parent=None):
@@ -136,9 +148,22 @@ class BurnTestWorker(QThread):
             # kept working fine on its own port. main_window.py pauses the
             # interactive UdpWorker and hands this exact port over for the
             # run's duration, then reconnects it afterward.
+            #
+            # Deliberately NOT sock.connect()'d - a connected UDP socket
+            # only accepts datagrams whose *source* address AND port match
+            # the connected peer exactly. QCC's reply-source port is a
+            # separate, DIP-derived port (its own outbound source port,
+            # documented as "QCC Source Port" in QCC_Protocol.docx's
+            # transport appendix), not self.qcc_port ("QCC Listen Port",
+            # the destination port queries are sent to) - so a connected
+            # socket silently discarded every real reply even though QCC
+            # was receiving and answering every query (confirmed 2026-08-11:
+            # Burn Test showed 100% loss while the interactive connection,
+            # which uses an unconnected recvfrom(), kept working fine on
+            # the same link). sendto()/recvfrom() below match UdpWorker's
+            # already-working RX model instead.
             sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             sock.bind(("0.0.0.0", self.local_port))
-            sock.connect((self.qcc_ip, self.qcc_port))
             sock.setblocking(False)
         except OSError as e:
             self.error.emit(f"Burn Test could not open a UDP socket: {e}")
@@ -163,6 +188,7 @@ class BurnTestWorker(QThread):
         rows = []
         sent = ok = timeouts = errors = 0
         last_link_flags = None
+        last_raw_frame = None
         next_send = time.perf_counter()
         last_stats_tick = next_send
         sent_at_last_tick = 0
@@ -171,7 +197,7 @@ class BurnTestWorker(QThread):
             # 1. Drain every response currently available, never blocking.
             while True:
                 try:
-                    data = sock.recv(65536)
+                    data, _addr = sock.recvfrom(65536)
                 except BlockingIOError:
                     break
                 except OSError as e:
@@ -179,6 +205,7 @@ class BurnTestWorker(QThread):
                     self.error.emit(f"Burn Test receive error: {e}")
                     break
                 recv_perf = time.perf_counter()
+                last_raw_frame = data
                 row, link_flags = self._handle_response(data, recv_perf, pending, is_link_test)
                 if row is not None:
                     rows.append(row)
@@ -195,7 +222,7 @@ class BurnTestWorker(QThread):
                 msg_number = rc_settings.peek_message_number()
                 header = rc_settings.build_header(command_id)
                 try:
-                    sock.send(build_frame(header))
+                    sock.sendto(build_frame(header), (self.qcc_ip, self.qcc_port))
                     pending[msg_number] = {
                         "send_perf": time.perf_counter(),
                         "tx_timestamp": _timestamp(),
@@ -244,6 +271,9 @@ class BurnTestWorker(QThread):
                 if last_link_flags is not None:
                     self.link_result_ready.emit(last_link_flags)
                     last_link_flags = None
+                if last_raw_frame is not None:
+                    self.frame_received.emit(last_raw_frame)
+                    last_raw_frame = None
                 last_stats_tick = now
                 sent_at_last_tick = sent
 

@@ -1852,6 +1852,11 @@ class MainWindow(QMainWindow):
         self._burn_test_worker.stats_ready.connect(self.burn_test_tab.show_stats)
         self._burn_test_worker.rows_ready.connect(self._burn_test_logger.append_rows)
         self._burn_test_worker.link_result_ready.connect(self.burn_test_tab.show_link_results)
+        # Same throttled-repaint path the interactive connection uses (both
+        # tick at DISPLAY_UPDATE_MIN_INTERVAL_S/_STATS_INTERVAL_S = 100ms) -
+        # keeps "LAST RECEIVED HEADER" live during a Burn Test run instead
+        # of freezing at whatever it last showed before the run started.
+        self._burn_test_worker.frame_received.connect(self._update_frame_display)
         self._burn_test_worker.status.connect(self._on_burn_test_worker_status)
         self._burn_test_worker.start()
 

@@ -1232,7 +1232,17 @@ class MainWindow(QMainWindow):
         """
         self._awaiting_kind = kind
         if self._pending_timer is not None:
+            # deleteLater(), not just stop()+drop the Python reference: this
+            # QTimer is parented to `self` (QTimer(self) below), so Qt's C++
+            # parent-child ownership keeps it alive as an orphaned child of
+            # MainWindow forever otherwise - losing the Python reference
+            # doesn't destroy it. Confirmed via findChildren(QTimer): 500
+            # command sends without this leaked 500 QTimer objects (one per
+            # _begin_wait call). At a 0.01s auto-resend interval that's ~100
+            # leaked timers/sec, which is what was driving the reported GUI
+            # RAM growth and eventual hang.
             self._pending_timer.stop()
+            self._pending_timer.deleteLater()
         self._pending_timer = QTimer(self)
         self._pending_timer.setSingleShot(True)
         self._pending_timer.timeout.connect(lambda: self._on_response_timeout(kind))
@@ -1249,6 +1259,7 @@ class MainWindow(QMainWindow):
         """
         if self._pending_timer is not None:
             self._pending_timer.stop()
+            self._pending_timer.deleteLater()
             self._pending_timer = None
 
     def _send_frame(self, frame: bytes):
@@ -1324,6 +1335,7 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
             if self._pending_timer is not None:
                 self._pending_timer.stop()
+                self._pending_timer.deleteLater()
                 self._pending_timer = None
         elif not self._check_not_busy():
             return
@@ -1388,6 +1400,7 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
             if self._pending_timer is not None:
                 self._pending_timer.stop()
+                self._pending_timer.deleteLater()
                 self._pending_timer = None
         elif not self._check_not_busy():
             return
@@ -1450,6 +1463,7 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
             if self._pending_timer is not None:
                 self._pending_timer.stop()
+                self._pending_timer.deleteLater()
                 self._pending_timer = None
         elif not self._check_not_busy():
             return
@@ -1562,6 +1576,7 @@ class MainWindow(QMainWindow):
             self._awaiting_kind = None
             if self._pending_timer is not None:
                 self._pending_timer.stop()
+                self._pending_timer.deleteLater()
                 self._pending_timer = None
         elif not self._check_not_busy():
             return

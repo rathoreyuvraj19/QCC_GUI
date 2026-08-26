@@ -40,7 +40,8 @@ from PySide6.QtWidgets import (
 
 from core.packet import (
     LRUSlot, QCCHeaderRx, QCCHeaderTx, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
-    CMD_RESERVED, CMD_SOFT_RESET, channels_per_lru, crc8, lru_slot_size,
+    CMD_RESERVED, CMD_SOFT_RESET, channels_per_lru, crc8, lru_packet_size_id,
+    lru_slot_size,
     num_lru, total_packet_size,
     STATUS_TYPE_ACK, STATUS_TYPE_LINK, STATUS_TYPE_HEALTH,
     STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
@@ -160,10 +161,16 @@ def _mock_mfg_reply(lru_index: int, query_slot: bytes) -> bytes:
 
 def _mock_diagnostic_reply(lru_index: int, query_slot: bytes) -> bytes:
     diagnostic_type = (query_slot[3] >> 4) & 0x0F
-    msg_len = 30  # Diagnostic responses are always full Dwell-size, regardless of the 10-byte query
-    body = bytearray(lru_slot_size())
+    # Diagnostic responses are always full Dwell-size, regardless of the
+    # 10-byte query - so the message fills the whole slot, whatever the
+    # configured channel count makes that.
+    msg_len = lru_slot_size()
+    body = bytearray(msg_len)
     body[0] = LRUSlot.HEADER_BYTE
-    body[1] = 0x04
+    # Packet Size Identifier IS the channel count; a literal 0x04 here would
+    # tell the receiver to expect a 30-byte message inside a wider slot, and
+    # its message_length() check would reject the reply.
+    body[1] = lru_packet_size_id()
     body[2] = query_slot[2]
     body[3] = (diagnostic_type << 4) | STATUS_TYPE_DIAGNOSTIC
     body[5] = 200 + (lru_index % 10)  # Total PRT Count

@@ -22,7 +22,7 @@ Operation flow (per the IDD + decisions with Yuvraj 2026-07-08/18):
      0-95): only the target's slot carries it, the other 95 slots are
      all-zero so only that LRU drops to low-speed.
   2. Mode Step 2 - tell QCC itself to switch to low-speed: a bare 90-byte
-     header-only frame (RE-DECIDED 2026-07-19 - was a 2970-byte
+     header-only frame (RE-DECIDED 2026-07-19 - was a standard-frame
      header-only frame before) with byte 34 (SubCommand) =
      QCC_BODY_SWITCH_LOW_SPEED (0x01). Byte 34 of every Remote Programming
      frame is a SubCommand selector QCC itself reads and acts on - 0x00
@@ -31,7 +31,7 @@ Operation flow (per the IDD + decisions with Yuvraj 2026-07-08/18):
      along in the 0x01/0x02 frames: QCC latches it into its LRU-select
      mux for the whole low-speed session, so every subsequent SubCommand
      0x00 frame reaches only the selected LRU (0-95) or all 96 (0xFF),
-     and QCC zero-fills the non-selected slots in its 2970-byte responses.
+     and QCC zero-fills the non-selected slots in its responses.
   3. Link Check - broadcast a Link Request (0x30); each LRU's processor
      answers with its 0x34-tagged link response (B1 B2 B3 B4 body).
   4. Get LRU Info / Upload bitstream / Authenticate / Program / Verify -

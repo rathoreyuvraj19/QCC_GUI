@@ -8,7 +8,7 @@ Transcribed from bootloader_packet_spec.yaml (itself a first-pass
 digitization of photographed Word-doc tables, NOT yet verified against the
 original source document).
 
-This is a SEPARATE protocol from packet.py's QCC/LRU 2970-byte frame - do
+This is a SEPARATE protocol from packet.py's QCC/LRU frame - do
 not conflate the two: different framing, different sizes, different Command
 Type space. QCC never parses these 10 bytes; it strips the outer 90-byte
 header and broadcasts [payload + command] identically to all 96 LRUs over
@@ -423,7 +423,7 @@ CONTEXT_LRU_INFO = "lru_info"      # Get LRU Info poll in flight - firmware's
 def parse_slot(raw10: bytes, context: str = CONTEXT_FW_UPDATE):
     """
     Parse one LRU's raw 10-byte bootloader response (the first 10 bytes of
-    its 30-byte slot in the standard 2970-byte RX frame).
+    its slot in the standard RX frame).
 
     Returns None for an all-zero slice (that LRU hasn't responded yet), a
     typed dataclass for recognized packets, or UnknownSlot for anything

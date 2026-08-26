@@ -119,7 +119,7 @@ class MockBootloaderResponder(QThread):
 
         Four TX frame shapes (per Yuvraj - see core/packet.py's
         RP_CMD_FRAME_SIZE comment):
-        1. Mode Step 1 (2970 bytes): 90-byte header + 96 x 30-byte LRU
+        1. Mode Step 1 (standard frame): 90-byte header + one LRU
            slots, each slot's first 10 bytes carrying the SAME bootloader
            mode-change command (LRUs are still individually addressed at
            this point, not yet in the QCC's shared low-speed FIFO).
@@ -289,7 +289,7 @@ class MockBootloaderResponder(QThread):
     def _build_response_frame(self, query_header: bytes, build_slots_fn,
                               respond_slots=None) -> bytes:
         """
-        Build a 2970-byte response frame by echoing the query header and
+        Build a standard-frame response by echoing the query header and
         filling LRU slots using build_slots_fn (a callable that returns
         the 30-byte slot data for each LRU index).
 

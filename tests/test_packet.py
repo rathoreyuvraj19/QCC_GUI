@@ -43,7 +43,8 @@ from core.packet import (  # noqa: E402
     RP_LRU_SELECT_BROADCAST, RP_PAYLOAD_SIZE, RP_QCC_LEVEL_FRAME_SIZE,
     ChipIdResponse, LRUChannel, LRUSlot, QCCHeaderRx, QCCHeaderTx,
     CMD_STATUS, DIAGNOSTIC_TYPE_FUTURE_BUFFER,
-    STATUS_TYPE_DIAGNOSTIC, STATUS_TYPE_LINK,
+    STATUS_TYPE_ACK, STATUS_TYPE_DIAGNOSTIC, STATUS_TYPE_ERR_LOG,
+    STATUS_TYPE_HEALTH, STATUS_TYPE_LINK, STATUS_TYPE_MFG,
     channels_per_lru, lru_block_size, lru_packet_size_id, lru_slot_size,
     message_length, num_lru, total_packet_size,
     build_broadcast_bootloader_frame, build_cal_frame, build_chip_id_response,
@@ -1047,6 +1048,81 @@ class TestArrayShape(unittest.TestCase):
                     lru_config.LRUConfig(bad, 4)
                 with self.assertRaises(lru_config.ConfigError):
                     lru_config.LRUConfig(96, bad)
+
+
+class TestMockResponderShape(unittest.TestCase):
+    """
+    The mock responder's replies must parse with the real parsers at any
+    array shape.
+
+    This exists because the builders all agreeing on a size is not the same
+    as a reply being *decodable*: the responder hardcoded a Packet Size
+    Identifier of 0x04 in its Diagnostic reply, which is a legal-looking
+    byte that silently means "30-byte message". At 4 channels that is
+    correct and everything passed; at 24 it told the parser to expect a
+    30-byte message inside a 130-byte slot, and every Diagnostic reply was
+    rejected. Nothing in the size-only tests could catch that.
+    """
+
+    SHAPES = [(96, 4), (48, 24), (8, 6), (12, 1)]
+
+    def tearDown(self):
+        lru_config.set_config(REFERENCE)
+
+    def test_every_status_type_round_trips(self):
+        # Imported lazily - it pulls in PySide6.
+        from apps.status_responder_app import build_mock_response_frame
+
+        for n_lru, n_ch in self.SHAPES:
+            lru_config.set_config(lru_config.LRUConfig(n_lru, n_ch))
+            # LINK is deliberately absent: it has no parse_status_frame()
+            # parser, being handled by parse_link_test_response() instead -
+            # covered by test_link_replies_are_valid_at_every_shape below.
+            for name, status_type, sub in (
+                ("ACK", STATUS_TYPE_ACK, 0),
+                ("HEALTH", STATUS_TYPE_HEALTH, 0),
+                ("ERR_LOG", STATUS_TYPE_ERR_LOG, 0),
+                ("MFG", STATUS_TYPE_MFG, 0),
+                ("DIAGNOSTIC", STATUS_TYPE_DIAGNOSTIC, DIAGNOSTIC_TYPE_FUTURE_BUFFER),
+            ):
+                with self.subTest(num_lru=n_lru, channels=n_ch, status=name):
+                    query = build_status_frame(status_type, sub_status_type=sub)
+                    reply, _replied = build_mock_response_frame(query)
+                    self.assertEqual(len(reply), total_packet_size())
+                    decoded = parse_status_frame(reply, status_type, sub)
+                    self.assertEqual(
+                        sum(1 for d in decoded if d is not None), n_lru,
+                        f"{name} replies did not decode at {n_lru}x{n_ch}")
+
+    def test_diagnostic_reply_declares_the_real_channel_count(self):
+        from apps.status_responder_app import build_mock_response_frame
+
+        for n_lru, n_ch in self.SHAPES:
+            with self.subTest(num_lru=n_lru, channels=n_ch):
+                lru_config.set_config(lru_config.LRUConfig(n_lru, n_ch))
+                query = build_status_frame(
+                    STATUS_TYPE_DIAGNOSTIC, sub_status_type=DIAGNOSTIC_TYPE_FUTURE_BUFFER)
+                reply, _ = build_mock_response_frame(query)
+                slot = reply[HEADER_SIZE:HEADER_SIZE + lru_slot_size()]
+                # The byte that broke: it must be the channel count, so that
+                # message_length() resolves to the full slot.
+                self.assertEqual(slot[1], n_ch)
+                self.assertEqual(message_length(slot[1]), lru_slot_size())
+                decoded = parse_status_frame(
+                    reply, STATUS_TYPE_DIAGNOSTIC, DIAGNOSTIC_TYPE_FUTURE_BUFFER)
+                self.assertEqual(len(decoded[0]["channels"]), n_ch)
+
+    def test_link_replies_are_valid_at_every_shape(self):
+        from apps.status_responder_app import build_mock_response_frame
+
+        for n_lru, n_ch in self.SHAPES:
+            with self.subTest(num_lru=n_lru, channels=n_ch):
+                lru_config.set_config(lru_config.LRUConfig(n_lru, n_ch))
+                reply, _ = build_mock_response_frame(build_link_test_frame())
+                flags = parse_link_test_response(reply)
+                self.assertEqual(len(flags), n_lru)
+                self.assertTrue(all(flags))
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

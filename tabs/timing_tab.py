@@ -5,7 +5,7 @@ timing_tab.py
 SOB_INTERNAL_GEN, and PPS_INTERNAL_GEN commands from
 docs/idd/packet_spec.yaml (redesigned 2026-07-09: each is now its own flat
 QCC_COMMAND value rather than a Mode 1/2 Loopback sub-command). Unlike
-every other command tab (which targets individual LRUs via the 2880-byte
+every other command tab (which targets individual LRUs via the
 LRU data block), these commands live entirely in the 90-byte header's
 Message Body (bytes 34-89 = that command's fields, no in-body selector
 byte anymore - qcc_command itself picks the command) - the LRU data block

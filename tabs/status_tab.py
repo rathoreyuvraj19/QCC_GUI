@@ -1,33 +1,33 @@
 """
 status_tab.py
 
-"Status" - the remaining Status Types from Section 10 of the QTRM Message
+"Status" - the remaining Status Types from Section 10 of the LRU Message
 Format IDD that don't already have their own dedicated tab: ACK, HEALTH,
 TRM Err. Log, TRM Mfg. Details, and DIAGNOSTIC (which has its own further
 sub-type: Detailed Health / Future Buffer / Present Buffer - ADAR Status is
-not offered, not implemented on the QTRM side). LINK already has the Link
+not offered, not implemented on the LRU side). LINK already has the Link
 Test tab; No Status means nothing comes back, so neither is offered here.
-Beam Register Address is likewise not implemented on the QTRM side, so it's
+Beam Register Address is likewise not implemented on the LRU side, so it's
 never sent (always 0) and has no UI control.
 
 Mirrors Link Test's exact interaction pattern: a "Send All" button (with the
-same optional auto-resend) queries every QTRM with whichever Status Type
+same optional auto-resend) queries every LRU with whichever Status Type
 (and, for ACK/DIAGNOSTIC, sub-parameters) is currently selected, and colors
 a 96-cell LED matrix grey/green/red for pending/responded/no-response,
 reusing link_test_tab.py's LedMatrix as-is. Clicking one LED queries just
-that QTRM (mirroring Link Test's individual mode: the whole array greys out
+that LRU (mirroring Link Test's individual mode: the whole array greys out
 first, then only that one LED reveals) and populates a "Details" panel
-below with the actual decoded fields for that one QTRM.
+below with the actual decoded fields for that one LRU.
 
 On top of that, a row of mutually-exclusive checkable buttons (one per
 decoded field for the current Status Type/Diagnostic Type, highlighted when
 selected) lets a specific field's *value* be displayed directly on every
-QTRM's cell alongside "QTRM-N" - e.g. selecting "Temperature Status" under
-HEALTH shows every QTRM's temperature reading at a glance across the whole
+LRU's cell alongside "LRU-N" - e.g. selecting "Temperature Status" under
+HEALTH shows every LRU's temperature reading at a glance across the whole
 matrix. Only one field can be shown at a time (selecting one deselects any
 other); deselecting all of them reverts every cell back to its plain
-"QTRM-N" label. This is separate from - and doesn't change - the Details
-panel, which always shows the full decoded payload for whichever QTRM was
+"LRU-N" label. This is separate from - and doesn't change - the Details
+panel, which always shows the full decoded payload for whichever LRU was
 last individually queried. Switching to a different tab (or back to this
 one) resets the whole matrix to idle, since a previous query's results
 don't apply to whatever gets selected/sent next.
@@ -117,9 +117,9 @@ _CHANNEL_FIELD_LABELS = {
     "rx_atten": "Rx Atten",
 }
 
-# Which top-level decoded fields can be shown on the QTRM matrix cells, per
+# Which top-level decoded fields can be shown on the LRU matrix cells, per
 # Status Type - "channels" (Diagnostic's per-channel breakdown) and
-# "beam_data_register_address" (not implemented on the QTRM side) are
+# "beam_data_register_address" (not implemented on the LRU side) are
 # deliberately excluded; they still appear in the Details panel below.
 _FILTERABLE_FIELDS = {
     STATUS_TYPE_ACK: ["message_id", "echoed_bytes"],
@@ -152,7 +152,7 @@ _TX_FORWARD_FIELD = "tx_forward_rf_status"
 
 # Health's temperature_status field (a raw 0-255 status byte - see
 # parse_health_response in core/packet.py) gets a user-set cutoff: any
-# responded QTRM whose value exceeds it is overlaid orange instead of the
+# responded LRU whose value exceeds it is overlaid orange instead of the
 # normal green, independent of whichever field "Show Field" is currently
 # displaying. Only meaningful under HEALTH, since that's the only Status
 # Type with this field at the top level.
@@ -219,7 +219,7 @@ class StatusTab(QWidget):
     # still-unanswered previous send must not pop a modal "Busy" warning
     # every tick (same contract as link_test_tab's send_requested).
     send_all_requested = Signal(int, int, int, bool)
-    # qtrm_index (0-based), status_type, sub_status_type, beam_register_address (always 0)
+    # lru_index (0-based), status_type, sub_status_type, beam_register_address (always 0)
     individual_send_requested = Signal(int, int, int, int)
 
     def __init__(self, parent=None):
@@ -376,7 +376,7 @@ class StatusTab(QWidget):
         # radio-button group once anything is checked (it won't let the
         # last checked button go back to unchecked), but "toggle one at a
         # time" here needs a genuine none-checked state too (that's what
-        # reverts every cell back to "QTRM-N"). Exclusivity is enforced
+        # reverts every cell back to "LRU-N"). Exclusivity is enforced
         # manually in _on_checkbox_toggled instead.
         self.filter_button_group.setExclusive(False)
         self.filter_button_group.buttonToggled.connect(self._on_checkbox_toggled)
@@ -432,7 +432,7 @@ class StatusTab(QWidget):
                 widget.deleteLater()
 
         # Thermal Shutdown Config always shows both its fields together on
-        # the QTRM cells (see _set_led_text_for_one) - a single-field
+        # the LRU cells (see _set_led_text_for_one) - a single-field
         # picker doesn't apply here, so skip building it.
         self.show_field_label.setVisible(not self._is_thermal_config())
         if self._is_thermal_config():
@@ -468,7 +468,7 @@ class StatusTab(QWidget):
             # Manual exclusivity: selecting one deselects every other one -
             # "toggle one at a time" - but unlike Qt's built-in exclusive
             # mode, deselecting the active one is still allowed (reverts to
-            # no filter / plain "QTRM-N" labels).
+            # no filter / plain "LRU-N" labels).
             for other in self.filter_button_group.buttons():
                 if other is not button and other.isChecked():
                     other.blockSignals(True)
@@ -496,7 +496,7 @@ class StatusTab(QWidget):
             self.led_matrix.set_results([r is not None for r in self._results])
             self._apply_temp_highlight(self._results)
 
-    # -- temperature cutoff (HEALTH only): orange overlay on responded QTRMs
+    # -- temperature cutoff (HEALTH only): orange overlay on responded LRUs
     # whose temperature_status exceeds the cutoff --------------------------
 
     def _is_health(self) -> bool:
@@ -523,7 +523,7 @@ class StatusTab(QWidget):
         )
 
     def _apply_temp_highlight(self, results):
-        """Overlay orange on every responded QTRM over cutoff - leaves
+        """Overlay orange on every responded LRU over cutoff - leaves
         non-responding cells (never colored green to begin with) alone."""
         if not self._is_health() or self._current_filter_field() != _TEMP_FIELD:
             return
@@ -546,20 +546,20 @@ class StatusTab(QWidget):
 
     def _reset_led_texts(self):
         for i, led in enumerate(self.led_matrix._leds):
-            led.setText(f"QTRM-{i}")
-            led.setToolTip(f"QTRM-{i} - click to query just this QTRM")
+            led.setText(f"LRU-{i}")
+            led.setToolTip(f"LRU-{i} - click to query just this LRU")
 
-    # Hover tooltip: every decoded field for this QTRM, not just whichever
+    # Hover tooltip: every decoded field for this LRU, not just whichever
     # one "Show Field" currently has selected on the cell itself - lets the
     # operator see the full response without switching filters or clicking
     # into the Details panel below.
-    def _tooltip_for_result(self, qtrm_index: int, decoded) -> str:
+    def _tooltip_for_result(self, lru_index: int, decoded) -> str:
         if decoded is None:
-            return f"QTRM-{qtrm_index} - click to query just this QTRM"
+            return f"LRU-{lru_index} - click to query just this LRU"
         # Rich text (the popup QLabel auto-detects HTML) - Op Mode/Control/
         # Operation Command Type values and the Ch1-4 channel headers are
         # bolded per Yuvraj's ask, everything else stays plain.
-        lines = [f"<b>QTRM-{qtrm_index}</b>"]
+        lines = [f"<b>LRU-{lru_index}</b>"]
         for key, value in decoded.items():
             if key == "channels":
                 continue
@@ -589,27 +589,27 @@ class StatusTab(QWidget):
         for i, result in enumerate(results):
             self._set_led_text_for_one(i, result, field)
 
-    def _set_led_text_for_one(self, qtrm_index: int, decoded, field=None):
-        led = self.led_matrix._leds[qtrm_index]
-        led.setToolTip(self._tooltip_for_result(qtrm_index, decoded))
+    def _set_led_text_for_one(self, lru_index: int, decoded, field=None):
+        led = self.led_matrix._leds[lru_index]
+        led.setToolTip(self._tooltip_for_result(lru_index, decoded))
         if self._is_thermal_config():
             # No single-field picker for this Status Type - always show
             # both the cutoff value (degrees C) and EN/DI state together.
             if decoded is not None and "temp_cutoff_value" in decoded and "temp_cutoff_enable" in decoded:
                 state = "EN" if decoded["temp_cutoff_enable"] else "DI"
-                led.setText(f"QTRM-{qtrm_index}: Cutoff: {decoded['temp_cutoff_value']}°C ({state})")
+                led.setText(f"LRU-{lru_index}: Cutoff: {decoded['temp_cutoff_value']}°C ({state})")
             else:
-                led.setText(f"QTRM-{qtrm_index}")
+                led.setText(f"LRU-{lru_index}")
             return
         if field is None:
             field = self._current_filter_field()
         if field is not None and decoded is not None and field in decoded:
-            # Keep the QTRM number visible alongside the filtered value, on
+            # Keep the LRU number visible alongside the filtered value, on
             # the same line - otherwise it's ambiguous which cell is which
             # once every label has been replaced by a bare number.
-            led.setText(f"QTRM-{qtrm_index}: {_format_field(field, decoded[field])}")
+            led.setText(f"LRU-{lru_index}: {_format_field(field, decoded[field])}")
         else:
-            led.setText(f"QTRM-{qtrm_index}")
+            led.setText(f"LRU-{lru_index}")
 
     # -- export to Excel -----------------------------------------------------
 
@@ -617,7 +617,7 @@ class StatusTab(QWidget):
         """
         Which fields to put in the export, in on-screen display order:
         just the one field currently selected via "Show Field" if one is
-        selected (mirrors what's actually highlighted/visible on the QTRM
+        selected (mirrors what's actually highlighted/visible on the LRU
         cells right now), otherwise every filterable field for the current
         Status Type/Diagnostic Type (i.e. everything the "Show Field" row
         currently offers) - same order _current_fields() already returns,
@@ -632,7 +632,7 @@ class StatusTab(QWidget):
         if self._results is None:
             QMessageBox.warning(
                 self, "Nothing to export",
-                "Run 'Send All' first to gather QTRM data before exporting.",
+                "Run 'Send All' first to gather LRU data before exporting.",
             )
             return
 
@@ -650,12 +650,12 @@ class StatusTab(QWidget):
         wb = Workbook()
         ws = wb.active
         ws.title = "Status"
-        ws.append(["QTRM"] + [_FIELD_LABELS.get(f, f.replace("_", " ").title()) for f in fields])
-        for qtrm_index, decoded in enumerate(self._results):
+        ws.append(["LRU"] + [_FIELD_LABELS.get(f, f.replace("_", " ").title()) for f in fields])
+        for lru_index, decoded in enumerate(self._results):
             if decoded is None:
-                row = [qtrm_index] + ["No Response"] * len(fields)
+                row = [lru_index] + ["No Response"] * len(fields)
             else:
-                row = [qtrm_index] + [_format_value(decoded[f]) if f in decoded else "" for f in fields]
+                row = [lru_index] + [_format_value(decoded[f]) if f in decoded else "" for f in fields]
             ws.append(row)
 
         try:
@@ -668,9 +668,9 @@ class StatusTab(QWidget):
     # -- details panel -------------------------------------------------------
 
     def _build_details_group(self):
-        box = QGroupBox("Details (last individually-queried QTRM)")
+        box = QGroupBox("Details (last individually-queried LRU)")
         self.details_layout = QVBoxLayout(box)
-        self.details_placeholder = QLabel("Click one QTRM cell above to see its decoded response here.")
+        self.details_placeholder = QLabel("Click one LRU cell above to see its decoded response here.")
         self.details_layout.addWidget(self.details_placeholder)
         return box
 
@@ -707,9 +707,9 @@ class StatusTab(QWidget):
     def _clear_details_layout(self):
         self._clear_layout_recursive(self.details_layout)
 
-    def _populate_details(self, qtrm_index: int, decoded: dict):
+    def _populate_details(self, lru_index: int, decoded: dict):
         self._clear_details_layout()
-        self.details_box.setTitle(f"Details - QTRM-{qtrm_index}")
+        self.details_box.setTitle(f"Details - LRU-{lru_index}")
 
         # Fill columns left-to-right first, then wrap to a new row - rather
         # than one field per row (QFormLayout), which left most of the
@@ -744,8 +744,8 @@ class StatusTab(QWidget):
 
     def _clear_details_to_placeholder(self):
         self._clear_details_layout()
-        self.details_box.setTitle("Details (last individually-queried QTRM)")
-        self.details_placeholder = QLabel("Click one QTRM cell above to see its decoded response here.")
+        self.details_box.setTitle("Details (last individually-queried LRU)")
+        self.details_placeholder = QLabel("Click one LRU cell above to see its decoded response here.")
         self.details_layout.addWidget(self.details_placeholder)
 
     # -- full-array send (Send All button, with optional auto-resend) ------
@@ -833,16 +833,16 @@ class StatusTab(QWidget):
         self._reset_led_texts()
         self.tx_forward_matrix.set_all_state("no_response")
 
-    # -- individual QTRM query (click one LED) ------------------------------
+    # -- individual LRU query (click one LED) ------------------------------
 
-    def _on_led_clicked(self, qtrm_index: int):
+    def _on_led_clicked(self, lru_index: int):
         status_type, sub_status_type, beam_register_address = self._current_params()
-        self.individual_send_requested.emit(qtrm_index, status_type, sub_status_type, beam_register_address)
+        self.individual_send_requested.emit(lru_index, status_type, sub_status_type, beam_register_address)
 
-    def mark_individual_pending(self, qtrm_index: int):
-        self.summary_label.setText(f"QTRM-{qtrm_index}: waiting for response...")
+    def mark_individual_pending(self, lru_index: int):
+        self.summary_label.setText(f"LRU-{lru_index}: waiting for response...")
         self.response_time_label.setText("")
-        self._individual_target = qtrm_index
+        self._individual_target = lru_index
         self._individual_result = None
         self._last_mode = "individual"
         self.led_matrix.set_all(_PENDING_COLOR)
@@ -850,27 +850,27 @@ class StatusTab(QWidget):
         self.tx_forward_matrix.set_all_state("pending")
         self._clear_details_to_placeholder()
 
-    def show_individual_result(self, qtrm_index: int, decoded):
+    def show_individual_result(self, lru_index: int, decoded):
         self._individual_result = decoded
-        self._reveal_individual_now(qtrm_index, decoded)
+        self._reveal_individual_now(lru_index, decoded)
 
     def show_individual_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
 
-    def show_individual_no_response(self, qtrm_index: int):
-        self.summary_label.setText(f"QTRM-{qtrm_index}: No response")
-        self.led_matrix.set_one(qtrm_index, _NOT_LINKED_COLOR)
-        self.tx_forward_matrix.set_one_result(qtrm_index, None)
+    def show_individual_no_response(self, lru_index: int):
+        self.summary_label.setText(f"LRU-{lru_index}: No response")
+        self.led_matrix.set_one(lru_index, _NOT_LINKED_COLOR)
+        self.tx_forward_matrix.set_one_result(lru_index, None)
 
-    def _reveal_individual_now(self, qtrm_index: int, decoded):
+    def _reveal_individual_now(self, lru_index: int, decoded):
         if decoded is None:
-            self.led_matrix.set_one(qtrm_index, _NOT_LINKED_COLOR)
-            self.summary_label.setText(f"QTRM-{qtrm_index}: No valid response")
-            self._set_led_text_for_one(qtrm_index, None)
-            self.tx_forward_matrix.set_one_result(qtrm_index, None)
+            self.led_matrix.set_one(lru_index, _NOT_LINKED_COLOR)
+            self.summary_label.setText(f"LRU-{lru_index}: No valid response")
+            self._set_led_text_for_one(lru_index, None)
+            self.tx_forward_matrix.set_one_result(lru_index, None)
             return
-        self.led_matrix.set_one(qtrm_index, _WARNING_COLOR if self._over_temp_cutoff(decoded) else _LINKED_COLOR)
-        self.summary_label.setText(f"QTRM-{qtrm_index}: Responded")
-        self._populate_details(qtrm_index, decoded)
-        self._set_led_text_for_one(qtrm_index, decoded)
-        self.tx_forward_matrix.set_one_result(qtrm_index, decoded)
+        self.led_matrix.set_one(lru_index, _WARNING_COLOR if self._over_temp_cutoff(decoded) else _LINKED_COLOR)
+        self.summary_label.setText(f"LRU-{lru_index}: Responded")
+        self._populate_details(lru_index, decoded)
+        self._set_led_text_for_one(lru_index, decoded)
+        self.tx_forward_matrix.set_one_result(lru_index, decoded)

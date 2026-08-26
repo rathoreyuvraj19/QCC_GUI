@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
     QLineEdit, QPushButton, QScrollArea, QVBoxLayout, QWidget,
 )
 
-from core.packet import TOTAL_PACKET_SIZE
+from core.packet import total_packet_size
 from core.rc_settings import rc_settings
 from widgets.spin_field import SpinField
 
@@ -221,7 +221,7 @@ class RCSettingsTab(QWidget):
         form.setHorizontalSpacing(24)
         outer.addWidget(form_widget)
 
-        self.packet_size_label = QLabel(f"{TOTAL_PACKET_SIZE} (fixed frame size)")
+        self.packet_size_label = QLabel(f"{total_packet_size()} (standard frame size)")
         self.packet_size_label.setStyleSheet(_AUTO_STYLE)
         form.addRow("PACKET_SIZE", self.packet_size_label)
 

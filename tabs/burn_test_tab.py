@@ -116,7 +116,7 @@ class BurnTestTab(QWidget):
 
     def _on_payload_toggled(self, is_qcc_status: bool):
         # The LED matrix only means anything for Link Test - QCC Status is
-        # a pure no-op with no per-QTRM data to show.
+        # a pure no-op with no per-LRU data to show.
         self.led_matrix.setVisible(not is_qcc_status)
 
     def _on_log_checkbox_toggled(self, checked: bool):

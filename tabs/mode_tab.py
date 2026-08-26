@@ -5,7 +5,7 @@ Reusable "one QCC operation" tab, one instance per MODE value (0-5). Each
 tab exposes the raw 55-byte COMMAND_DATA as hex text, since per-mode field
 layouts are still TBD (see README "Current state"). Sending combines this
 tab's MODE + COMMAND_DATA with whatever is currently in the shared 96-row
-QTRM grid.
+LRU grid.
 """
 
 from PySide6.QtCore import Signal

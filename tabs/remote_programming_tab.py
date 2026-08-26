@@ -2,7 +2,7 @@
 remote_programming_tab.py
 
 "Remote Programming" - pushes a firmware bitstream (.spi) from the host PC
-to all 96 QTRMs via QCC and drives the firmware-update state machine
+to every LRU via QCC and drives the firmware-update state machine
 (mode change -> link check -> LRU info -> upload -> authenticate ->
 program -> verify -> return to high speed). Pure view: every action is a
 Signal out to main_window (which delegates to RemoteProgController, the
@@ -16,7 +16,7 @@ collapsible raw-frame log underneath.
 
 The whole tab is gated: nothing but the two mode-change steps is enabled
 until BOTH steps have completed, per the IDD's mandatory sequence (first
-switch all 96 QTRMs to the low-speed 115200 link, then switch QCC itself).
+switch every LRU to the low-speed 115200 link, then switch QCC itself).
 
 A Golden/Current segmented toggle scopes every image operation (Upload /
 Authenticate / Program / Verify) to the golden or current-image flash
@@ -52,10 +52,10 @@ from core.command_style import (
     send_button_style,
 )
 from tabs.link_test_tab import LedMatrix
-from core.packet import NUM_QTRM, RP_PAYLOAD_SIZE, RP_QTRM_SELECT_BROADCAST
+from core.packet import RP_LRU_SELECT_BROADCAST, RP_PAYLOAD_SIZE, num_lru
 from apps.remote_prog_controller import (
     OP_AUTHENTICATE, OP_LINK_CHECK, OP_LRU_INFO, OP_MODE_BACK, OP_MODE_STEP1,
-    OP_MODE_STEP2, OP_PROGRAM, OP_QTRM_HIGH_SPEED, OP_UPLOAD, OP_VERIFY,
+    OP_MODE_STEP2, OP_PROGRAM, OP_LRU_HIGH_SPEED, OP_UPLOAD, OP_VERIFY,
 )
 from widgets.segmented_control import SegmentedControl
 from widgets.spin_field import SpinField
@@ -108,7 +108,7 @@ _HEXDUMP_STYLE = (
 )
 
 # LRU Info "Show Field" filter row - which decoded attribute (label, attr
-# name on the parsed LruStatusResponse) gets shown directly on the QTRM
+# name on the parsed LruStatusResponse) gets shown directly on the LRU
 # grid cells, mirroring status_tab.py's field-filter buttons.
 _LRU_FIELDS = [
     ("MFG ID", "mfg_id"),
@@ -201,13 +201,13 @@ def hex_dump(raw: bytes, bytes_per_row: int = 16) -> str:
 
 
 class RemoteProgrammingTab(QWidget):
-    # 0-95 = single QTRM, RP_QTRM_SELECT_BROADCAST (0xFF) = all 96
-    target_qtrm_changed = Signal(int)
+    # A 0-based index = single LRU, RP_LRU_SELECT_BROADCAST (0xFF) = all of them
+    target_lru_changed = Signal(int)
     mode_step1_requested = Signal()
     mode_step2_requested = Signal()
     link_check_requested = Signal()
     lru_info_requested = Signal()
-    qtrm_high_speed_requested = Signal()  # bootloader 0x32 broadcast -> QTRMs to high speed
+    lru_high_speed_requested = Signal()  # bootloader 0x32 broadcast -> LRUs to high speed
     mode_back_requested = Signal()        # QCC -> High Speed (SubCommand 0x02)
     authenticate_requested = Signal(bool)  # image_is_golden
     verify_requested = Signal(bool)        # image_is_golden
@@ -225,16 +225,16 @@ class RemoteProgrammingTab(QWidget):
         self._step1_done = False
         self._session_active = False
         self._programmed = False           # Program was sent; locks Step 1/2,
-                                             # Link Check and QTRM -> High Speed
+                                             # Link Check and LRU -> High Speed
                                              # until QCC -> High Speed is sent
 
         self._active_iap_op = None         # which of Authenticate/Verify/Program
                                              # is running, so its own button can
                                              # flip to "Stop" instead of disabling
-        self._qtrm_acked = [0] * NUM_QTRM  # successful-ack count per QTRM
-        self._qtrm_failed = [False] * NUM_QTRM
+        self._lru_acked = [0] * num_lru()  # successful-ack count per LRU
+        self._lru_failed = [False] * num_lru()
         self._lru_has_data = False         # gates the Export CSV button
-        self._lru_results = [None] * NUM_QTRM  # per-QTRM LruStatusResponse, for the filter/grid
+        self._lru_results = [None] * num_lru()  # per-LRU LruStatusResponse, for the filter/grid
         self._controller = None            # read-only gap queries, set by main_window
 
         content = QWidget()
@@ -266,7 +266,7 @@ class RemoteProgrammingTab(QWidget):
         self._apply_gate()
 
     def set_controller(self, controller):
-        """Read-only handle for gap queries (qtrm_gaps/missing_chunk_indices)."""
+        """Read-only handle for gap queries (lru_gaps/missing_chunk_indices)."""
         self._controller = controller
 
     # -- section builders -----------------------------------------------------
@@ -275,29 +275,29 @@ class RemoteProgrammingTab(QWidget):
         box, form = _section_box("Link Setup")
 
         form.addWidget(_muted_note(
-            "Mandatory order: send low-speed mode to the target QTRM(s) "
+            "Mandatory order: send low-speed mode to the target LRU(s) "
             "first, then switch QCC itself. Operations unlock once both "
             "complete."
         ))
 
-        # Target selector: which QTRM(s) the whole low-speed session
-        # addresses. Sent as byte 35 (QTRM_SELECT) of the Mode Step 2 /
+        # Target selector: which LRU(s) the whole low-speed session
+        # addresses. Sent as byte 35 (LRU_SELECT) of the Mode Step 2 /
         # QCC -> High Speed frames and latched by QCC, so it locks while
         # the gate is open - change it only between sessions.
         target_grid = QGridLayout()
         target_grid.setHorizontalSpacing(18)
         target_grid.setColumnStretch(0, 1)
         self.target_combo = QComboBox()
-        self.target_combo.addItem("All 96 QTRMs (broadcast)")
-        for q in range(NUM_QTRM):
-            self.target_combo.addItem(f"QTRM {q} only")
+        self.target_combo.addItem(f"All {num_lru()} LRUs (broadcast)")
+        for q in range(num_lru()):
+            self.target_combo.addItem(f"LRU {q} only")
         self.target_combo.currentIndexChanged.connect(self._on_target_changed)
         _field_row(target_grid, 0, "Target", self.target_combo)
         form.addLayout(target_grid)
 
         self.target_lock_note = QLabel(
-            "Target locked — Step 1 already sent it to the QTRM(s). Send "
-            "\"QTRM → High Speed\" then \"QCC → High Speed\" below to "
+            "Target locked — Step 1 already sent it to the LRU(s). Send "
+            "\"LRU → High Speed\" then \"QCC → High Speed\" below to "
             "unlock it before changing the target."
         )
         self.target_lock_note.setWordWrap(True)
@@ -307,7 +307,7 @@ class RemoteProgrammingTab(QWidget):
         self.target_lock_note.setVisible(False)
         form.addWidget(self.target_lock_note)
 
-        self.step1_btn = QPushButton("1.  QTRMs → Low-Speed (115200)")
+        self.step1_btn = QPushButton("1.  LRUs → Low-Speed (115200)")
         self.step1_btn.setFixedHeight(38)
         self.step1_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.step1_btn.clicked.connect(self.mode_step1_requested.emit)
@@ -326,12 +326,13 @@ class RemoteProgrammingTab(QWidget):
         form.addWidget(_muted_note(
             "Byte 34 (SubCommand) selects the action: 0x00 = Broadcast, "
             "0x01 = QCC → Low-Speed, 0x02 = QCC → High-Speed. Byte 35 "
-            "(QTRM_SELECT, in the 0x01/0x02 frames) picks the target: "
-            "0–95 = one QTRM, 0xFF = all 96 — QCC latches it for the whole "
+            "(LRU_SELECT, in the 0x01/0x02 frames) picks the target: "
+            f"0–{num_lru() - 1} = one LRU, 0xFF = all of them — QCC latches it "
+            "for the whole "
             "session."
         ))
 
-        self.link_check_btn = QPushButton("3.  Check Link (all 96 QTRMs)")
+        self.link_check_btn = QPushButton(f"3.  Check Link (all {num_lru()} LRUs)")
         self.link_check_btn.setFixedHeight(38)
         self.link_check_btn.setStyleSheet(_SEND_BTN_STYLE)
         self.link_check_btn.clicked.connect(self.link_check_requested.emit)
@@ -348,26 +349,26 @@ class RemoteProgrammingTab(QWidget):
         form.addWidget(self.gate_label)
 
         form.addWidget(_muted_note(
-            "Return to Normal — QTRMs auto-return to high speed on their own "
+            "Return to Normal — LRUs auto-return to high speed on their own "
             "after Programming completes, but this can force it explicitly. "
             "QCC always requires the manual step below."
         ))
 
-        self.qtrm_high_speed_btn = QPushButton("QTRM → High Speed")
-        self.qtrm_high_speed_btn.setFixedHeight(34)
-        self.qtrm_high_speed_btn.setStyleSheet(_SEND_BTN_STYLE)
-        self.qtrm_high_speed_btn.setToolTip(
+        self.lru_high_speed_btn = QPushButton("LRU → High Speed")
+        self.lru_high_speed_btn.setFixedHeight(34)
+        self.lru_high_speed_btn.setStyleSheet(_SEND_BTN_STYLE)
+        self.lru_high_speed_btn.setToolTip(
             "Broadcasts the bootloader's Mode Change MSS->Fabric command "
-            "(0x32) to all 96 QTRMs (SubCommand 0x00 broadcast). QTRMs "
+            "(0x32) to all 96 LRUs (SubCommand 0x00 broadcast). LRUs "
             "already do this automatically after Programming — use this to "
             "force it (e.g. after an aborted session). Doesn't touch the "
             "gate; QCC itself stays on the low-speed link until QCC → High "
             "Speed below is sent."
         )
-        self.qtrm_high_speed_btn.clicked.connect(self.qtrm_high_speed_requested.emit)
-        form.addWidget(self.qtrm_high_speed_btn)
-        self.qtrm_high_speed_status = _status_pill()
-        form.addWidget(self.qtrm_high_speed_status)
+        self.lru_high_speed_btn.clicked.connect(self.lru_high_speed_requested.emit)
+        form.addWidget(self.lru_high_speed_btn)
+        self.lru_high_speed_status = _status_pill()
+        form.addWidget(self.lru_high_speed_status)
 
         self.mode_back_btn = QPushButton("QCC → High Speed")
         self.mode_back_btn.setFixedHeight(34)
@@ -506,7 +507,7 @@ class RemoteProgrammingTab(QWidget):
 
         form.addWidget(_muted_note(
             "Authenticate / Verify / Program poll for the timeout above — "
-            "replies arrive per-QTRM and light up the grid below as they "
+            "replies arrive per-LRU and light up the grid below as they "
             "land. Program flashes from the already-uploaded image and "
             "expects no replies."
         ))
@@ -527,15 +528,15 @@ class RemoteProgrammingTab(QWidget):
     # -- results area ----------------------------------------------------------
 
     def _make_table(self, headers) -> QTableWidget:
-        table = QTableWidget(NUM_QTRM, len(headers))
+        table = QTableWidget(num_lru(), len(headers))
         table.setHorizontalHeaderLabels(headers)
         table.verticalHeader().setVisible(False)
         table.setEditTriggers(QTableWidget.NoEditTriggers)
         table.setSelectionMode(QTableWidget.NoSelection)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.setMinimumHeight(320)
-        for q in range(NUM_QTRM):
-            item = QTableWidgetItem(f"QTRM-{q}")
+        for q in range(num_lru()):
+            item = QTableWidgetItem(f"LRU-{q}")
             item.setTextAlignment(Qt.AlignCenter)
             table.setItem(q, 0, item)
             for c in range(1, len(headers)):
@@ -548,7 +549,7 @@ class RemoteProgrammingTab(QWidget):
         self.results_stack = QStackedWidget()
 
         # Page 0: placeholder before any operation
-        placeholder = QLabel("Run an operation to see per-QTRM results here")
+        placeholder = QLabel("Run an operation to see per-LRU results here")
         placeholder.setAlignment(Qt.AlignCenter)
         placeholder.setStyleSheet(f"color: {_MUTED}; font-size: 13px; background: transparent;")
         self.results_stack.addWidget(placeholder)
@@ -566,7 +567,7 @@ class RemoteProgrammingTab(QWidget):
         self.lru_filter_group = QButtonGroup(self)
         # Not exclusive=True - same reasoning as status_tab.py's filter
         # group: "toggle one at a time" needs a genuine none-checked state
-        # too (reverts every cell back to plain "QTRM-N"), which Qt's
+        # too (reverts every cell back to plain "LRU-N"), which Qt's
         # built-in exclusive mode doesn't allow once anything is checked.
         self.lru_filter_group.setExclusive(False)
         self.lru_filter_group.buttonToggled.connect(self._on_lru_filter_toggled)
@@ -584,7 +585,7 @@ class RemoteProgrammingTab(QWidget):
         lru_row.setSpacing(12)
         self.lru_matrix = LedMatrix(clickable=False)
         lru_row.addWidget(self.lru_matrix, 1)
-        self.lru_table = self._make_table(["QTRM", "MFG_ID", "Part No", "Serial", "FW Version"])
+        self.lru_table = self._make_table(["LRU", "MFG_ID", "Part No", "Serial", "FW Version"])
         lru_row.addWidget(self.lru_table, 1)
         lru_col.addLayout(lru_row, 1)
 
@@ -597,7 +598,7 @@ class RemoteProgrammingTab(QWidget):
         iap_row.setSpacing(12)
         self.iap_matrix = LedMatrix(clickable=False)
         iap_row.addWidget(self.iap_matrix, 1)
-        self.iap_table = self._make_table(["QTRM", "State", "IAP Status"])
+        self.iap_table = self._make_table(["LRU", "State", "IAP Status"])
         iap_row.addWidget(self.iap_table, 1)
         self.results_stack.addWidget(iap_page)
 
@@ -608,18 +609,18 @@ class RemoteProgrammingTab(QWidget):
         prog_row.setSpacing(12)
         self.prog_matrix = LedMatrix(clickable=False)
         prog_row.addWidget(self.prog_matrix, 1)
-        self.gaps_table = self._make_table(["QTRM", "Acked", "Failed chunks", "Missing chunks"])
+        self.gaps_table = self._make_table(["LRU", "Acked", "Failed chunks", "Missing chunks"])
         prog_row.addWidget(self.gaps_table, 1)
         self.results_stack.addWidget(prog_page)
 
-        # Page 4: Link Check - LedMatrix + per-QTRM response bytes
+        # Page 4: Link Check - LedMatrix + per-LRU response bytes
         link_page = QWidget()
         link_row = QHBoxLayout(link_page)
         link_row.setContentsMargins(0, 0, 0, 0)
         link_row.setSpacing(12)
         self.link_matrix = LedMatrix(clickable=False)
         link_row.addWidget(self.link_matrix, 1)
-        self.link_table = self._make_table(["QTRM", "State", "Response"])
+        self.link_table = self._make_table(["LRU", "State", "Response"])
         link_row.addWidget(self.link_table, 1)
         self.results_stack.addWidget(link_page)
 
@@ -661,31 +662,31 @@ class RemoteProgrammingTab(QWidget):
 
         return box
 
-    # -- Target QTRM selector ----------------------------------------------------
+    # -- Target LRU selector ----------------------------------------------------
 
     @property
-    def target_qtrm(self) -> int:
-        """0-95 for a single QTRM, RP_QTRM_SELECT_BROADCAST for all 96."""
+    def target_lru(self) -> int:
+        """0-95 for a single LRU, RP_LRU_SELECT_BROADCAST for all 96."""
         idx = self.target_combo.currentIndex()
-        return RP_QTRM_SELECT_BROADCAST if idx <= 0 else idx - 1
+        return RP_LRU_SELECT_BROADCAST if idx <= 0 else idx - 1
 
     def _target_scope_text(self) -> str:
-        return ("all 96 QTRMs" if self.target_qtrm == RP_QTRM_SELECT_BROADCAST
-                else f"QTRM {self.target_qtrm} only")
+        return ("all 96 LRUs" if self.target_lru == RP_LRU_SELECT_BROADCAST
+                else f"LRU {self.target_lru} only")
 
     def _on_target_changed(self, _idx: int):
-        # Retitle the target-scoped buttons so the addressed QTRM(s) are
+        # Retitle the target-scoped buttons so the addressed LRU(s) are
         # always visible right on the action itself.
-        if self.target_qtrm == RP_QTRM_SELECT_BROADCAST:
-            self.step1_btn.setText("1.  QTRMs → Low-Speed (115200)")
-            self.link_check_btn.setText("3.  Check Link (all 96 QTRMs)")
-            self.qtrm_high_speed_btn.setText("QTRM → High Speed")
+        if self.target_lru == RP_LRU_SELECT_BROADCAST:
+            self.step1_btn.setText("1.  LRUs → Low-Speed (115200)")
+            self.link_check_btn.setText("3.  Check Link (all 96 LRUs)")
+            self.lru_high_speed_btn.setText("LRU → High Speed")
         else:
-            q = self.target_qtrm
-            self.step1_btn.setText(f"1.  QTRM {q} → Low-Speed (115200)")
-            self.link_check_btn.setText(f"3.  Check Link (QTRM {q})")
-            self.qtrm_high_speed_btn.setText(f"QTRM {q} → High Speed")
-        self.target_qtrm_changed.emit(self.target_qtrm)
+            q = self.target_lru
+            self.step1_btn.setText(f"1.  LRU {q} → Low-Speed (115200)")
+            self.link_check_btn.setText(f"3.  Check Link (LRU {q})")
+            self.lru_high_speed_btn.setText(f"LRU {q} → High Speed")
+        self.target_lru_changed.emit(self.target_lru)
 
     # -- Golden/Current toggle ---------------------------------------------------
 
@@ -769,7 +770,7 @@ class RemoteProgrammingTab(QWidget):
             f"Send {self._file_name} ({len(self._image):,} bytes, "
             f"{n_chunks} chunks) to {self._target_scope_text()}?\n\n"
             f"Target: {scope} image region (SPI flash write on each "
-            "addressed QTRM).",
+            "addressed LRU).",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if confirm == QMessageBox.Yes:
@@ -843,12 +844,12 @@ class RemoteProgrammingTab(QWidget):
 
     def _apply_gate(self):
         ops_ok = self._gate_open and not self._session_active
-        # Once Program has been sent, lock Link Check / QTRM -> High Speed
+        # Once Program has been sent, lock Link Check / LRU -> High Speed
         # (and Step 1/2 below) until QCC -> High Speed is sent - Program
-        # keeps the two devices' modes diverging (QTRMs auto-return to high
+        # keeps the two devices' modes diverging (LRUs auto-return to high
         # speed, QCC doesn't) so nothing else on this link should run until
         # the operator explicitly resyncs them.
-        for btn in (self.link_check_btn, self.lru_btn, self.qtrm_high_speed_btn):
+        for btn in (self.link_check_btn, self.lru_btn, self.lru_high_speed_btn):
             btn.setEnabled(ops_ok and not self._programmed)
         self.mode_back_btn.setEnabled(ops_ok)
         # Authenticate/Verify/Program: the button belonging to whichever one
@@ -866,7 +867,7 @@ class RemoteProgrammingTab(QWidget):
         self.cancel_btn.setEnabled(self._session_active)
         self.step1_btn.setEnabled(not self._session_active and not self._programmed)
         self.step2_btn.setEnabled(not self._session_active and not self._programmed)
-        # Step 1 already sends QTRM_SELECT to the addressed QTRM(s), and
+        # Step 1 already sends LRU_SELECT to the addressed LRU(s), and
         # Step 2 latches the same value into QCC - so the target locks as
         # soon as Step 1 succeeds, not just once the full gate (both steps)
         # is open. Changing it after Step 1 but before Step 2 would send
@@ -900,7 +901,7 @@ class RemoteProgrammingTab(QWidget):
             OP_MODE_STEP1: self.step1_status,
             OP_MODE_STEP2: self.step2_status,
             OP_LINK_CHECK: self.link_status,
-            OP_QTRM_HIGH_SPEED: self.qtrm_high_speed_status,
+            OP_LRU_HIGH_SPEED: self.lru_high_speed_status,
             OP_MODE_BACK: self.mode_back_status,
             OP_LRU_INFO: self.op_status,
             OP_AUTHENTICATE: self.op_status,
@@ -997,10 +998,10 @@ class RemoteProgrammingTab(QWidget):
 
     def _reset_lru_table(self):
         self._lru_has_data = False
-        self._lru_results = [None] * NUM_QTRM
+        self._lru_results = [None] * num_lru()
         self.lru_matrix.set_all(_PENDING_QCOLOR)
-        for q in range(NUM_QTRM):
-            self.lru_matrix._leds[q].setText(f"QTRM-{q}")
+        for q in range(num_lru()):
+            self.lru_matrix._leds[q].setText(f"LRU-{q}")
             for c in range(1, 5):
                 self.lru_table.item(q, c).setText("—")
 
@@ -1020,20 +1021,20 @@ class RemoteProgrammingTab(QWidget):
         checked = self.lru_filter_group.checkedButton()
         return checked.property("field_key") if checked is not None else None
 
-    def _set_lru_cell_text(self, qtrm_index: int, resp, field=None):
+    def _set_lru_cell_text(self, lru_index: int, resp, field=None):
         if field is None:
             field = self._current_lru_field()
-        led = self.lru_matrix._leds[qtrm_index]
+        led = self.lru_matrix._leds[lru_index]
         if field is not None and resp is not None:
-            led.setText(f"QTRM-{qtrm_index}: {getattr(resp, field)}")
+            led.setText(f"LRU-{lru_index}: {getattr(resp, field)}")
         else:
-            led.setText(f"QTRM-{qtrm_index}")
+            led.setText(f"LRU-{lru_index}")
 
     def _on_lru_filter_toggled(self, button, checked: bool):
         if checked:
             # Manual exclusivity, same pattern as status_tab.py: selecting
             # one deselects every other one, but the active one can still be
-            # clicked again to deselect (reverts to plain "QTRM-N" labels).
+            # clicked again to deselect (reverts to plain "LRU-N" labels).
             for other in self.lru_filter_group.buttons():
                 if other is not button and other.isChecked():
                     other.blockSignals(True)
@@ -1061,7 +1062,7 @@ class RemoteProgrammingTab(QWidget):
             with open(path, "w", newline="", encoding="utf-8") as f:
                 writer = csv.writer(f)
                 writer.writerow(headers)
-                for q in range(NUM_QTRM):
+                for q in range(num_lru()):
                     writer.writerow([self.lru_table.item(q, c).text()
                                      for c in range(self.lru_table.columnCount())])
         except OSError as e:
@@ -1074,7 +1075,7 @@ class RemoteProgrammingTab(QWidget):
 
     def _reset_link_grid(self):
         self.link_matrix.set_all(_PENDING_QCOLOR)
-        for q in range(NUM_QTRM):
+        for q in range(num_lru()):
             self.link_table.item(q, 1).setText("Pending")
             self.link_table.item(q, 2).setText("—")
 
@@ -1082,7 +1083,7 @@ class RemoteProgrammingTab(QWidget):
 
     def _reset_iap_grid(self):
         self.iap_matrix.set_all(_PENDING_QCOLOR)
-        for q in range(NUM_QTRM):
+        for q in range(num_lru()):
             self.iap_table.item(q, 1).setText("Pending")
             self.iap_table.item(q, 2).setText("—")
 
@@ -1091,9 +1092,9 @@ class RemoteProgrammingTab(QWidget):
             if isinstance(parsed, bl.MssLinkResponse) and not parsed.checksum_ok:
                 # A slot whose bytes happen to start with BL_HEADER (0xAA)
                 # and carry CT_LINK/CT_LINK_RESPONSE in byte 2 is not proof
-                # a real QTRM answered - bl.parse_slot() only returns None
+                # a real LRU answered - bl.parse_slot() only returns None
                 # for a fully all-zero slice, so stale/garbage bytes left
-                # in QCC's DMA buffer for a non-responding QTRM can still
+                # in QCC's DMA buffer for a non-responding LRU can still
                 # coincidentally parse as an MssLinkResponse. checksum_ok
                 # (computed the same way as every other checksum check in
                 # this app - header_panel/frame_logger/timing_tab all gate
@@ -1147,14 +1148,14 @@ class RemoteProgrammingTab(QWidget):
 
     def on_op_window_closed(self, op: str):
         if op == OP_LINK_CHECK:
-            for q in range(NUM_QTRM):
+            for q in range(num_lru()):
                 if self.link_table.item(q, 1).text() == "Pending":
                     self.link_table.item(q, 1).setText("No Response")
                     self.link_matrix.set_one(q, _FAIL_QCOLOR)
             return
         if op == OP_LRU_INFO:
             # Single aggregated response frame, not staggered like
-            # Authenticate/Verify - any QTRM whose slot never populated
+            # Authenticate/Verify - any LRU whose slot never populated
             # (row still None) gets no further reply, so mark it red now
             # rather than leaving it pending grey forever.
             for q, resp in enumerate(self._lru_results):
@@ -1164,7 +1165,7 @@ class RemoteProgrammingTab(QWidget):
         if op not in (OP_AUTHENTICATE, OP_VERIFY, OP_PROGRAM):
             return
         no_reply_ok = op == OP_PROGRAM  # devices reprogram, silence is normal
-        for q in range(NUM_QTRM):
+        for q in range(num_lru()):
             if self.iap_table.item(q, 1).text() == "Pending":
                 self.iap_table.item(q, 1).setText(
                     "No Reply (normal)" if no_reply_ok else "No Response")
@@ -1175,9 +1176,9 @@ class RemoteProgrammingTab(QWidget):
 
     def _reset_program_view(self):
         self.prog_matrix.set_all(_PENDING_QCOLOR)
-        self._qtrm_acked = [0] * NUM_QTRM
-        self._qtrm_failed = [False] * NUM_QTRM
-        for q in range(NUM_QTRM):
+        self._lru_acked = [0] * num_lru()
+        self._lru_failed = [False] * num_lru()
+        for q in range(num_lru()):
             self.gaps_table.item(q, 1).setText("0")
             self.gaps_table.item(q, 2).setText("—")
             self.gaps_table.item(q, 3).setText("—")
@@ -1192,21 +1193,21 @@ class RemoteProgrammingTab(QWidget):
 
     def on_ack_recorded(self, q: int, idx: int, ok: bool):
         if ok:
-            self._qtrm_acked[q] += 1
+            self._lru_acked[q] += 1
         else:
-            self._qtrm_failed[q] = True
+            self._lru_failed[q] = True
         # Live coloring: red is sticky on any reported failure. Otherwise
-        # green the moment THIS QTRM successfully acks anything - streaming
-        # advances the instant ANY ONE of the 96 acks, so most QTRMs are
+        # green the moment THIS LRU successfully acks anything - streaming
+        # advances the instant ANY ONE of the 96 acks, so most LRUs are
         # always a chunk or more behind the fastest responder; green here
         # means "acking fine", not "caught up with dispatch". Grey (the
         # reset-time default) only means "no ack recorded yet at all".
         # Exact per-chunk gap detail lands in the table at pass end.
-        if self._qtrm_failed[q]:
+        if self._lru_failed[q]:
             self.prog_matrix.set_one(q, _FAIL_QCOLOR)
         elif ok:
             self.prog_matrix.set_one(q, _OK_QCOLOR)
-        self.gaps_table.item(q, 1).setText(str(self._qtrm_acked[q]))
+        self.gaps_table.item(q, 1).setText(str(self._lru_acked[q]))
 
     @staticmethod
     def _summarize_indices(indices) -> str:
@@ -1229,8 +1230,8 @@ class RemoteProgrammingTab(QWidget):
         if self._controller is None:
             return
         total = self._controller.chunk_count
-        for q in range(NUM_QTRM):
-            acked, missing, failed = self._controller.qtrm_gaps(q)
+        for q in range(num_lru()):
+            acked, missing, failed = self._controller.lru_gaps(q)
             self.gaps_table.item(q, 1).setText(f"{acked} / {total}")
             self.gaps_table.item(q, 2).setText(self._summarize_indices(failed))
             self.gaps_table.item(q, 3).setText(self._summarize_indices(missing))
@@ -1255,7 +1256,7 @@ class RemoteProgrammingTab(QWidget):
 
     def reset_to_idle(self):
         for pill in (self.op_status, self.upload_status,
-                     self.link_status, self.qtrm_high_speed_status,
+                     self.link_status, self.lru_high_speed_status,
                      self.mode_back_status):
             pill.setText("Not sent yet")
             pill.setStyleSheet(_indicator_style())

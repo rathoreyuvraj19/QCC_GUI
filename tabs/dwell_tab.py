@@ -1,23 +1,23 @@
 """
 dwell_tab.py
 
-"Dwell" - the main per-QTRM beam command (Command Type 0x01): each of the
-96 QTRMs gets its own 4-channel Control/Tx Phase/Tx Atten/Rx Phase/Rx Atten
+"Dwell" - the main per-LRU beam command (Command Type 0x01): each of the
+96 LRUs gets its own 4-channel Control/Tx Phase/Tx Atten/Rx Phase/Rx Atten
 set, all sent together in one frame (unlike Cal/Isolation/Soft Reset, Dwell
-has no single-QTRM-target convention).
+has no single-LRU-target convention).
 
 Two ways to fill the 96-row table: type values in directly, or import a
-CSV file - one row per QTRM, columns "QTRM ID" (0-based, optional, else
-row order = QTRM 0-95) and "Ch{1-4} Tx/Rx/Tx Phase/Tx Atten/Rx Phase/Rx
+CSV file - one row per LRU, columns "LRU ID" (0-based, optional, else
+row order = LRU 0-95) and "Ch{1-4} Tx/Rx/Tx Phase/Tx Atten/Rx Phase/Rx
 Atten".
 Imported data is latched into the table (stays until edited or
 re-imported) until Send is pressed. "Save to CSV..." writes the same
 layout back out, so a saved file re-imports directly (round-trip), and
 the plain-text format is easy to review/diff outside the app.
 
-Every QTRM's Dwell command requests a Link-type status response (per
+Every LRU's Dwell command requests a Link-type status response (per
 Yuvraj: every command except Status and Soft Reset does) - the 96-cell LED
-matrix (reused from link_test_tab.py) shows which QTRMs acknowledged.
+matrix (reused from link_test_tab.py) shows which LRUs acknowledged.
 
 Tx/Rx Phase and Tx/Rx Atten are capped 0-63 (6-bit). Control is a 2-bit
 Tx/Rx on-off field (bit1 = Tx enable, bit0 = Rx enable), split into two
@@ -26,7 +26,7 @@ rather than a single combined number - each button shows On/Off and
 colors green/red, and clicking it flips just that one bit, leaving the
 other bit untouched. Default is both on (control = 3). Each Tx/Rx
 column's header is itself a toggle-all control (DwellHeaderView) - click
-it to set that bit for all 96 QTRMs at once; it shows green/red/grey for
+it to set that bit for all 96 LRUs at once; it shows green/red/grey for
 all-on/all-off/mixed.
 """
 
@@ -42,7 +42,7 @@ from PySide6.QtWidgets import (
 
 from core.command_style import send_button_style
 from tabs.link_test_tab import LedMatrix, _NOT_LINKED_COLOR, _PENDING_COLOR
-from core.packet import NUM_QTRM, QTRMChannel, describe_atten, describe_phase
+from core.packet import LRUChannel, channels_per_lru, describe_atten, describe_phase, num_lru
 from widgets.spin_field import DoubleSpinField
 
 PHASE_MAX = 63    # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
@@ -79,9 +79,9 @@ _NUMERIC_CHANNEL_FIELDS = [
 ]
 
 
-def _build_columns():
-    cols = [("QTRM ID", None, False)]
-    for ch in range(1, 5):
+def _build_columns(n_channels: int):
+    cols = [("LRU ID", None, False)]
+    for ch in range(1, n_channels + 1):
         cols.append((f"Ch{ch} Tx", (ch - 1, "tx_toggle"), True))
         cols.append((f"Ch{ch} Rx", (ch - 1, "rx_toggle"), True))
         for label, attr, lo, hi in _NUMERIC_CHANNEL_FIELDS:
@@ -89,29 +89,51 @@ def _build_columns():
     return cols
 
 
-COLUMNS = _build_columns()
+# The table is 6 columns per channel plus the ID column, so its width tracks
+# the configured channel count. Cached per channel count rather than rebuilt
+# on demand: columns() is called from paintSection, which runs per header
+# repaint, and the answer only changes across a restart.
+_COLUMN_CACHE = {}
 
 
-def _toggle_columns(kind: str):
-    return [
-        i for i, (_, key, _) in enumerate(COLUMNS)
-        if isinstance(key, tuple) and len(key) == 2 and key[1] == kind
-    ]
+def columns():
+    n = channels_per_lru()
+    cached = _COLUMN_CACHE.get(n)
+    if cached is None:
+        cols = _build_columns(n)
+        cached = _COLUMN_CACHE[n] = {
+            "cols": cols,
+            "tx_toggle": [i for i, (_, key, _) in enumerate(cols)
+                          if isinstance(key, tuple) and len(key) == 2 and key[1] == "tx_toggle"],
+            "rx_toggle": [i for i, (_, key, _) in enumerate(cols)
+                          if isinstance(key, tuple) and len(key) == 2 and key[1] == "rx_toggle"],
+            # The Phase/Atten columns - the ones whose display carries a
+            # converted value in brackets and so need extra width (see
+            # DwellTab.__init__).
+            "numeric": [i for i, (_, key, _) in enumerate(cols)
+                        if isinstance(key, tuple) and len(key) == 4],
+        }
+    return cached["cols"]
 
 
-TX_TOGGLE_COLUMNS = _toggle_columns("tx_toggle")
-RX_TOGGLE_COLUMNS = _toggle_columns("rx_toggle")
+def tx_toggle_columns():
+    columns()
+    return _COLUMN_CACHE[channels_per_lru()]["tx_toggle"]
 
-# The Phase/Atten columns - the ones whose display carries a converted value
-# in brackets and so need extra width (see DwellTab.__init__).
-NUMERIC_COLUMNS = [
-    i for i, (_, key, _) in enumerate(COLUMNS)
-    if isinstance(key, tuple) and len(key) == 4
-]
+
+def rx_toggle_columns():
+    columns()
+    return _COLUMN_CACHE[channels_per_lru()]["rx_toggle"]
+
+
+def numeric_columns():
+    columns()
+    return _COLUMN_CACHE[channels_per_lru()]["numeric"]
 
 
 def _default_channels():
-    return [[QTRMChannel(control=CONTROL_DEFAULT) for _ in range(4)] for _ in range(NUM_QTRM)]
+    return [[LRUChannel(control=CONTROL_DEFAULT) for _ in range(channels_per_lru())]
+            for _ in range(num_lru())]
 
 
 class DwellTableModel(QAbstractTableModel):
@@ -122,22 +144,22 @@ class DwellTableModel(QAbstractTableModel):
         self.channels = _default_channels()
 
     def rowCount(self, parent=QModelIndex()):
-        return NUM_QTRM
+        return num_lru()
 
     def columnCount(self, parent=QModelIndex()):
-        return len(COLUMNS)
+        return len(columns())
 
     def headerData(self, section, orientation, role=Qt.DisplayRole):
         if role != Qt.DisplayRole:
             return None
         if orientation == Qt.Horizontal:
-            return COLUMNS[section][0]
+            return columns()[section][0]
         return str(section)
 
     def data(self, index, role=Qt.DisplayRole):
         if not index.isValid():
             return None
-        _, key, _ = COLUMNS[index.column()]
+        _, key, _ = columns()[index.column()]
         if role in (Qt.DisplayRole, Qt.EditRole):
             if key is None:
                 return index.row()
@@ -158,7 +180,7 @@ class DwellTableModel(QAbstractTableModel):
     def setData(self, index, value, role=Qt.EditRole):
         if role != Qt.EditRole or not index.isValid():
             return False
-        _, key, editable = COLUMNS[index.column()]
+        _, key, editable = columns()[index.column()]
         if not editable:
             return False
         channel = self.channels[index.row()][key[0]]
@@ -187,7 +209,7 @@ class DwellTableModel(QAbstractTableModel):
     def flags(self, index):
         if not index.isValid():
             return Qt.NoItemFlags
-        _, _, editable = COLUMNS[index.column()]
+        _, _, editable = columns()[index.column()]
         base = Qt.ItemIsEnabled | Qt.ItemIsSelectable
         if editable:
             base |= Qt.ItemIsEditable
@@ -253,7 +275,7 @@ class DwellHeaderView(QHeaderView):
     """
     Two-row header for each Tx/Rx column: "Ch{n} Control" on top (which
     field this button controls), a toggle-all pill below it. Click
-    anywhere in the section to set that bit for all 96 QTRMs at once.
+    anywhere in the section to set that bit for all 96 LRUs at once.
     Shows green "All Tx/Rx On" if every row already has it on, red "All
     Tx/Rx Off" if every row has it off, grey "Mixed" otherwise; clicking
     always sets every row to the opposite of "all on" (so a mixed or
@@ -267,14 +289,14 @@ class DwellHeaderView(QHeaderView):
         self.sectionClicked.connect(self._on_section_clicked)
 
     def _toggle_key(self, logical_index):
-        _, key, _ = COLUMNS[logical_index]
+        _, key, _ = columns()[logical_index]
         if isinstance(key, tuple) and len(key) == 2:
             return key
         return None
 
     def _aggregate_state(self, ch_idx, bit):
         model = self.model()
-        values = [bool(model.channels[row][ch_idx].control & bit) for row in range(NUM_QTRM)]
+        values = [bool(model.channels[row][ch_idx].control & bit) for row in range(num_lru())]
         if all(values):
             return True
         if not any(values):
@@ -325,7 +347,7 @@ class DwellHeaderView(QHeaderView):
         bit = TX_BIT if kind == "tx_toggle" else RX_BIT
         model = self.model()
         turn_on = self._aggregate_state(ch_idx, bit) is not True
-        for row in range(NUM_QTRM):
+        for row in range(num_lru()):
             model.setData(model.index(row, logical_index), turn_on, Qt.EditRole)
         self.viewport().update()
 
@@ -339,8 +361,8 @@ def _clamp(value, lo, hi):
 
 
 def _csv_header():
-    header = ["QTRM ID"]
-    for ch in range(1, 5):
+    header = ["LRU ID"]
+    for ch in range(1, channels_per_lru() + 1):
         header.append(f"Ch{ch} Tx")
         header.append(f"Ch{ch} Rx")
         for label, _, _, _ in _NUMERIC_CHANNEL_FIELDS:
@@ -348,14 +370,27 @@ def _csv_header():
     return header
 
 
+def _channels_in_csv_header(header):
+    """How many Ch<n> groups a CSV's header row describes, 0 if none."""
+    found = 0
+    for name in header:
+        if name.startswith("Ch") and " " in name:
+            number = name[2:].split(" ", 1)[0]
+            if number.isdigit():
+                found = max(found, int(number))
+    return found
+
+
 def load_channels_from_csv(path: str):
     """
-    Parse a CSV file into a NUM_QTRM-length list of 4 QTRMChannel each, plus
-    a list of warning strings for any invalid Tx/Rx flag encountered
-    (defaulted to on, since these are only ever 0 or 1). First row is
-    headers; "QTRM ID" (0-based) is optional - if absent, row order is
-    taken as QTRM 0..95. Missing columns default to Tx/Rx on, 0 for
-    Phase/Atten.
+    Parse a CSV file into a num_lru()-length list of channels_per_lru()
+    LRUChannel each, plus a list of warning strings for any invalid Tx/Rx
+    flag encountered (defaulted to on, since these are only ever 0 or 1).
+    First row is headers; "LRU ID" (0-based) is optional - if absent, row
+    order is taken as LRU 0 upward. Missing columns default to Tx/Rx on, 0
+    for Phase/Atten - which is also what makes a file saved at a different
+    channel count still load: the channels it doesn't describe come up at
+    their defaults, and a warning says so.
     """
     with open(path, newline="", encoding="utf-8-sig") as f:
         rows = list(csv.reader(f))
@@ -364,25 +399,35 @@ def load_channels_from_csv(path: str):
 
     header = [c.strip() for c in rows[0]]
     col_index = {name: idx for idx, name in enumerate(header)}
-    has_id_col = "QTRM ID" in col_index
+    has_id_col = "LRU ID" in col_index
 
     channels = _default_channels()
     warnings = []
+    n_channels = channels_per_lru()
+    file_channels = _channels_in_csv_header(header)
+    if file_channels and file_channels != n_channels:
+        warnings.append(
+            f"File describes {file_channels} channel(s) per LRU but this array is "
+            f"configured for {n_channels}. "
+            + (f"Channels {n_channels + 1}-{file_channels} were ignored."
+               if file_channels > n_channels
+               else f"Channels {file_channels + 1}-{n_channels} were left at their defaults.")
+        )
     for row_i, row in enumerate(rows[1:]):
         if not row:
             continue
         if has_id_col:
-            id_col = col_index["QTRM ID"]
+            id_col = col_index["LRU ID"]
             if id_col >= len(row) or not row[id_col].strip():
                 continue
-            qtrm_index = _clamp(row[id_col], 0, NUM_QTRM - 1)
+            lru_index = _clamp(row[id_col], 0, num_lru() - 1)
         else:
-            qtrm_index = row_i
-        if not (0 <= qtrm_index < NUM_QTRM):
+            lru_index = row_i
+        if not (0 <= lru_index < num_lru()):
             continue
 
         row_channels = []
-        for ch in range(1, 5):
+        for ch in range(1, n_channels + 1):
             values = {"control": 0}
             for bit_name, bit_value in (("Tx", TX_BIT), ("Rx", RX_BIT)):
                 col = col_index.get(f"Ch{ch} {bit_name}")
@@ -393,7 +438,7 @@ def load_channels_from_csv(path: str):
                     flag = 1
                 if flag not in (0, 1):
                     warnings.append(
-                        f"QTRM-{qtrm_index}, Ch{ch}: {bit_name} flag {flag} invalid (must be 0 or 1) - defaulted to on."
+                        f"LRU-{lru_index}, Ch{ch}: {bit_name} flag {flag} invalid (must be 0 or 1) - defaulted to on."
                     )
                     flag = 1
                 if flag:
@@ -402,23 +447,24 @@ def load_channels_from_csv(path: str):
                 col = col_index.get(f"Ch{ch} {label}")
                 raw = row[col] if col is not None and col < len(row) and row[col].strip() != "" else 0
                 values[attr] = _clamp(raw, lo, hi)
-            row_channels.append(QTRMChannel(**values))
-        channels[qtrm_index] = row_channels
+            row_channels.append(LRUChannel(**values))
+        channels[lru_index] = row_channels
 
     return channels, warnings
 
 
 def save_channels_to_csv(path: str, channels):
     """
-    Write the current NUM_QTRM x 4-channel data to a CSV file with the same
-    header layout load_channels_from_csv expects ("QTRM ID" + "Ch{1-4}
-    Tx/Rx/<numeric field>") - a saved file re-imports directly, round-trip.
+    Write the current num_lru() x channels_per_lru() data to a CSV file with
+    the same header layout load_channels_from_csv expects ("LRU ID" +
+    "Ch{n} Tx/Rx/<numeric field>") - a saved file re-imports directly,
+    round-trip.
     """
     with open(path, "w", newline="", encoding="utf-8-sig") as f:
         writer = csv.writer(f)
         writer.writerow(_csv_header())
-        for qtrm_index, row_channels in enumerate(channels):
-            row = [qtrm_index]
+        for lru_index, row_channels in enumerate(channels):
+            row = [lru_index]
             for channel in row_channels:
                 row.append(1 if channel.control & TX_BIT else 0)
                 row.append(1 if channel.control & RX_BIT else 0)
@@ -491,9 +537,9 @@ class DwellTab(QWidget):
         self.table.setMinimumHeight(320)
         self._tx_delegate = ToggleDelegate("Tx", self.table)
         self._rx_delegate = ToggleDelegate("Rx", self.table)
-        for col in TX_TOGGLE_COLUMNS:
+        for col in tx_toggle_columns():
             self.table.setItemDelegateForColumn(col, self._tx_delegate)
-        for col in RX_TOGGLE_COLUMNS:
+        for col in rx_toggle_columns():
             self.table.setItemDelegateForColumn(col, self._rx_delegate)
 
         # Size every column to fit its own header text by default (several
@@ -504,7 +550,7 @@ class DwellTab(QWidget):
         # raw bool value ("True"/"False"), not the "Tx On"/"Tx Off" text
         # ToggleDelegate actually paints, so re-set those explicitly to a
         # width that comfortably fits the real label.
-        for col in TX_TOGGLE_COLUMNS + RX_TOGGLE_COLUMNS:
+        for col in tx_toggle_columns() + rx_toggle_columns():
             self.table.setColumnWidth(col, 90)
         # resizeColumnsToContents measured the numeric columns against their
         # startup value (all zeros, "0 (0.0°)"), so a later edit to a wide
@@ -512,7 +558,7 @@ class DwellTab(QWidget):
         # mode. Widen them now to fit the worst case the bracket can produce.
         fm = self.table.fontMetrics()
         widest_numeric = fm.horizontalAdvance("63 (354.375°)") + 24
-        for col in NUMERIC_COLUMNS:
+        for col in numeric_columns():
             self.table.setColumnWidth(col, max(self.table.columnWidth(col), widest_numeric))
         self.table.verticalHeader().setMinimumWidth(30)
         layout.addWidget(self.table)
@@ -608,7 +654,7 @@ class DwellTab(QWidget):
 
     def show_results(self, linked_flags):
         acked_count = sum(1 for v in linked_flags if v)
-        self.summary_label.setText(f"{acked_count}/{NUM_QTRM} QTRMs acknowledged")
+        self.summary_label.setText(f"{acked_count}/{num_lru()} LRUs acknowledged")
         self.led_matrix.set_results(linked_flags)
 
     def show_response_time(self, microseconds: float):

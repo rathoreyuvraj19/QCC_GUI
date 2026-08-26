@@ -5,10 +5,10 @@ memory_tab.py
 0x22), NVM Write only, for exactly the two data types actually implemented
 in the real FPGA (flash_spi.vhd): Manufacturing data and TRM Configuration.
 
-This writes to a QTRM's non-volatile flash. Manufacturing data is
-inherently per-unit (agency ID/serial number), so it's single-QTRM-target
+This writes to an LRU's non-volatile flash. Manufacturing data is
+inherently per-unit (agency ID/serial number), so it's single-LRU-target
 only. TRM Configuration's Temp Cutoff is a uniform array-wide setting, so
-it additionally gets a "Write to All 96 QTRMs" button alongside the
+it additionally gets a "Write to All <N> LRUs" button alongside the
 single-target one, per explicit ask. Two safety gates apply regardless of
 target: this tab requires a password to open (see main_window.py's
 tab-change handler), and every Write - individual or all - is behind its
@@ -27,7 +27,9 @@ from core.command_style import FAILURE_COLOR as _NOT_ACKED_COLOR
 from core.command_style import WRITE_COLOR, WRITE_HOVER_COLOR, WRITE_PRESSED_COLOR
 from core.command_style import indicator_style as _indicator_style
 from core.command_style import send_button_style
-from core.packet import MEM_DATA_TYPE_MANUFACTURING, MEM_DATA_TYPE_TRM_CONFIGURATION
+from core.packet import (
+    MEM_DATA_TYPE_MANUFACTURING, MEM_DATA_TYPE_TRM_CONFIGURATION, num_lru,
+)
 from widgets.segmented_control import SegmentedControl
 from widgets.spin_field import SpinField
 from widgets.titled_group import titled_group_box
@@ -46,9 +48,9 @@ _WRITE_BTN_STYLE = send_button_style(
 
 
 class MemoryTab(QWidget):
-    # data_type (int), target_qtrm_index (0-based), payload (bytes)
+    # data_type (int), target_lru_index (0-based), payload (bytes)
     write_requested = Signal(int, int, bytes)
-    # data_type (int), payload (bytes) - all 96 QTRMs
+    # data_type (int), payload (bytes) - every LRU
     write_all_requested = Signal(int, bytes)
 
     def __init__(self, parent=None):
@@ -60,7 +62,7 @@ class MemoryTab(QWidget):
         layout.setSpacing(14)
 
         warning = QLabel(
-            "This writes permanently to the target QTRM's non-volatile flash memory."
+            "This writes permanently to the target LRU's non-volatile flash memory."
         )
         warning.setStyleSheet("color: #d64545; font-weight: 600;")
         warning.setWordWrap(True)
@@ -68,9 +70,9 @@ class MemoryTab(QWidget):
 
         target_box, target_outer = titled_group_box("Target")
         target_row = QHBoxLayout()
-        target_row.addWidget(QLabel("QTRM:"))
-        self.qtrm_spin = SpinField(0, 95, 0, field_width=76)
-        target_row.addWidget(self.qtrm_spin)
+        target_row.addWidget(QLabel("LRU:"))
+        self.lru_spin = SpinField(0, num_lru() - 1, 0, field_width=76)
+        target_row.addWidget(self.lru_spin)
         target_row.addStretch(1)
         target_outer.addLayout(target_row)
         layout.addWidget(target_box)
@@ -92,7 +94,7 @@ class MemoryTab(QWidget):
         self.send_btn.clicked.connect(self._on_send_clicked)
         send_row.addWidget(self.send_btn)
 
-        self.write_all_btn = QPushButton("Write to All 96 QTRMs")
+        self.write_all_btn = QPushButton(f"Write to All {num_lru()} LRUs")
         self.write_all_btn.setStyleSheet(_WRITE_BTN_STYLE)
         self.write_all_btn.clicked.connect(self._on_write_all_clicked)
         self.write_all_btn.setVisible(False)
@@ -153,7 +155,7 @@ class MemoryTab(QWidget):
         self.trm_config_box.setVisible(is_trm_config)
         self.write_all_btn.setVisible(is_trm_config)
         self.write_all_indicator.setVisible(is_trm_config)
-        self.send_btn.setText("Write to Selected QTRM" if is_trm_config else "Write to NVM")
+        self.send_btn.setText("Write to Selected LRU" if is_trm_config else "Write to NVM")
 
     def _current_data_type(self) -> int:
         return MEM_DATA_TYPE_TRM_CONFIGURATION if self.data_type_switch.isChecked() else MEM_DATA_TYPE_MANUFACTURING
@@ -167,21 +169,21 @@ class MemoryTab(QWidget):
         return bytes([agency_fw_byte, serial & 0xFF, (serial >> 8) & 0xFF])
 
     def _current_description(self) -> str:
-        qtrm_index = self.qtrm_spin.value()
+        lru_index = self.lru_spin.value()
         if self.data_type_switch.isChecked():
             return (
-                f"QTRM-{qtrm_index}: TRM Configuration - "
+                f"LRU-{lru_index}: TRM Configuration - "
                 f"Temp Cutoff {'Enabled' if self.temp_cutoff_en_check.isChecked() else 'Disabled'}, "
                 f"{self.temp_cutoff_spin.value()} deg C"
             )
         return (
-            f"QTRM-{qtrm_index}: Manufacturing Data - Agency ID {self.agency_id_spin.value()}, "
+            f"LRU-{lru_index}: Manufacturing Data - Agency ID {self.agency_id_spin.value()}, "
             f"FW Version {self.fw_version_spin.value()}, Serial {self.serial_number_spin.value()}"
         )
 
     def _current_description_all(self) -> str:
         return (
-            f"ALL 96 QTRMs: TRM Configuration - "
+            f"ALL {num_lru()} LRUs: TRM Configuration - "
             f"Temp Cutoff {'Enabled' if self.temp_cutoff_en_check.isChecked() else 'Disabled'}, "
             f"{self.temp_cutoff_spin.value()} deg C"
         )
@@ -194,13 +196,14 @@ class MemoryTab(QWidget):
         )
         if reply != QMessageBox.Yes:
             return
-        qtrm_index = self.qtrm_spin.value()
-        self.write_requested.emit(self._current_data_type(), qtrm_index, self._current_payload())
+        lru_index = self.lru_spin.value()
+        self.write_requested.emit(self._current_data_type(), lru_index, self._current_payload())
 
     def _on_write_all_clicked(self):
         reply = QMessageBox.warning(
-            self, "Confirm NVM Write - ALL 96 QTRMs",
-            f"This permanently overwrites flash memory on ALL 96 QTRMs:\n\n{self._current_description_all()}\n\nContinue?",
+            self, f"Confirm NVM Write - ALL {num_lru()} LRUs",
+            f"This permanently overwrites flash memory on ALL {num_lru()} LRUs:"
+            f"\n\n{self._current_description_all()}\n\nContinue?",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if reply != QMessageBox.Yes:
@@ -227,22 +230,22 @@ class MemoryTab(QWidget):
         self.send_indicator.setText("Sending...")
         self.send_indicator.setStyleSheet(_indicator_style(_PENDING_COLOR))
 
-    def show_result(self, qtrm_index: int, acked: bool):
+    def show_result(self, lru_index: int, acked: bool):
         self._set_buttons_enabled(True)
         self.send_indicator.setText("Acknowledged" if acked else "Not Acknowledged")
         self.send_indicator.setStyleSheet(_indicator_style(_ACKED_COLOR if acked else _NOT_ACKED_COLOR))
         self.status_label.setText(
-            f"QTRM-{qtrm_index}: {'Acknowledged' if acked else 'Not acknowledged'}"
+            f"LRU-{lru_index}: {'Acknowledged' if acked else 'Not acknowledged'}"
         )
 
     def show_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
 
-    def show_no_response(self, qtrm_index: int):
+    def show_no_response(self, lru_index: int):
         self._set_buttons_enabled(True)
         self.send_indicator.setText("No Response")
         self.send_indicator.setStyleSheet(_indicator_style(_NOT_ACKED_COLOR))
-        self.status_label.setText(f"QTRM-{qtrm_index}: No response")
+        self.status_label.setText(f"LRU-{lru_index}: No response")
         self.response_time_label.setText("")
 
     def mark_all_pending(self):
@@ -258,7 +261,7 @@ class MemoryTab(QWidget):
         all_acked = acked_count == len(acked_flags)
         self.write_all_indicator.setText(f"{acked_count}/{len(acked_flags)} Acknowledged")
         self.write_all_indicator.setStyleSheet(_indicator_style(_ACKED_COLOR if all_acked else _NOT_ACKED_COLOR))
-        self.status_label.setText(f"{acked_count}/{len(acked_flags)} QTRMs acknowledged")
+        self.status_label.setText(f"{acked_count}/{len(acked_flags)} LRUs acknowledged")
 
     def show_all_no_response(self):
         self._set_buttons_enabled(True)

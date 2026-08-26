@@ -3,16 +3,15 @@ cal_tab.py
 
 Shared "RX Cal" / "TX Cal" tab (Sections 5/6 of the QTRM Message Format IDD).
 
-Both calibration commands target ONE channel (1-4) of a single QTRM at a
-time: that channel goes into cal mode using the given TRM Phase/
-Attenuation, while the QTRM's other 3 channels drop into isolation
-(handled by the QTRM's own firmware). At the array level, the other 95
-QTRMs must be told to stand down too - the segmented control below picks
-whether they get Rx Isolation or Tx Isolation while the one QTRM under
-test is calibrated.
+Both calibration commands target ONE channel of a single LRU at a time:
+that channel goes into cal mode using the given TRM Phase/Attenuation,
+while the LRU's other channels drop into isolation (handled by the LRU's
+own firmware). At the array level, every other LRU must be told to stand
+down too - the segmented control below picks whether they get Rx Isolation
+or Tx Isolation while the one LRU under test is calibrated.
 
 Laid out as a single card: a prominent title + divider, then three labeled
-sections (QTRM Selection / Calibration Settings / Isolation Mode) each using
+sections (LRU Selection / Calibration Settings / Isolation Mode) each using
 a two-column label-left / spinbox-right grid, ending in a full-width accent
 send button.
 """
@@ -28,11 +27,10 @@ from core.command_style import SUCCESS_COLOR as _LINKED_COLOR
 from core.command_style import FAILURE_COLOR as _NOT_LINKED_COLOR
 from core.command_style import indicator_style as _indicator_style
 from core.command_style import send_button_style
-from core.packet import describe_atten, describe_phase
+from core.packet import channels_per_lru, describe_atten, describe_phase, num_lru
 from widgets.segmented_control import SegmentedControl
 from widgets.spin_field import SpinField
 
-NUM_QTRM = 96
 PHASE_MAX = 63        # 6-bit phase (frame_type.vhd: No_of_phase_bits = 6)
 ATTEN_MAX = 63         # 6-bit attenuation (frame_type.vhd: No_of_Attenuator_bits = 6)
 
@@ -86,7 +84,7 @@ def _field_row(grid: QGridLayout, row: int, label_text: str, spin: SpinField, su
 
 
 class CalTab(QWidget):
-    # qtrm_index (0-based), channel (1-4), phase, atten, tx_isolation_for_others
+    # lru_index (0-based), channel (1-4), phase, atten, tx_isolation_for_others
     send_requested = Signal(int, int, int, int, bool)
 
     def __init__(self, title: str, parent=None):
@@ -123,7 +121,7 @@ class CalTab(QWidget):
         divider.setStyleSheet(f"background-color: {_BORDER}; max-height: 1px; border: none;")
         form.addWidget(divider)
 
-        # -- QTRM Selection / Calibration Settings, side by side -------------
+        # -- LRU Selection / Calibration Settings, side by side -------------
         # Two columns in one row instead of two stacked sections - halves
         # the vertical span these 4 fields used to take, per Yuvraj's ask
         # to reduce the card's overall height.
@@ -132,14 +130,14 @@ class CalTab(QWidget):
 
         selection_col = QVBoxLayout()
         selection_col.setSpacing(14)
-        selection_col.addWidget(_section_header("QTRM Selection"))
+        selection_col.addWidget(_section_header("LRU Selection"))
         selection_grid = QGridLayout()
         selection_grid.setHorizontalSpacing(18)
         selection_grid.setVerticalSpacing(14)
         selection_grid.setColumnStretch(0, 1)
-        self.qtrm_spin = SpinField(0, NUM_QTRM - 1, 0, field_width=76)
+        self.lru_spin = SpinField(0, num_lru() - 1, 0, field_width=76)
         self.channel_spin = SpinField(1, 4, 1, field_width=76)
-        _field_row(selection_grid, 0, "Target QTRM", self.qtrm_spin)
+        _field_row(selection_grid, 0, "Target LRU", self.lru_spin)
         _field_row(selection_grid, 1, "Channel", self.channel_spin)
         selection_col.addLayout(selection_grid)
 
@@ -168,7 +166,7 @@ class CalTab(QWidget):
 
         # -- Isolation Mode ---------------------------------------------------
         form.addWidget(_section_header("Isolation Mode"))
-        iso_caption = QLabel("Other 95 QTRMs receive")
+        iso_caption = QLabel(f"Other {num_lru() - 1} LRUs receive")
         iso_caption.setStyleSheet(f"color: {_LABEL_COLOR}; font-size: 15px; background: transparent;")
         form.addWidget(iso_caption)
         self.isolation_switch = SegmentedControl("Rx Isolation", "Tx Isolation")
@@ -209,9 +207,9 @@ class CalTab(QWidget):
         self.atten_value_label.setText(f"({describe_atten(value)})")
 
     def _on_send_clicked(self):
-        qtrm_index = self.qtrm_spin.value()
+        lru_index = self.lru_spin.value()
         self.send_requested.emit(
-            qtrm_index,
+            lru_index,
             self.channel_spin.value(),
             self.phase_spin.value(),
             self.atten_spin.value(),

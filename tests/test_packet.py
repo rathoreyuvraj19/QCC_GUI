@@ -36,22 +36,41 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from apps.remote_prog_controller import (  # noqa: E402
     QCC_BODY_SWITCH_HIGH_SPEED, QCC_BODY_SWITCH_LOW_SPEED, RP_SUBCMD_BROADCAST,
 )
+from core import lru_config  # noqa: E402
 from core.packet import (  # noqa: E402
-    CHIP_ID_RESPONSE_SIZE, FIXED_HEADER_SIZE, FrameError, LINK_SENTINEL, NUM_QTRM,
-    QCC_HEADER_SIZE, QTRM_BLOCK_SIZE, QTRM_PACKET_SIZE_ID, QTRM_SLOT_SIZE,
-    RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_INNER_CMD_SIZE, RP_PAYLOAD_SIZE,
-    RP_QCC_LEVEL_FRAME_SIZE, RP_QTRM_SELECT_BROADCAST, TOTAL_PACKET_SIZE,
-    ChipIdResponse, QCCHeaderRx, QCCHeaderTx, QTRMChannel, QTRMSlot,
-    CMD_STATUS, STATUS_TYPE_LINK,
-    build_broadcast_bootloader_frame, build_chip_id_response, build_dwell_frame,
-    build_header_only_frame, build_individual_link_frame, build_link_query_slot,
-    build_link_test_frame, build_pps_body, build_prt_body,
+    CHIP_ID_RESPONSE_SIZE, FIXED_HEADER_SIZE, FrameError, LINK_SENTINEL,
+    QCC_HEADER_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_INNER_CMD_SIZE,
+    RP_LRU_SELECT_BROADCAST, RP_PAYLOAD_SIZE, RP_QCC_LEVEL_FRAME_SIZE,
+    ChipIdResponse, LRUChannel, LRUSlot, QCCHeaderRx, QCCHeaderTx,
+    CMD_STATUS, DIAGNOSTIC_TYPE_FUTURE_BUFFER,
+    STATUS_TYPE_DIAGNOSTIC, STATUS_TYPE_LINK,
+    channels_per_lru, lru_block_size, lru_packet_size_id, lru_slot_size,
+    message_length, num_lru, total_packet_size,
+    build_broadcast_bootloader_frame, build_cal_frame, build_chip_id_response,
+    build_dwell_frame, build_header_only_frame, build_individual_link_frame,
+    build_isolation_frame, build_link_query_slot, build_link_test_frame,
+    build_memory_write_frame, build_pps_body, build_prt_body,
     build_remote_programming_cmd_frame, build_remote_programming_frame,
-    build_sob_body, crc8, extract_rp_slots, parse_link_test_response,
-    parse_rx_frame, parse_status_frame,
+    build_sob_body, build_soft_reset_frame, build_status_frame,
+    crc8, extract_rp_slots,
+    parse_diagnostic_response, parse_link_test_response, parse_rx_frame,
+    parse_status_frame,
 )
 
 HEADER_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE  # 90
+
+
+# Every concrete byte offset in packet_spec.yaml describes the reference
+# array (96 LRUs x 4 channels), so the offset tests run against exactly that
+# shape - which is also the drift these tests exist to catch. The shape is a
+# process-wide singleton, so it's pinned for the whole module rather than
+# per-test; TestArrayShape below is the one place that varies it, and it
+# restores the reference when it's done.
+REFERENCE = lru_config.LRUConfig(num_lru=96, channels_per_lru=4)
+
+
+def setUpModule():
+    lru_config.set_config(REFERENCE)
 
 _SPEC_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -82,16 +101,16 @@ def _spec_fields(section):
 
 def _link_reply_slot():
     """
-    A valid Link *response* slot, as a QTRM would send it - deliberately hand
+    A valid Link *response* slot, as a LRU would send it - deliberately hand
     built rather than reusing build_link_query_slot(), because the query and
     the reply are NOT the same bytes: the query leaves offsets 4-8 zero and
-    the QTRM fills them with the 5 sentinel bytes when it answers.
+    the LRU fills them with the 5 sentinel bytes when it answers.
 
     Packet Size Identifier 0x00 -> a 10-byte message, so the XOR checksum
     covers offsets 0-8 and lands at offset 9 (message_length() in packet.py).
     """
-    slot = bytearray(QTRM_SLOT_SIZE)
-    slot[0] = QTRMSlot.HEADER_BYTE
+    slot = bytearray(lru_slot_size())
+    slot[0] = LRUSlot.HEADER_BYTE
     slot[1] = 0x00
     slot[2] = CMD_STATUS
     slot[3] = STATUS_TYPE_LINK  # low nibble = status type
@@ -104,8 +123,8 @@ def _link_reply_slot():
 
 
 def _link_response_frame():
-    """A full 2970-byte response frame with all 96 QTRMs replying OK."""
-    return QCCHeaderTx().to_bytes() + _link_reply_slot() * NUM_QTRM
+    """A full 2970-byte response frame with all 96 LRUs replying OK."""
+    return QCCHeaderTx().to_bytes() + _link_reply_slot() * num_lru()
 
 
 def _distinct_value(index, size):
@@ -137,14 +156,23 @@ class TestFrameSizes(unittest.TestCase):
     """
 
     def test_standard_frame_matches_spec(self):
-        self.assertEqual(TOTAL_PACKET_SIZE, SPEC["frame"]["total_size_bytes"])
-        self.assertEqual(TOTAL_PACKET_SIZE, 2970)
+        self.assertEqual(total_packet_size(), SPEC["frame"]["total_size_bytes"])
+        self.assertEqual(total_packet_size(), 2970)
         self.assertEqual(HEADER_SIZE, SPEC["header"]["size_bytes"])
         self.assertEqual(HEADER_SIZE, 90)
-        self.assertEqual(QTRM_BLOCK_SIZE, SPEC["qtrm_data_block"]["size_bytes"])
-        self.assertEqual(QTRM_SLOT_SIZE, SPEC["qtrm_slot"]["size_bytes"])
-        self.assertEqual(NUM_QTRM, SPEC["qtrm_data_block"]["num_slots"])
-        self.assertEqual(HEADER_SIZE + QTRM_BLOCK_SIZE, TOTAL_PACKET_SIZE)
+        self.assertEqual(lru_block_size(), SPEC["lru_data_block"]["size_bytes"])
+        self.assertEqual(lru_slot_size(), SPEC["lru_data_block"]["slot_size_bytes"])
+        self.assertEqual(lru_slot_size(), SPEC["lru_slot"]["size_bytes"])
+        self.assertEqual(num_lru(), SPEC["lru_data_block"]["num_slots"])
+        self.assertEqual(HEADER_SIZE + lru_block_size(), total_packet_size())
+
+    def test_reference_shape_matches_spec(self):
+        ref = SPEC["array_shape"]["reference"]
+        self.assertEqual(num_lru(), ref["num_lru"])
+        self.assertEqual(channels_per_lru(), ref["channels_per_lru"])
+        self.assertEqual(lru_slot_size(), ref["slot_size_bytes"])
+        self.assertEqual(lru_block_size(), ref["block_size_bytes"])
+        self.assertEqual(total_packet_size(), ref["total_size_bytes"])
 
     def test_remote_programming_shapes_match_spec(self):
         # Three on-wire shapes, one per entry in remote_programming_framing.
@@ -166,9 +194,25 @@ class TestFrameSizes(unittest.TestCase):
         from core import udp_worker
 
         self.assertEqual(
-            set(udp_worker._VALID_TX_SIZES),
-            {TOTAL_PACKET_SIZE, RP_QCC_LEVEL_FRAME_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE},
+            set(udp_worker.valid_tx_sizes()),
+            {total_packet_size(), RP_QCC_LEVEL_FRAME_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE},
         )
+        self.assertEqual(
+            set(udp_worker.valid_rx_sizes()),
+            {total_packet_size(), RP_QCC_LEVEL_FRAME_SIZE, CHIP_ID_RESPONSE_SIZE},
+        )
+
+    def test_udp_worker_sizes_track_the_configured_shape(self):
+        """The accept-lists must follow a reconfiguration, not stay at 2970."""
+        from core import udp_worker
+
+        try:
+            lru_config.set_config(lru_config.LRUConfig(8, 6))
+            self.assertIn(410, udp_worker.valid_tx_sizes())
+            self.assertIn(410, udp_worker.valid_rx_sizes())
+            self.assertNotIn(2970, udp_worker.valid_tx_sizes())
+        finally:
+            lru_config.set_config(REFERENCE)
 
 
 class TestSpecOffsetsResponseHeader(unittest.TestCase):
@@ -371,17 +415,17 @@ class TestSpecCommandEnums(unittest.TestCase):
         self.assertEqual(QCC_BODY_SWITCH_LOW_SPEED, by_name["QCC_LOW_SPEED"])
         self.assertEqual(QCC_BODY_SWITCH_HIGH_SPEED, by_name["QCC_HIGH_SPEED"])
         # BROADCAST must own 0x00: rc_settings.build_header() leaves
-        # message_body zero-filled, so every QTRM-targeted RP command gets
+        # message_body zero-filled, so every LRU-targeted RP command gets
         # the broadcast SubCommand for free. If this value moves, they all
         # silently become whatever 0x00 now means.
         self.assertEqual(RP_SUBCMD_BROADCAST, 0x00)
 
-    def test_subcommand_and_qtrm_select_byte_positions(self):
-        """SubCommand at header byte 34, QTRM_SELECT at 35 (1-indexed)."""
+    def test_subcommand_and_lru_select_byte_positions(self):
+        """SubCommand at header byte 34, LRU_SELECT at 35 (1-indexed)."""
         fields = {f["name"]: f for f in SPEC["message_body_tx"]["per_command"]
                   ["REMOTE_PROGRAMMING"]["fields"]}
         self.assertEqual(_first_byte(fields["sub_command"]), 0)
-        self.assertEqual(_first_byte(fields["qtrm_select"]), 1)
+        self.assertEqual(_first_byte(fields["lru_select"]), 1)
 
         body = bytes([QCC_BODY_SWITCH_LOW_SPEED, 7]) + bytes(54)
         header = QCCHeaderRx(qcc_command=QCCHeaderRx.QCC_COMMAND_REMOTE_PROGRAMMING,
@@ -389,10 +433,10 @@ class TestSpecCommandEnums(unittest.TestCase):
         self.assertEqual(header[33], QCC_BODY_SWITCH_LOW_SPEED)  # byte 34
         self.assertEqual(header[34], 7)                          # byte 35
 
-    def test_qtrm_command_types_match_spec(self):
+    def test_lru_command_types_match_spec(self):
         from core import packet
 
-        for entry in SPEC["qtrm_command_types"]:
+        for entry in SPEC["lru_command_types"]:
             with self.subTest(command=entry["name"]):
                 self.assertEqual(getattr(packet, entry["name"]), entry["value"])
 
@@ -435,22 +479,22 @@ class TestSpecOffsetsTxBodies(unittest.TestCase):
         self.assertEqual(body[2:], bytes(54))
 
 
-class TestSpecOffsetsQtrmSlot(unittest.TestCase):
-    """The 30-byte QTRM slot. Unlike the header, its spec bytes are 0-indexed."""
+class TestSpecOffsetsLruSlot(unittest.TestCase):
+    """The reference array's 30-byte LRU slot. Unlike the header, its spec bytes are 0-indexed."""
 
     def test_field_offsets(self):
         channels = [
-            QTRMChannel(control=0x10 + i, tx_phase=0x20 + i, tx_atten=0x30 + i,
+            LRUChannel(control=0x10 + i, tx_phase=0x20 + i, tx_atten=0x30 + i,
                         rx_phase=0x40 + i, rx_atten=0x50 + i)
             for i in range(4)
         ]
-        raw = QTRMSlot(qtrm_id=1, command_type=0x21, ack_type=0xA, ack_on_off=0x5,
+        raw = LRUSlot(lru_id=1, command_type=0x21, ack_type=0xA, ack_on_off=0x5,
                        dwell_id=0x7B, frequency_id=0x7C, channels=channels).to_bytes()
-        self.assertEqual(len(raw), QTRM_SLOT_SIZE)
+        self.assertEqual(len(raw), lru_slot_size())
 
-        fields = {f["name"]: f for f in _spec_fields("qtrm_slot")}
-        self.assertEqual(raw[_first_byte(fields["header"])], QTRMSlot.HEADER_BYTE)
-        self.assertEqual(raw[_first_byte(fields["packet_size_id"])], QTRM_PACKET_SIZE_ID)
+        fields = {f["name"]: f for f in _spec_fields("lru_slot")}
+        self.assertEqual(raw[_first_byte(fields["header"])], LRUSlot.HEADER_BYTE)
+        self.assertEqual(raw[_first_byte(fields["packet_size_id"])], lru_packet_size_id())
         self.assertEqual(raw[_first_byte(fields["command_type"])], 0x21)
         self.assertEqual(raw[_first_byte(fields["status_byte"])], 0xA5)
         self.assertEqual(raw[_first_byte(fields["dwell_id"])], 0x7B)
@@ -458,8 +502,8 @@ class TestSpecOffsetsQtrmSlot(unittest.TestCase):
         reserved = _first_byte(fields["reserved"])
         self.assertEqual(raw[reserved:reserved + fields["reserved"]["size"]], bytes(3))
 
-        # Channels, per the qtrm_channel sub-layout.
-        ch_fields = {f["name"]: f for f in SPEC["qtrm_channel"]["fields"]}
+        # Channels, per the lru_channel sub-layout.
+        ch_fields = {f["name"]: f for f in SPEC["lru_channel"]["fields"]}
         for i in range(4):
             base = _first_byte(fields[f"channel_{i + 1}"])
             with self.subTest(channel=i + 1, base=base):
@@ -471,18 +515,37 @@ class TestSpecOffsetsQtrmSlot(unittest.TestCase):
 
     def test_slot_tiles_exactly_once(self):
         covered = []
-        for field in _spec_fields("qtrm_slot"):
+        for field in _spec_fields("lru_slot"):
             start = _first_byte(field)
             covered.extend(range(start, start + field["size"]))
-        self.assertEqual(sorted(covered), list(range(QTRM_SLOT_SIZE)))
+        self.assertEqual(sorted(covered), list(range(lru_slot_size())))
+
+    def test_channel_layout_matches_spec(self):
+        """
+        The generic rule the builder actually follows - channels start at a
+        fixed byte and repeat on a fixed stride - stated separately from the
+        reference array's four enumerated channel_N fields, since that rule
+        is what holds at any channel count.
+        """
+        spec_slot = SPEC["lru_slot"]
+        fields = {f["name"]: f for f in _spec_fields("lru_slot")}
+        self.assertEqual(spec_slot["channels_start_byte"],
+                         _first_byte(fields["channel_1"]))
+        self.assertEqual(spec_slot["channel_stride_bytes"],
+                         SPEC["lru_channel"]["size_bytes"])
+        self.assertEqual(spec_slot["channel_count"], channels_per_lru())
+        for i in range(2, spec_slot["channel_count"] + 1):
+            self.assertEqual(
+                _first_byte(fields[f"channel_{i}"]),
+                spec_slot["channels_start_byte"] + (i - 1) * spec_slot["channel_stride_bytes"])
 
     def test_xor_checksum_covers_spec_range(self):
-        spec_chk = SPEC["qtrm_slot"]["checksum"]
+        spec_chk = SPEC["lru_slot"]["checksum"]
         self.assertEqual(spec_chk["covers"]["start_byte"], 0)
-        self.assertEqual(spec_chk["covers"]["end_byte"], QTRM_SLOT_SIZE - 2)
-        self.assertEqual(spec_chk["stored_at_byte"], QTRM_SLOT_SIZE - 1)
+        self.assertEqual(spec_chk["covers"]["end_byte"], lru_slot_size() - 2)
+        self.assertEqual(spec_chk["stored_at_byte"], lru_slot_size() - 1)
 
-        raw = QTRMSlot(qtrm_id=1, command_type=0x01, dwell_id=9).to_bytes()
+        raw = LRUSlot(lru_id=1, command_type=0x01, dwell_id=9).to_bytes()
         expected = 0
         for b in raw[:-1]:
             expected ^= b
@@ -520,7 +583,7 @@ class TestRoundTrip(unittest.TestCase):
     def test_response_header(self):
         header = QCCHeaderTx()
         values = {
-            "destination_id": 0x11, "source_id": 0x22, "packet_size": TOTAL_PACKET_SIZE,
+            "destination_id": 0x11, "source_id": 0x22, "packet_size": total_packet_size(),
             "echo_byte": 0x33, "command_ack": 1, "message_number": 0xDEADBEEF,
             "date": 27, "month": 7, "year": 2026, "time_of_day": 0x12345678,
             "qcc_query_count": 1234, "qcc_response_count": 1233,
@@ -567,12 +630,12 @@ class TestRoundTrip(unittest.TestCase):
                 self.assertEqual(getattr(back, name), getattr(header, name))
         self.assertTrue(back.checksum_ok)
 
-    def test_qtrm_slot(self):
-        channels = [QTRMChannel(control=i, tx_phase=63 - i, tx_atten=i * 2,
+    def test_lru_slot(self):
+        channels = [LRUChannel(control=i, tx_phase=63 - i, tx_atten=i * 2,
                                 rx_phase=i * 3, rx_atten=i * 4) for i in range(4)]
-        slot = QTRMSlot(qtrm_id=5, command_type=0x01, ack_type=0x2, ack_on_off=0x1,
+        slot = LRUSlot(lru_id=5, command_type=0x01, ack_type=0x2, ack_on_off=0x1,
                         dwell_id=17, frequency_id=18, channels=channels)
-        back = QTRMSlot.from_bytes(5, slot.to_bytes())
+        back = LRUSlot.from_bytes(5, slot.to_bytes())
 
         self.assertEqual(back.command_type, 0x01)
         self.assertEqual(back.ack_type, 0x2)
@@ -608,13 +671,13 @@ class TestChecksumValidation(unittest.TestCase):
                 )
 
     def test_slot_xor_detects_corruption(self):
-        raw = QTRMSlot(qtrm_id=1, command_type=0x01, dwell_id=3).to_bytes()
-        self.assertTrue(QTRMSlot.from_bytes(1, raw).checksum_ok)
-        for offset in range(QTRM_SLOT_SIZE - 1):
+        raw = LRUSlot(lru_id=1, command_type=0x01, dwell_id=3).to_bytes()
+        self.assertTrue(LRUSlot.from_bytes(1, raw).checksum_ok)
+        for offset in range(lru_slot_size() - 1):
             corrupted = bytearray(raw)
             corrupted[offset] ^= 0xFF
             with self.subTest(offset=offset):
-                self.assertFalse(QTRMSlot.from_bytes(1, bytes(corrupted)).checksum_ok)
+                self.assertFalse(LRUSlot.from_bytes(1, bytes(corrupted)).checksum_ok)
 
     def test_chip_id_checksum_detects_corruption(self):
         raw = bytearray(build_chip_id_response(0x08, 0x1122334455667788))
@@ -633,14 +696,14 @@ class TestFrameErrors(unittest.TestCase):
 
     def test_parsers_raise_frame_error(self):
         cases = (
-            ("parse_rx_frame", lambda r: parse_rx_frame(r), TOTAL_PACKET_SIZE),
-            ("parse_link_test_response", lambda r: parse_link_test_response(r), TOTAL_PACKET_SIZE),
-            ("parse_status_frame", lambda r: parse_status_frame(r, 0x2), TOTAL_PACKET_SIZE),
-            ("extract_rp_slots", lambda r: extract_rp_slots(r), TOTAL_PACKET_SIZE),
+            ("parse_rx_frame", lambda r: parse_rx_frame(r), total_packet_size()),
+            ("parse_link_test_response", lambda r: parse_link_test_response(r), total_packet_size()),
+            ("parse_status_frame", lambda r: parse_status_frame(r, 0x2), total_packet_size()),
+            ("extract_rp_slots", lambda r: extract_rp_slots(r), total_packet_size()),
             ("QCCHeaderTx.from_bytes", QCCHeaderTx.from_bytes, HEADER_SIZE),
             ("QCCHeaderRx.from_bytes", QCCHeaderRx.from_bytes, HEADER_SIZE),
             ("ChipIdResponse.from_bytes", ChipIdResponse.from_bytes, CHIP_ID_RESPONSE_SIZE),
-            ("QTRMSlot.from_bytes", lambda r: QTRMSlot.from_bytes(1, r), QTRM_SLOT_SIZE),
+            ("LRUSlot.from_bytes", lambda r: LRUSlot.from_bytes(1, r), lru_slot_size()),
         )
         for name, call, size in cases:
             with self.subTest(parser=name):
@@ -658,7 +721,7 @@ class TestFrameErrors(unittest.TestCase):
 
     def test_unknown_status_type_raises_frame_error(self):
         with self.assertRaises(FrameError):
-            parse_status_frame(bytes(TOTAL_PACKET_SIZE), 0xE)
+            parse_status_frame(bytes(total_packet_size()), 0xE)
 
     def test_validation_survives_optimized_mode(self):
         """
@@ -690,43 +753,43 @@ class TestFrameBuilders(unittest.TestCase):
 
     def test_link_query_frame_replicates_the_query_slot(self):
         frame = build_link_test_frame(header=self._header())
-        self.assertEqual(len(frame), TOTAL_PACKET_SIZE)
+        self.assertEqual(len(frame), total_packet_size())
         query_slot = build_link_query_slot()
-        for q in range(NUM_QTRM):
-            base = HEADER_SIZE + q * QTRM_SLOT_SIZE
-            with self.subTest(qtrm=q):
-                self.assertEqual(frame[base:base + QTRM_SLOT_SIZE], query_slot)
+        for q in range(num_lru()):
+            base = HEADER_SIZE + q * lru_slot_size()
+            with self.subTest(lru=q):
+                self.assertEqual(frame[base:base + lru_slot_size()], query_slot)
         # The query asks for a Link-type status response (byte 3 low nibble).
         self.assertEqual(query_slot[3] & 0x0F, STATUS_TYPE_LINK)
 
     def test_individual_link_frame_targets_one_slot(self):
         query_slot = build_link_query_slot()
-        for target in (0, 47, NUM_QTRM - 1):
+        for target in (0, 47, num_lru() - 1):
             with self.subTest(target=target):
                 frame = build_individual_link_frame(target, header=self._header())
-                self.assertEqual(len(frame), TOTAL_PACKET_SIZE)
-                for q in range(NUM_QTRM):
-                    base = HEADER_SIZE + q * QTRM_SLOT_SIZE
-                    slot = frame[base:base + QTRM_SLOT_SIZE]
+                self.assertEqual(len(frame), total_packet_size())
+                for q in range(num_lru()):
+                    base = HEADER_SIZE + q * lru_slot_size()
+                    slot = frame[base:base + lru_slot_size()]
                     # Non-target slots are entirely zero - no header, no
                     # command at all - not merely a different command.
-                    self.assertEqual(slot, query_slot if q == target else bytes(QTRM_SLOT_SIZE))
+                    self.assertEqual(slot, query_slot if q == target else bytes(lru_slot_size()))
 
     def test_link_response_parsing_accepts_a_valid_reply(self):
         frame = _link_response_frame()
         results = parse_link_test_response(frame)
-        self.assertEqual(len(results), NUM_QTRM)
+        self.assertEqual(len(results), num_lru())
         self.assertTrue(all(results), "every valid reply slot should validate")
 
     def test_link_response_sentinel_position(self):
-        """The QTRM echoes the 5 sentinel bytes at slot offset 4-8."""
+        """The LRU echoes the 5 sentinel bytes at slot offset 4-8."""
         frame = _link_response_frame()
         self.assertEqual(frame[HEADER_SIZE + 4:HEADER_SIZE + 9], LINK_SENTINEL)
 
     def test_link_response_rejects_bad_slots(self):
         """Each validation rule in is_link_response_ok() must actually bite."""
         target = 30
-        base = HEADER_SIZE + target * QTRM_SLOT_SIZE
+        base = HEADER_SIZE + target * lru_slot_size()
         corruptions = {
             "wrong header byte": (0, 0x55),
             "wrong status type": (3, 0x03),
@@ -741,29 +804,29 @@ class TestFrameBuilders(unittest.TestCase):
                 frame[base + offset] = value
                 results = parse_link_test_response(bytes(frame))
                 self.assertFalse(results[target], f"{label} was accepted as a valid reply")
-                self.assertEqual(sum(results), NUM_QTRM - 1, "only the corrupted slot should fail")
+                self.assertEqual(sum(results), num_lru() - 1, "only the corrupted slot should fail")
 
     def test_empty_slot_is_not_a_reply(self):
-        """A QTRM that never answered leaves its slot zeroed - not 'OK'."""
-        frame = QCCHeaderTx().to_bytes() + bytes(QTRM_BLOCK_SIZE)
+        """A LRU that never answered leaves its slot zeroed - not 'OK'."""
+        frame = QCCHeaderTx().to_bytes() + bytes(lru_block_size())
         self.assertFalse(any(parse_link_test_response(frame)))
 
     def test_dwell_frame_slots_are_addressable(self):
-        channels = [[QTRMChannel(control=(q + c) & 0xFF) for c in range(4)]
-                    for q in range(NUM_QTRM)]
+        channels = [[LRUChannel(control=(q + c) & 0xFF) for c in range(4)]
+                    for q in range(num_lru())]
         frame = build_dwell_frame(channels, header=self._header())
-        self.assertEqual(len(frame), TOTAL_PACKET_SIZE)
+        self.assertEqual(len(frame), total_packet_size())
         _, slots = parse_rx_frame(frame)
-        self.assertEqual(len(slots), NUM_QTRM)
+        self.assertEqual(len(slots), num_lru())
         for q in (0, 1, 95):
-            with self.subTest(qtrm=q):
+            with self.subTest(lru=q):
                 self.assertEqual(slots[q].channels[0].control, q & 0xFF)
                 self.assertTrue(slots[q].checksum_ok)
 
-    def test_header_only_frame_zero_fills_the_qtrm_block(self):
+    def test_header_only_frame_zero_fills_the_lru_block(self):
         frame = build_header_only_frame(self._header())
-        self.assertEqual(len(frame), TOTAL_PACKET_SIZE)
-        self.assertEqual(frame[HEADER_SIZE:], bytes(QTRM_BLOCK_SIZE))
+        self.assertEqual(len(frame), total_packet_size())
+        self.assertEqual(frame[HEADER_SIZE:], bytes(lru_block_size()))
 
     def test_rp_cmd_frame_is_header_plus_command(self):
         inner = bytes(range(RP_INNER_CMD_SIZE))
@@ -773,7 +836,7 @@ class TestFrameBuilders(unittest.TestCase):
 
     def test_rp_data_frame_puts_command_before_payload(self):
         """
-        Order matters: QCC forwards bytes 90.. verbatim and the QTRM
+        Order matters: QCC forwards bytes 90.. verbatim and the LRU
         bootloader reads its 10-byte command header first.
         """
         inner = bytes([0x34] + [0] * (RP_INNER_CMD_SIZE - 1))
@@ -789,8 +852,8 @@ class TestFrameBuilders(unittest.TestCase):
     def test_mode_step1_broadcast_replicates_into_every_slot(self):
         inner = bytes([0x31] + [0] * (RP_INNER_CMD_SIZE - 1))
         frame = build_broadcast_bootloader_frame(self._header(), inner,
-                                                 RP_QTRM_SELECT_BROADCAST)
-        self.assertEqual(len(frame), TOTAL_PACKET_SIZE)
+                                                 RP_LRU_SELECT_BROADCAST)
+        self.assertEqual(len(frame), total_packet_size())
         for slot in extract_rp_slots(frame):
             self.assertEqual(slot, inner)
 
@@ -799,7 +862,7 @@ class TestFrameBuilders(unittest.TestCase):
         target = 12
         frame = build_broadcast_bootloader_frame(self._header(), inner, target)
         for index, slot in enumerate(extract_rp_slots(frame)):
-            with self.subTest(qtrm=index):
+            with self.subTest(lru=index):
                 self.assertEqual(slot, inner if index == target else bytes(RP_INNER_CMD_SIZE))
 
 
@@ -833,6 +896,157 @@ class TestPhysicalUnits(unittest.TestCase):
                 self.assertEqual(float(describe_phase(code).rstrip("°")),
                                  round(phase_degrees(code), 3))
 
+
+class TestArrayShape(unittest.TestCase):
+    """
+    The frame layout is parameterised on (num_lru, channels_per_lru). These
+    are the properties that have to hold at ANY shape, as opposed to the
+    offset tests above, which pin the reference array against the spec.
+
+    Every test restores the reference shape, since it's a process-wide
+    singleton the rest of the module depends on.
+    """
+
+    # Reference, a wide LRU, a small array, the single-channel edge, and the
+    # largest LRU count the lru_select byte leaves room for.
+    SHAPES = [(96, 4), (96, 24), (8, 6), (12, 1), (255, 5)]
+
+    def tearDown(self):
+        lru_config.set_config(REFERENCE)
+
+    def _use(self, n_lru, n_ch):
+        lru_config.set_config(lru_config.LRUConfig(n_lru, n_ch))
+
+    def test_sizes_follow_the_idd_formula(self):
+        for n_lru, n_ch in self.SHAPES:
+            with self.subTest(num_lru=n_lru, channels=n_ch):
+                self._use(n_lru, n_ch)
+                self.assertEqual(lru_slot_size(), 5 * n_ch + 10)
+                self.assertEqual(lru_block_size(), n_lru * (5 * n_ch + 10))
+                self.assertEqual(total_packet_size(), 90 + n_lru * (5 * n_ch + 10))
+
+    def test_reference_shape_is_byte_identical_to_the_old_fixed_layout(self):
+        """96 x 4 must still produce exactly the frame that shipped."""
+        self._use(96, 4)
+        self.assertEqual(lru_slot_size(), 30)
+        self.assertEqual(lru_block_size(), 2880)
+        self.assertEqual(total_packet_size(), 2970)
+        self.assertEqual(len(build_link_test_frame()), 2970)
+
+    def test_every_builder_produces_the_configured_frame_size(self):
+        for n_lru, n_ch in self.SHAPES:
+            self._use(n_lru, n_ch)
+            channels = [[LRUChannel() for _ in range(n_ch)] for _ in range(n_lru)]
+            frames = {
+                "link_test": build_link_test_frame(),
+                "individual_link": build_individual_link_frame(0),
+                "status": build_status_frame(STATUS_TYPE_LINK),
+                "status_one": build_status_frame(STATUS_TYPE_LINK, target_lru_index=0),
+                "soft_reset": build_soft_reset_frame(),
+                "isolation": build_isolation_frame(True),
+                "cal": build_cal_frame(True, 0, 1, 0, 0),
+                "memory_write": build_memory_write_frame(1, b"\x01"),
+                "dwell": build_dwell_frame(channels),
+                "header_only": build_header_only_frame(bytes(HEADER_SIZE)),
+                "rp_broadcast": build_broadcast_bootloader_frame(
+                    bytes(HEADER_SIZE), bytes(RP_INNER_CMD_SIZE)),
+            }
+            for name, frame in frames.items():
+                with self.subTest(num_lru=n_lru, channels=n_ch, builder=name):
+                    self.assertEqual(len(frame), total_packet_size())
+
+    def test_packet_size_id_is_the_channel_count(self):
+        """
+        What makes the receiver's message_length(id) = id*5 + 10 agree with
+        the slot size we actually sent.
+        """
+        for n_lru, n_ch in self.SHAPES:
+            with self.subTest(num_lru=n_lru, channels=n_ch):
+                self._use(n_lru, n_ch)
+                slot = LRUSlot(lru_id=1, command_type=0x01).to_bytes()
+                self.assertEqual(slot[1], n_ch)
+                self.assertEqual(message_length(slot[1]), lru_slot_size())
+
+    def test_slot_round_trips_every_channel(self):
+        for n_lru, n_ch in self.SHAPES:
+            with self.subTest(num_lru=n_lru, channels=n_ch):
+                self._use(n_lru, n_ch)
+                channels = [LRUChannel(control=i & 0xFF, tx_phase=(i * 3) & 0x3F,
+                                       tx_atten=(i * 5) & 0x3F, rx_phase=(i * 7) & 0x3F,
+                                       rx_atten=(i * 11) & 0x3F)
+                            for i in range(n_ch)]
+                raw = LRUSlot(lru_id=1, command_type=0x01, channels=channels).to_bytes()
+                self.assertEqual(len(raw), lru_slot_size())
+                back = LRUSlot.from_bytes(1, raw)
+                self.assertTrue(back.checksum_ok)
+                self.assertEqual(len(back.channels), n_ch)
+                for original, decoded in zip(channels, back.channels):
+                    self.assertEqual(original.to_bytes(), decoded.to_bytes())
+
+    def test_link_response_validates_at_every_shape(self):
+        """
+        A Link reply is a 10-byte message zero-padded into whatever the slot
+        width is, so the padding must not break the checksum check.
+        """
+        for n_lru, n_ch in self.SHAPES:
+            with self.subTest(num_lru=n_lru, channels=n_ch):
+                self._use(n_lru, n_ch)
+                slot = bytearray(lru_slot_size())
+                slot[0] = LRUSlot.HEADER_BYTE
+                slot[2] = CMD_STATUS
+                slot[3] = STATUS_TYPE_LINK
+                slot[4:9] = LINK_SENTINEL
+                chk = 0
+                for b in slot[:9]:
+                    chk ^= b
+                slot[9] = chk
+                frame = bytes(HEADER_SIZE) + bytes(slot) * n_lru
+                flags = parse_link_test_response(frame)
+                self.assertEqual(len(flags), n_lru)
+                self.assertTrue(all(flags))
+
+    def test_diagnostic_response_decodes_every_channel(self):
+        for n_lru, n_ch in self.SHAPES:
+            with self.subTest(num_lru=n_lru, channels=n_ch):
+                self._use(n_lru, n_ch)
+                slot = bytearray(lru_slot_size())
+                slot[0] = LRUSlot.HEADER_BYTE
+                slot[1] = n_ch                       # full-slot message
+                slot[3] = STATUS_TYPE_DIAGNOSTIC
+                chk = 0
+                for b in slot[:lru_slot_size() - 1]:
+                    chk ^= b
+                slot[lru_slot_size() - 1] = chk
+                decoded = parse_diagnostic_response(bytes(slot),
+                                                    DIAGNOSTIC_TYPE_FUTURE_BUFFER)
+                self.assertIsNotNone(decoded)
+                self.assertEqual(len(decoded["channels"]), n_ch)
+
+    def test_header_packet_size_follows_the_shape(self):
+        for n_lru, n_ch in self.SHAPES:
+            with self.subTest(num_lru=n_lru, channels=n_ch):
+                self._use(n_lru, n_ch)
+                # Both directions default PACKET_SIZE to the frame size, and
+                # neither may snapshot it at import time.
+                self.assertEqual(QCCHeaderRx().packet_size, total_packet_size())
+                self.assertEqual(QCCHeaderTx().packet_size, total_packet_size())
+
+    def test_wire_format_limits_are_enforced(self):
+        # channels_per_lru rides in a single byte.
+        with self.assertRaises(lru_config.ConfigError):
+            lru_config.LRUConfig(96, 256)
+        # 0xFF is reserved for lru_select's broadcast.
+        with self.assertRaises(lru_config.ConfigError):
+            lru_config.LRUConfig(256, 4)
+        # The header's packet_size is a u16.
+        with self.assertRaises(lru_config.ConfigError):
+            lru_config.LRUConfig(255, 255)
+        for bad in (0, -1):
+            with self.subTest(value=bad):
+                with self.assertRaises(lru_config.ConfigError):
+                    lru_config.LRUConfig(bad, 4)
+                with self.assertRaises(lru_config.ConfigError):
+                    lru_config.LRUConfig(96, bad)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

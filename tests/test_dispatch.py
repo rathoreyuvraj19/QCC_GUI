@@ -115,7 +115,7 @@ class TestDispatchTable(unittest.TestCase):
         attribute would only surface as an AttributeError mid-command.
         """
         declared = {spec.target_attr for spec in _COMMANDS.values() if spec.target_attr}
-        self.assertTrue(declared, "expected some single-QTRM commands")
+        self.assertTrue(declared, "expected some single-LRU commands")
         initialized = _init_assigned_attrs()
         for attr in declared:
             with self.subTest(attr=attr):

@@ -1,6 +1,6 @@
-# QCC/QTRM Control GUI - Standalone Distribution
+# QCC/LRU Control GUI - Standalone Distribution
 
-This guide explains how to build and distribute the QCC/QTRM Control GUI as a complete standalone Windows executable that requires **no Python, no dependencies, and no internet connection** to run.
+This guide explains how to build and distribute the QCC/LRU Control GUI as a complete standalone Windows executable that requires **no Python, no dependencies, and no internet connection** to run.
 
 ## What You Have
 
@@ -86,7 +86,7 @@ Since the exe is completely standalone:
 - UDP sender/receiver (QThread-based, non-blocking)
 - Data logging to CSV with burn-test support
 - Plot analysis for logged data
-- All 96 QTRM slot editing
+- Full LRU slot editing at whatever array shape is configured
 
 ✅ **Bundled libraries**:
 - PySide6 6.11+ (Qt framework)

@@ -1,5 +1,5 @@
 """
-build.py - PyInstaller build script for QCC/QTRM Control GUI
+build.py - PyInstaller build script for QCC/LRU Control GUI
 
 Packages the PySide6 desktop app into a standalone Windows .exe with all
 dependencies bundled, so end users don't need Python or pip installed.
@@ -123,7 +123,7 @@ Size: Check with 'du -sh {dist_dir}/qcc_gui/'
     # Save build info to dist/ for reference
     readme_path = dist_dir / "README_BUILD.txt"
     with open(readme_path, "w") as f:
-        f.write("QCC/QTRM Control GUI - Standalone Build\n")
+        f.write("QCC/LRU Control GUI - Standalone Build\n")
         f.write("=" * 50 + "\n\n")
         f.write(info)
         f.write("\n\nBuild date: " + __import__("datetime").datetime.now().isoformat() + "\n")

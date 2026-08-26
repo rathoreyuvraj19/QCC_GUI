@@ -1,4 +1,4 @@
-# IDD Generation Skill — QCC/QTRM Packet Documentation
+# IDD Generation Skill — QCC/LRU Packet Documentation
 
 This documents the approach developed for generating byte-level Interface
 Design Documents (IDDs) as Word (.docx) tables, so it can be extended
@@ -98,7 +98,7 @@ See `open_items` in `packet_spec.yaml`. As of this export:
 - SOB_WIDTH is specified as 16-bit in the packet spec, but the actual
   VHDL (`sob_gen.i_sob_width`) port is still 8-bit as of the last RTL
   review — needs reconciliation before implementation
-- `qtrm_data_block_state` (populated/empty) confirmed only for Normal
+- `lru_data_block_state` (populated/empty) confirmed only for Normal
   and Status modes; Loopback and Reset modes still TBD
 
 ## Suggested next step for Claude Code

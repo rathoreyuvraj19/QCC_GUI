@@ -1,7 +1,7 @@
-# QCC / 96x QTRM Control GUI
+# QCC / LRU Control GUI
 
-PySide6 desktop app for building, sending, and receiving the 2970-byte QCC
-UDP frame (90-byte header + 96x30-byte QTRM data block), per
+PySide6 desktop app for building, sending, and receiving the QCC UDP frame
+(90-byte header + an LRU data block), per
 [docs/idd/packet_spec.yaml](docs/idd/packet_spec.yaml) - the in-repo source
 of truth for the packet layout (derived from `QCC_90Byte_Header_BitTable.docx`
 and the QTRM Message Format IDD). See [README.md](README.md) for setup/run
@@ -21,6 +21,10 @@ failure mode this protocol actually has (a field that moves still produces a
 right-length frame that passes its own checksum and means something else
 entirely by the time it reaches the QCC). `tests/test_dispatch.py` checks
 `main_window.py`'s `_COMMANDS` table against its `_begin_wait` call sites.
+`TestArrayShape` in `tests/test_packet.py` covers what has to hold at any
+array shape (see the invariant below); the offset tests deliberately pin the
+reference 96x4 shape, which is what the spec's concrete byte numbers
+describe.
 
 Parsers in `core/packet.py` raise `FrameError` (a `ValueError`) on anything
 that came off the wire; `assert` is reserved for the builders' own
@@ -28,6 +32,23 @@ invariants, since `python -O` strips asserts and would otherwise silently
 disable every malformed-frame check.
 
 ## Invariants to preserve
+
+- **The frame layout is configurable, so nothing may snapshot it at import
+  time.** `core/lru_config.py` holds the array's shape - `num_lru` and
+  `channels_per_lru` - and everything about the frame's size derives from
+  those two via the IDD's formula, `slot = 5*channels + 10`. Read them
+  through `core/packet.py`'s `num_lru()` / `channels_per_lru()` /
+  `lru_slot_size()` / `total_packet_size()` **functions**. A
+  `from core.packet import NUM_LRU`-style constant would freeze whatever was
+  configured when that module happened to be imported and then quietly
+  disagree with everything imported after; the same trap applies to default
+  arguments (`def f(size=total_packet_size())`), module-level column/tuple
+  tables, and anything else evaluated once at import. Where a value is
+  genuinely expensive to recompute per call, cache it keyed on the shape
+  (see `tabs/dwell_tab.py`'s `columns()`), don't hoist it to module scope.
+  The 96 LRU x 4-channel default is byte-identical to the fixed 2970-byte
+  layout this app started with, so a regression here shows up only at other
+  shapes - which is what `TestArrayShape` exists for.
 
 - **`delay_us` must stay comparable to Wireshark** (Yuvraj's explicit
   requirement, 2026-07-12). The query->response delay logged by
@@ -84,10 +105,10 @@ disable every malformed-frame check.
    **assumed, not stated in the new IDD, and need Yuvraj's confirmation**:
    - Soft Reset and Memory Operation are now mapped to `DATA_DISTRIBUTION`
      (0x00) in `core/rc_settings.py`, on the reasoning that both deliver a
-     QTRM-targeted command via the DMA'd 2880-byte data block. They
+     LRU-targeted command via the DMA'd 2880-byte data block. They
      previously used `QCC_RESET`(4)/`REMOTE_PROGRAMMING`(5) under the old
      scheme, neither of which has a clean equivalent now (`QCC_RESET` is
-     now a QCC-level PIO-pin reset unrelated to QTRM soft-reset; real
+     now a QCC-level PIO-pin reset unrelated to LRU soft-reset; real
      `REMOTE_PROGRAMMING` is now reserved for the 4196-byte bootloader
      protocol).
    - PPS has no Bypass counterpart in the new enum (only
@@ -97,20 +118,20 @@ disable every malformed-frame check.
    See `docs/idd/packet_spec.yaml`'s `open_items` for the full detail.
 
 5. **Remote Programming low-speed command framing RE-DECIDED 2026-07-19** -
-   per Yuvraj: once QTRMs+QCC are in low-speed mode, every RP command
+   per Yuvraj: once LRUs+QCC are in low-speed mode, every RP command
    EXCEPT the bitstream DATA chunks sends `[90-byte header][10-byte inner
    command]` = 100 bytes, no payload padding - previously these were sent
    as 4196-byte frames zero-padded out to the full payload size. Only the
    actual bitstream DATA chunks (`CT_BITSTREAM_DATA`, 0x34 - the real
    file-upload payload) still use the full `[90-byte header][10-byte
    command][4096-byte payload]` = 4196-byte shape. Mode Step 1 (still
-   per-QTRM-addressed, not yet in low-speed mode) is unaffected - it keeps
+   per-LRU-addressed, not yet in low-speed mode) is unaffected - it keeps
    the 2970-byte replicated-slot frame.
 
    Header byte 34 (message_body offset 0, `QCC_COMMAND=0xFF`/
    `REMOTE_PROGRAMMING` only) is a **SubCommand** QCC itself reads and acts
    on, per Yuvraj: `0x00` = Broadcast (QCC fans the rest of the frame out
-   to all 96 QTRMs unmodified - the path every QTRM-targeted RP command
+   to all 96 LRUs unmodified - the path every LRU-targeted RP command
    above already uses, since `rc_settings.build_header()` leaves
    `message_body` all-zero by default), `0x01` = QCC -> Low-Speed (Mode
    Step 2), `0x02` = QCC -> High-Speed (**value changed from `0x00`** to
@@ -120,16 +141,16 @@ disable every malformed-frame check.
    `remote_programming_subcommands`/`remote_programming_framing` in
    `docs/idd/packet_spec.yaml`.
 
-   Also new: a **QTRM -> High Speed** command/button
-   (`OP_QTRM_HIGH_SPEED`, `RemoteProgController.start_qtrm_high_speed()`),
+   Also new: a **LRU -> High Speed** command/button
+   (`OP_LRU_HIGH_SPEED`, `RemoteProgController.start_lru_high_speed()`),
    broadcasting the bootloader's existing `build_mode_change_mss_to_fab()`
    (command_type 0x32) via the normal SubCommand 0x00 broadcast path.
-   QTRMs already auto-return to high speed on their own after Programming
+   LRUs already auto-return to high speed on their own after Programming
    completes, but this lets the operator force it explicitly; it doesn't
    touch the gate. The Remote Programming tab's former "Return to High
    Speed" button is renamed **"QCC -> High Speed"** and sits alongside the
-   new **"QTRM -> High Speed"** button as a small return-to-normal pair -
-   QTRM first, then QCC.
+   new **"LRU -> High Speed"** button as a small return-to-normal pair -
+   LRU first, then QCC.
 
    `core/packet.py` (`RP_CMD_FRAME_SIZE`, `build_remote_programming_cmd_frame`),
    `apps/remote_prog_controller.py` (`_send_rp`, `_on_simple_timeout`),
@@ -138,19 +159,19 @@ disable every malformed-frame check.
    updated to match. `docs/idd/QCC_Protocol.docx`'s Remote Programming
    table (byte 33/34 remarks) reflects the SubCommand scheme.
 
-   **Single-QTRM targeting (added 2026-07-19 per Yuvraj):** header byte 35
-   (`QTRM_SELECT`, message_body offset 1) in the SubCommand `0x01`/`0x02`
-   frames picks which QTRM(s) the low-speed session addresses - `0x00`-`0x5F`
-   = one QTRM (0-based id 0-95), `0xFF` = broadcast to all 96. QCC latches
+   **Single-LRU targeting (added 2026-07-19 per Yuvraj):** header byte 35
+   (`LRU_SELECT`, message_body offset 1) in the SubCommand `0x01`/`0x02`
+   frames picks which LRU(s) the low-speed session addresses - `0x00`-`0x5F`
+   = one LRU (0-based id 0-95), `0xFF` = broadcast to all 96. QCC latches
    it into its `remote_prog_LRU_select` mux at mode-change time, so every
-   subsequent SubCommand `0x00` frame reaches only the selected QTRM, and
+   subsequent SubCommand `0x00` frame reaches only the selected LRU, and
    QCC zero-fills the 95 non-selected slots in its 2970-byte responses.
-   Mode Step 1 mirrors this GUI-side (QTRMs are still per-slot addressed
-   there): a single-QTRM session puts the mode-change command in only the
+   Mode Step 1 mirrors this GUI-side (LRUs are still per-slot addressed
+   there): a single-LRU session puts the mode-change command in only the
    target's 30-byte slot, the other 95 slots all-zero. The Remote
    Programming tab's "Target" combo drives it
-   (`RemoteProgController.target_qtrm`,
-   `core/packet.py`'s `RP_QTRM_SELECT_BROADCAST`); the selector locks
+   (`RemoteProgController.target_lru`,
+   `core/packet.py`'s `RP_LRU_SELECT_BROADCAST`); the selector locks
    while the gate is open so the value can't drift mid-session, and the
    mock responder latches/zero-fills the same way the real QCC will.
 
@@ -159,7 +180,7 @@ disable every malformed-frame check.
    replicated-slot frame (item 5 above) rides the QCC's existing DMA
    data-pipeline path (`QCC_COMMAND` byte 33 = `0x00`), not `0xFF`: QCC
    just moves the 2880-byte payload to the fabric unmodified, and it's the
-   QTRM bootloader firmware that interprets its own slot's first 10 bytes
+   LRU bootloader firmware that interprets its own slot's first 10 bytes
    as a mode-change command, not QCC itself. `apps/remote_prog_controller.py`'s
    `start_mode_step1()` builds its header with `COMMAND_ID_DWELL` (the
    existing `DATA_DISTRIBUTION` alias) instead of
@@ -186,12 +207,12 @@ disable every malformed-frame check.
    byte 82 GENERATOR_STATUS row reflects the bit 2 remark.
 
 8. **Mode Step 1's response is a bare 90-byte QCC header, not a 2970-byte
-   per-QTRM-slot echo** - only the QCC itself replies to the mode-change
-   query; QTRMs don't originate a reply to their own mode-change slot,
+   per-LRU-slot echo** - only the QCC itself replies to the mode-change
+   query; LRUs don't originate a reply to their own mode-change slot,
    same as Mode Step 2. `apps/remote_prog_tester_app.py`'s
    `_respond_mode_change()` builds this the same way
    `_respond_qcc_level()` does (echo header, swap source/destination,
-   recompute checksum, no QTRM slots) instead of the previous
+   recompute checksum, no LRU slots) instead of the previous
    `_build_response_frame()`-based per-slot echo. GUI-side, this needed no
    change: `remote_prog_controller.py`'s `on_frame()` already treats a
    Mode Step 1 reply as an opaque frame it just logs, and
@@ -205,7 +226,7 @@ disable every malformed-frame check.
    returned an empty description, so `run()`'s `if response is None:
    continue` dropped the frame entirely - it never reached the Activity
    Log or Sent Packet Analysis panel, even though the command itself is a
-   real 100-byte frame broadcast to all 96 QTRMs and worth inspecting.
+   real 100-byte frame broadcast to all 96 LRUs and worth inspecting.
    Both handlers now return `(None, desc)` with a non-empty `desc`, and
    `run()` distinguishes "recognized, no reply" (`response is None` but
    `desc` set - still logged) from "not a recognized command at all"
@@ -252,8 +273,8 @@ disable every malformed-frame check.
     displaying all 8 bits individually (`Bits[7..0]: b7 b6 ... b0`)
     plus the decimal value - same two-line label style already used for
     `GENERATOR_STATUS`'s SOB/PRT text. This is QCC-header-level, not
-    per-QTRM, so `tabs/status_tab.py`'s Details panel/hover popup (which
-    only decodes per-QTRM phase/atten codes) is unaffected.
+    per-LRU, so `tabs/status_tab.py`'s Details panel/hover popup (which
+    only decodes per-LRU phase/atten codes) is unaffected.
     `docs/idd/QCC_Protocol.docx` byte 83 row is now updated too (Field
     Name -> `DIP_SWITCH`, bit columns restored to generic `b7..b0` labels
     like other unstructured-byte fields (not zeroed like `GENERATOR_STATUS`'s

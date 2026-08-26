@@ -8,10 +8,10 @@ Transcribed from bootloader_packet_spec.yaml (itself a first-pass
 digitization of photographed Word-doc tables, NOT yet verified against the
 original source document).
 
-This is a SEPARATE protocol from packet.py's QCC/QTRM 2970-byte frame - do
+This is a SEPARATE protocol from packet.py's QCC/LRU 2970-byte frame - do
 not conflate the two: different framing, different sizes, different Command
 Type space. QCC never parses these 10 bytes; it strips the outer 90-byte
-header and broadcasts [payload + command] identically to all 96 QTRMs over
+header and broadcasts [payload + command] identically to all 96 LRUs over
 the low-speed (115200) link.
 
 Framing: every packet the GUI sends or receives here is a FIXED 10 bytes.
@@ -28,7 +28,7 @@ Byte numbering below follows the spec's 1-based convention (byte 1 =
 index 0 of the Python bytes object).
 
 === OPEN ITEMS carried over verbatim from bootloader_packet_spec.yaml ===
- 1. RESOLVED 2026-07-16: confirmed independently against both the QTRM
+ 1. RESOLVED 2026-07-16: confirmed independently against both the LRU
     firmware source (user_common_include.h: CMD_TYPE_FW_UPDATE_COMMAND =
     0x36) and the LabVIEW reference GUI's block diagram (Authenticate/
     Program/Verify all build command_type 0x36, subtype 0x01/0x02/0x03
@@ -73,7 +73,7 @@ index 0 of the Python bytes object).
     0x32 as originally transcribed - confirmed by Yuvraj against a byte-level
     reference (AA 00 33 00 00 03 00 00 00 9A for BSN_MSS_CONTROL). This value
     is intentionally shared with CT_BITSTREAM_RECEIVE (also 0x33) - a
-    QTRM-state-dependent overload, not a transcription collision: pre-MSS it
+    LRU-state-dependent overload, not a transcription collision: pre-MSS it
     means "switch to MSS/low-speed", post-MSS it means "prepare to receive
     bitstream". See CT_MODE_CHANGE's comment for detail.
 12. RESOLVED 2026-07-16: BSN_MODE (mode_change_command byte 6) is a 4-bit
@@ -83,7 +83,7 @@ index 0 of the Python bytes object).
     now masks with 0x0F to match the document.
 
 === Items the 2026-07-16 audit FLAGGED but deliberately left unchanged ===
-(cross-checked against QTRM firmware source and a LabVIEW reference GUI -
+(cross-checked against LRU firmware source and a LabVIEW reference GUI -
 see "Remote Programming MSG format - updated.docx" for full detail; these
 are either firmware/doc-only discrepancies or too invasive to fix blind
 without a way to visually re-render the document)
@@ -99,7 +99,7 @@ without a way to visually re-render the document)
     CONTEXT_LRU_INFO) - see remote_prog_controller.py's on_frame(), which
     only sets that context while self._op == OP_LRU_INFO, so Link Check's
     own 0x30/0x34 handling (item a) is unaffected outside that window. Fixes
-    the LRU Info table never populating even though QTRMs were replying -
+    the LRU Info table never populating even though LRUs were replying -
     every response was being misparsed as an MssLinkResponse and silently
     dropped (remote_programming_tab.py's on_op_row() has no OP_LRU_INFO
     case).
@@ -128,15 +128,15 @@ CT_MODE_CHANGE_MSS_TO_FAB = 0x32  # Mode Change MSS->Fabric (RC->LRU, post-MSS):
                                  # the fabric / return to high speed". Matches
                                  # firmware's CMD_TYPE_MODE_CHANGE_MSS_TO_FAB
                                  # (user_common_include.h); after handling it the
-                                 # QTRM processor parks, polling the fabric flag,
+                                 # LRU processor parks, polling the fabric flag,
                                  # and re-takes the UART on the next Step-1 command.
 # CT_MODE_CHANGE and CT_BITSTREAM_RECEIVE intentionally share 0x33 - confirmed
 # by Yuvraj 2026-07-16 (byte-level reference: AA 00 33 00 00 03 00 00 00 9A for
 # Mode Change -> MSS_CONTROL), and 2026-07-18 against the fabric RTL itself:
 # control_to_mss_proc matches COMMAND = x"33" with RX byte index 5's low nibble
 # = 3 (BSN_MSS_CONTROL) and raises the mode-change flag the MSS polls to take
-# the UART. This is a QTRM-state-dependent overload, not a collision: 0x33 is
-# decoded by the FABRIC (fabric->MSS switch) while the QTRM is still in
+# the UART. This is a LRU-state-dependent overload, not a collision: 0x33 is
+# decoded by the FABRIC (fabric->MSS switch) while the LRU is still in
 # normal/high-speed mode, and by the PROCESSOR ("prepare to receive bitstream",
 # firmware's CMD_TYPE_START_BIT_STREAM_REC) once in MSS mode - never both at
 # once. The GUI always knows which phase it's sending in, so no runtime
@@ -268,11 +268,11 @@ def build_mode_change_command(bsn_mode: int) -> bytes:
 
 def build_mode_change_mss_to_fab() -> bytes:
     """
-    command_type 0x32: return the QTRMs to high speed - the processor hands
+    command_type 0x32: return the LRUs to high speed - the processor hands
     the UART back to the fabric (firmware's CMD_TYPE_MODE_CHANGE_MSS_TO_FAB
     handler calls mode_change_mss_to_fab() and exits the request loop).
     Body layout mirrors the other minimal commands (no parameters in the
-    firmware's handler); sent while the QTRMs are in MSS/low-speed mode.
+    firmware's handler); sent while the LRUs are in MSS/low-speed mode.
     """
     pkt = bytearray(9)
     pkt[0] = BL_HEADER
@@ -422,10 +422,10 @@ CONTEXT_LRU_INFO = "lru_info"      # Get LRU Info poll in flight - firmware's
 
 def parse_slot(raw10: bytes, context: str = CONTEXT_FW_UPDATE):
     """
-    Parse one QTRM's raw 10-byte bootloader response (the first 10 bytes of
+    Parse one LRU's raw 10-byte bootloader response (the first 10 bytes of
     its 30-byte slot in the standard 2970-byte RX frame).
 
-    Returns None for an all-zero slice (that QTRM hasn't responded yet), a
+    Returns None for an all-zero slice (that LRU hasn't responded yet), a
     typed dataclass for recognized packets, or UnknownSlot for anything
     with a plausible header but an unrecognized/unexpected command type.
 

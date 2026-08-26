@@ -24,7 +24,7 @@ routing/command fields, then the full 90-byte header as raw indexed bytes
 "instead of analyzed data i just want to see raw bytes just like TX".
 
 Raw byte view (via raw_slot_model.RawSlotTableModel) - no per-command
-semantic decoding of the QTRM slot bytes past the four fields fixed at
+semantic decoding of the LRU slot bytes past the four fields fixed at
 the same position in every slot (Header, Packet Size ID, Command Type,
 Status & Sub Status Type) - everything from byte 5 onward is shown
 generically, since its meaning depends on which command occupies that
@@ -37,8 +37,10 @@ from PySide6.QtWidgets import (
     QTableView, QVBoxLayout, QWidget,
 )
 
-from core.packet import FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QTRM_SLOT_SIZE, NUM_QTRM, QCCHeaderTx
-from core.qtrm_filter import FilterBar, QtrmFilterProxyModel
+from core.packet import (
+    FIXED_HEADER_SIZE, QCC_HEADER_SIZE, QCCHeaderTx, lru_slot_size, num_lru,
+)
+from core.lru_filter import FilterBar, LruFilterProxyModel
 from widgets.raw_byte_grid import build_raw_byte_grid
 from widgets.raw_slot_model import RawSlotTableModel
 from widgets.segmented_control import SegmentedControl
@@ -71,7 +73,7 @@ class RxTestWindow(QMainWindow):
 
         self._frame_count = 0
         self.model = RawSlotTableModel()
-        self.proxy_model = QtrmFilterProxyModel()
+        self.proxy_model = LruFilterProxyModel()
         self.proxy_model.setSourceModel(self.model)
 
         central = QWidget()
@@ -93,7 +95,7 @@ class RxTestWindow(QMainWindow):
         self.count_label = QLabel("Frames received: 0")
         row.addWidget(self.status_label)
         row.addStretch(1)
-        row.addWidget(QLabel("QTRM data:"))
+        row.addWidget(QLabel("LRU data:"))
         self.display_mode_switch = SegmentedControl("Decimal", "Hex")
         self.display_mode_switch.toggled.connect(self._on_display_mode_toggled)
         self.display_mode_switch.setChecked(True)  # Hex by default
@@ -174,6 +176,8 @@ class RxTestWindow(QMainWindow):
             self.header_byte_labels[i].setText(f"{b:02X}")
 
         base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
-        slots = [raw[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE] for i in range(NUM_QTRM)]
+        slot_size = lru_slot_size()
+        slots = [raw[base + i * slot_size: base + (i + 1) * slot_size]
+                 for i in range(num_lru())]
         self.model.replace_slots(slots)
         self.filter_bar.refresh_auto_filter()

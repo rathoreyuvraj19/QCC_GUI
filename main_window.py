@@ -6,8 +6,8 @@ Connect/Disconnect, Ping Test) plus the per-command tabs (Dwell, Link
 Test, Status, RX/TX Cal, Isolation, Soft Reset, Memory Operation).
 
 The first 90 bytes of every frame (fixed header + QCC header) are zero for
-now - MSG_ID, MODE, and per-QTRM MSG_ID/Frequency ID are not implemented on
-the QCC/QTRM side yet.
+now - MSG_ID, MODE, and per-LRU MSG_ID/Frequency ID are not implemented on
+the QCC/LRU side yet.
 """
 
 import csv
@@ -26,6 +26,7 @@ from PySide6.QtWidgets import (
 )
 
 from core.packet import (
+    num_lru,
     build_link_test_frame, build_individual_link_frame, parse_link_test_response,
     build_cal_frame, build_soft_reset_frame, build_isolation_frame,
     build_status_frame, parse_status_frame, STATUS_TYPE_DIAGNOSTIC,
@@ -47,6 +48,7 @@ from core.burn_test_logger import BurnTestLogger
 from core.burn_test_worker import BurnTestWorker
 from core.udp_worker import UdpWorker
 from ping_worker import PingWorker
+from widgets.array_config_dialog import ArrayConfigDialog
 from widgets.header_panel import HeaderPanel
 from widgets.password_keypad_dialog import PasswordKeypadDialog
 from widgets.temp_conversion_dialog import TempConversionDialog
@@ -63,7 +65,7 @@ from tabs.burn_test_tab import BurnTestTab
 from apps.remote_prog_controller import (
     RemoteProgController, OP_AUTHENTICATE, OP_LINK_CHECK, OP_LRU_INFO,
     OP_MODE_BACK, OP_MODE_STEP1, OP_MODE_STEP2, OP_PROGRAM,
-    OP_QTRM_HIGH_SPEED, OP_UPLOAD, OP_VERIFY,
+    OP_LRU_HIGH_SPEED, OP_UPLOAD, OP_VERIFY,
 )
 from tabs.rc_settings_tab import RCSettingsTab
 
@@ -198,12 +200,12 @@ def _find_available_udp_port(preferred: int) -> int:
 
 
 def _parse_link(w, raw):
-    """Per-QTRM Link-reply flags - the reply shape for most commands."""
+    """Per-LRU Link-reply flags - the reply shape for most commands."""
     return parse_link_test_response(raw)
 
 
 def _parse_status(w, raw):
-    """Per-QTRM decoded status, keyed on whichever status type is in flight."""
+    """Per-LRU decoded status, keyed on whichever status type is in flight."""
     status_type = w._status_type_in_flight
     diagnostic_type = w._status_sub_type_in_flight if status_type == STATUS_TYPE_DIAGNOSTIC else 0
     return parse_status_frame(raw, status_type, diagnostic_type)
@@ -211,7 +213,7 @@ def _parse_status(w, raw):
 
 def _parse_header_checksum(w, raw):
     """
-    The timing commands (SOB/PRT/PPS) have no per-QTRM result to decode - the
+    The timing commands (SOB/PRT/PPS) have no per-LRU result to decode - the
     only thing to check is that a reply came back with a valid header
     checksum.
     """
@@ -228,10 +230,10 @@ class _Command:
     on_timeout        (w, target) -> None. Updates the owning tab.
     on_response_time  (w, microseconds) -> None, or None if the tab has no
                       response-time readout (Isolation doesn't).
-    target_attr       Name of the MainWindow attribute holding the target QTRM
-                      index for single-QTRM variants, popped back to None when
+    target_attr       Name of the MainWindow attribute holding the target LRU
+                      index for single-LRU variants, popped back to None when
                       the reply lands or the wait times out. None for
-                      all-QTRM commands.
+                      all-LRU commands.
     """
 
     __slots__ = ("parser", "on_result", "on_timeout", "on_response_time", "target_attr")
@@ -270,7 +272,7 @@ _COMMANDS = {
     ),
     "individual_link_test": _Command(
         parser=_parse_link,
-        target_attr="_individual_link_qtrm",
+        target_attr="_individual_link_lru",
         on_result=lambda w, r, t: w.link_test_tab.show_individual_result(t, r[t]),
         on_response_time=lambda w, us: w.link_test_tab.show_individual_response_time(us),
         on_timeout=lambda w, t: w.link_test_tab.show_individual_no_response(t),
@@ -311,7 +313,7 @@ _COMMANDS = {
     ),
     "isolation_individual": _Command(
         parser=_parse_link,
-        target_attr="_individual_isolation_qtrm",
+        target_attr="_individual_isolation_lru",
         on_result=lambda w, r, t: w.isolation_tab.show_individual_result(t, r[t]),
         on_timeout=lambda w, t: w.isolation_tab.show_individual_no_response(t),
     ),
@@ -323,7 +325,7 @@ _COMMANDS = {
     ),
     "status_individual": _Command(
         parser=_parse_status,
-        target_attr="_individual_status_qtrm",
+        target_attr="_individual_status_lru",
         on_result=lambda w, r, t: w.status_tab.show_individual_result(t, r[t]),
         on_response_time=lambda w, us: w.status_tab.show_individual_response_time(us),
         on_timeout=lambda w, t: w.status_tab.show_individual_no_response(t),
@@ -352,7 +354,7 @@ _COMMANDS = {
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("QCC / 96x QTRM Control")
+        self.setWindowTitle(f"QCC / {num_lru()}x LRU Control")
         # The Connection bar's row of widgets (Local Port/QCC IP/QCC Port/
         # Connect/Ping Test/Timing Generation toggle) has a combined layout
         # minimum around 1428px logical - wider than the 1400 requested
@@ -385,11 +387,11 @@ class MainWindow(QMainWindow):
         # "remote_programming" (a multi-frame session that isn't in that
         # table - see _on_frame_received). Set via _begin_wait().
         self._awaiting_kind = None
-        self._individual_link_qtrm = None
+        self._individual_link_lru = None
         self._rx_cal_target = None
         self._tx_cal_target = None
-        self._individual_isolation_qtrm = None
-        self._individual_status_qtrm = None
+        self._individual_isolation_lru = None
+        self._individual_status_lru = None
         self._status_type_in_flight = None
         self._status_sub_type_in_flight = None
         self._memory_write_target = None
@@ -527,7 +529,7 @@ class MainWindow(QMainWindow):
         rp_tab.mode_step2_requested.connect(self._on_rp_mode_step2)
         rp_tab.link_check_requested.connect(self._on_rp_link_check)
         rp_tab.lru_info_requested.connect(self._on_rp_lru_info)
-        rp_tab.qtrm_high_speed_requested.connect(self._on_rp_qtrm_high_speed)
+        rp_tab.lru_high_speed_requested.connect(self._on_rp_lru_high_speed)
         rp_tab.mode_back_requested.connect(self._on_rp_mode_back)
         rp_tab.authenticate_requested.connect(self._on_rp_authenticate)
         rp_tab.verify_requested.connect(self._on_rp_verify)
@@ -535,7 +537,7 @@ class MainWindow(QMainWindow):
         rp_tab.program_requested.connect(self._on_rp_program)
         rp_tab.cancel_requested.connect(rp_ctrl.cancel)
         rp_tab.iap_timeout_changed.connect(self._on_rp_iap_timeout_changed)
-        rp_tab.target_qtrm_changed.connect(self._on_rp_target_qtrm_changed)
+        rp_tab.target_lru_changed.connect(self._on_rp_target_lru_changed)
 
         rp_ctrl.step_result.connect(rp_tab.on_step_result)
         rp_ctrl.gate_changed.connect(rp_tab.on_gate_changed)
@@ -594,6 +596,14 @@ class MainWindow(QMainWindow):
         # fields row). A menu bar is the standard place for auxiliary
         # windows in engineering tools like this one, and takes no layout
         # space of its own.
+        # The array's shape is the one setting that changes what every
+        # frame on the wire looks like, so it gets its own menu rather than
+        # sitting among the auxiliary-window actions in Tools.
+        config_menu = self.menuBar().addMenu("&Configuration")
+        array_action = QAction("Array Configuration…", self)
+        array_action.triggered.connect(self._on_array_config_triggered)
+        config_menu.addAction(array_action)
+
         tools_menu = self.menuBar().addMenu("&Tools")
 
         rx_action = QAction("Open RX Test Window", self)
@@ -634,6 +644,9 @@ class MainWindow(QMainWindow):
         temp_formula_action = QAction("Temperature Conversion Formula…", self)
         temp_formula_action.triggered.connect(self._on_temp_conversion_formula_triggered)
         tools_menu.addAction(temp_formula_action)
+
+    def _on_array_config_triggered(self):
+        ArrayConfigDialog(self).exec()
 
     def _on_tab_changed(self, index):
         self.status_tab.stop_auto_resend()
@@ -804,7 +817,7 @@ class MainWindow(QMainWindow):
         # width, so adding a wide banner widget directly into it stole
         # space from the QLineEdit and squeezed it down to a couple of
         # characters the moment the banner became visible.
-        self.responder_warning_label = QLabel("⚠ Status Responder is open (mock QTRM, not real hardware)")
+        self.responder_warning_label = QLabel("⚠ Status Responder is open (mock LRU, not real hardware)")
         self.responder_warning_label.setStyleSheet(
             "color: #1f2328; background-color: rgb(240, 200, 120);"
             "border-radius: 8px; padding: 4px 10px; font-weight: 600;"
@@ -815,7 +828,7 @@ class MainWindow(QMainWindow):
         # separate mock (bootloader protocol, not the status-query path)
         # opened independently, so it gets its own banner rather than
         # reusing responder_warning_label's text.
-        self.rp_tester_warning_label = QLabel("⚠ RP Tester is open (mock QTRM bootloader, not real hardware)")
+        self.rp_tester_warning_label = QLabel("⚠ RP Tester is open (mock LRU bootloader, not real hardware)")
         self.rp_tester_warning_label.setStyleSheet(
             "color: #1f2328; background-color: rgb(240, 200, 120);"
             "border-radius: 8px; padding: 4px 10px; font-weight: 600;"
@@ -1194,10 +1207,10 @@ class MainWindow(QMainWindow):
         QMessageBox.information(
             self, "Data logging started",
             f"Logging to:\n{path}\n\n"
-            "Note: per-QTRM OK/NOT_OK analysis is supported for Link Test "
+            "Note: per-LRU OK/NOT_OK analysis is supported for Link Test "
             "only - run the burn test with Link Test frames. Other commands "
             "are still logged (timestamps, delay, result, raw hex) but "
-            "their per-QTRM columns stay empty.",
+            "their per-LRU columns stay empty.",
         )
 
     def _set_logging_ui_stopped(self):
@@ -1205,11 +1218,11 @@ class MainWindow(QMainWindow):
         self.logging_indicator_label.setVisible(False)
 
     def _on_log_stats_changed(self, rows: int, ok: int, missing: int,
-                              errors: int, qtrm_fails: int):
+                              errors: int, lru_fails: int):
         name = os.path.basename(self._frame_logger.path or "")
         self.logging_indicator_label.setText(
             f"⏺ Logging to {name} - {rows} pairs | {ok} OK | {missing} missing"
-            f" | {errors} errors | {qtrm_fails} QTRM fails"
+            f" | {errors} errors | {lru_fails} LRU fails"
         )
 
     def _on_logger_error(self, msg: str):
@@ -1319,9 +1332,9 @@ class MainWindow(QMainWindow):
 
     def _take_target(self, spec: _Command):
         """
-        Pop the in-flight target QTRM index for a single-QTRM command,
+        Pop the in-flight target LRU index for a single-LRU command,
         clearing it so a later stray frame can't reuse a stale one. None for
-        all-QTRM commands, which don't latch a target at all.
+        all-LRU commands, which don't latch a target at all.
         """
         if spec.target_attr is None:
             return None
@@ -1454,7 +1467,7 @@ class MainWindow(QMainWindow):
         self._begin_wait("dwell")
         self._send_frame(frame)
 
-    def _on_memory_write(self, data_type: int, qtrm_index: int, payload: bytes):
+    def _on_memory_write(self, data_type: int, lru_index: int, payload: bytes):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
@@ -1462,11 +1475,11 @@ class MainWindow(QMainWindow):
             return
 
         frame = build_memory_write_frame(
-            data_type, payload, target_qtrm_index=qtrm_index,
+            data_type, payload, target_lru_index=lru_index,
             header=rc_settings.build_header(COMMAND_ID_MEMORY_OPERATION),
         )
 
-        self._memory_write_target = qtrm_index
+        self._memory_write_target = lru_index
         self.memory_tab.mark_pending()
         self._begin_wait("memory_write")
         self._send_frame(frame)
@@ -1479,7 +1492,7 @@ class MainWindow(QMainWindow):
             return
 
         frame = build_memory_write_frame(
-            data_type, payload, target_qtrm_index=None,
+            data_type, payload, target_lru_index=None,
             header=rc_settings.build_header(COMMAND_ID_MEMORY_OPERATION),
         )
 
@@ -1517,21 +1530,21 @@ class MainWindow(QMainWindow):
         self._begin_wait("link_test")
         self._send_frame(frame)
 
-    def _on_individual_link_test_clicked(self, qtrm_index: int):
+    def _on_individual_link_test_clicked(self, lru_index: int):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
         if not self._check_not_busy():
             return
 
-        frame = build_individual_link_frame(qtrm_index, header=rc_settings.build_header(COMMAND_ID_LINK_TEST))
+        frame = build_individual_link_frame(lru_index, header=rc_settings.build_header(COMMAND_ID_LINK_TEST))
 
-        self._individual_link_qtrm = qtrm_index
-        self.link_test_tab.mark_individual_pending(qtrm_index)
+        self._individual_link_lru = lru_index
+        self.link_test_tab.mark_individual_pending(lru_index)
         self._begin_wait("individual_link_test")
         self._send_frame(frame)
 
-    def _on_rx_cal_send(self, qtrm_index, channel, phase, atten, tx_isolation_for_others):
+    def _on_rx_cal_send(self, lru_index, channel, phase, atten, tx_isolation_for_others):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
@@ -1539,17 +1552,17 @@ class MainWindow(QMainWindow):
             return
 
         frame = build_cal_frame(
-            False, qtrm_index, channel, phase, atten,
+            False, lru_index, channel, phase, atten,
             tx_isolation_for_others=tx_isolation_for_others,
             header=rc_settings.build_header(COMMAND_ID_RX_CAL),
         )
 
-        self._rx_cal_target = qtrm_index
+        self._rx_cal_target = lru_index
         self.rx_cal_tab.mark_pending()
         self._begin_wait("rx_cal")
         self._send_frame(frame)
 
-    def _on_tx_cal_send(self, qtrm_index, channel, phase, atten, tx_isolation_for_others):
+    def _on_tx_cal_send(self, lru_index, channel, phase, atten, tx_isolation_for_others):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
@@ -1557,12 +1570,12 @@ class MainWindow(QMainWindow):
             return
 
         frame = build_cal_frame(
-            True, qtrm_index, channel, phase, atten,
+            True, lru_index, channel, phase, atten,
             tx_isolation_for_others=tx_isolation_for_others,
             header=rc_settings.build_header(COMMAND_ID_TX_CAL),
         )
 
-        self._tx_cal_target = qtrm_index
+        self._tx_cal_target = lru_index
         self.tx_cal_tab.mark_pending()
         self._begin_wait("tx_cal")
         self._send_frame(frame)
@@ -1575,7 +1588,7 @@ class MainWindow(QMainWindow):
             return
 
         frame = build_isolation_frame(
-            tx_isolation, target_qtrm_index=None,
+            tx_isolation, target_lru_index=None,
             header=rc_settings.build_header(COMMAND_ID_ISOLATION),
         )
 
@@ -1583,7 +1596,7 @@ class MainWindow(QMainWindow):
         self._begin_wait("isolation_all")
         self._send_frame(frame)
 
-    def _on_isolation_send_one(self, qtrm_index: int, tx_isolation: bool):
+    def _on_isolation_send_one(self, lru_index: int, tx_isolation: bool):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
@@ -1591,12 +1604,12 @@ class MainWindow(QMainWindow):
             return
 
         frame = build_isolation_frame(
-            tx_isolation, target_qtrm_index=qtrm_index,
+            tx_isolation, target_lru_index=lru_index,
             header=rc_settings.build_header(COMMAND_ID_ISOLATION),
         )
 
-        self._individual_isolation_qtrm = qtrm_index
-        self.isolation_tab.mark_individual_pending(qtrm_index)
+        self._individual_isolation_lru = lru_index
+        self.isolation_tab.mark_individual_pending(lru_index)
         self._begin_wait("isolation_individual")
         self._send_frame(frame)
 
@@ -1625,7 +1638,7 @@ class MainWindow(QMainWindow):
             return
 
         frame = build_status_frame(
-            status_type, target_qtrm_index=None,
+            status_type, target_lru_index=None,
             sub_status_type=sub_status_type, beam_register_address=beam_register_address,
             header=rc_settings.build_header(COMMAND_ID_STATUS),
         )
@@ -1636,7 +1649,7 @@ class MainWindow(QMainWindow):
         self._begin_wait("status_all")
         self._send_frame(frame)
 
-    def _on_status_send_one(self, qtrm_index: int, status_type: int, sub_status_type: int,
+    def _on_status_send_one(self, lru_index: int, status_type: int, sub_status_type: int,
                              beam_register_address: int):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
@@ -1645,15 +1658,15 @@ class MainWindow(QMainWindow):
             return
 
         frame = build_status_frame(
-            status_type, target_qtrm_index=qtrm_index,
+            status_type, target_lru_index=lru_index,
             sub_status_type=sub_status_type, beam_register_address=beam_register_address,
             header=rc_settings.build_header(COMMAND_ID_STATUS),
         )
 
-        self._individual_status_qtrm = qtrm_index
+        self._individual_status_lru = lru_index
         self._status_type_in_flight = status_type
         self._status_sub_type_in_flight = sub_status_type
-        self.status_tab.mark_individual_pending(qtrm_index)
+        self.status_tab.mark_individual_pending(lru_index)
         self._begin_wait("status_individual")
         self._send_frame(frame)
 
@@ -1662,15 +1675,15 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
         # Soft Reset gets no response - fire and forget, no timing/timeout tracking.
-        frame = build_soft_reset_frame(target_qtrm_index=None, header=rc_settings.build_header(COMMAND_ID_SOFT_RESET))
+        frame = build_soft_reset_frame(target_lru_index=None, header=rc_settings.build_header(COMMAND_ID_SOFT_RESET))
         self._send_frame(frame)
 
-    def _on_reset_one_clicked(self, qtrm_index):
+    def _on_reset_one_clicked(self, lru_index):
         if self.worker is None:
             QMessageBox.warning(self, "Not connected", "Connect to QCC first.")
             return
         frame = build_soft_reset_frame(
-            target_qtrm_index=qtrm_index, header=rc_settings.build_header(COMMAND_ID_SOFT_RESET),
+            target_lru_index=lru_index, header=rc_settings.build_header(COMMAND_ID_SOFT_RESET),
         )
         self._send_frame(frame)
 
@@ -1760,8 +1773,8 @@ class MainWindow(QMainWindow):
     def _on_rp_lru_info(self):
         self._rp_start(OP_LRU_INFO, self.remote_prog_ctrl.start_lru_info)
 
-    def _on_rp_qtrm_high_speed(self):
-        self._rp_start(OP_QTRM_HIGH_SPEED, self.remote_prog_ctrl.start_qtrm_high_speed)
+    def _on_rp_lru_high_speed(self):
+        self._rp_start(OP_LRU_HIGH_SPEED, self.remote_prog_ctrl.start_lru_high_speed)
 
     def _on_rp_mode_back(self):
         self._rp_start(OP_MODE_BACK, self.remote_prog_ctrl.start_mode_back)
@@ -1780,11 +1793,11 @@ class MainWindow(QMainWindow):
     def _on_rp_program(self, image_is_golden: bool):
         self._rp_start(OP_PROGRAM, self.remote_prog_ctrl.start_program, image_is_golden)
 
-    def _on_rp_target_qtrm_changed(self, target: int):
-        # 0-95 = single QTRM, RP_QTRM_SELECT_BROADCAST (0xFF) = all 96 -
-        # drives Mode Step 1's slot filling and byte 35 (QTRM_SELECT) of
+    def _on_rp_target_lru_changed(self, target: int):
+        # A 0-based index = single LRU, RP_LRU_SELECT_BROADCAST (0xFF) =
+        # all of them - drives Mode Step 1's slot filling and byte 35 (LRU_SELECT) of
         # the Mode Step 2 / QCC -> High Speed frames.
-        self.remote_prog_ctrl.target_qtrm = target
+        self.remote_prog_ctrl.target_lru = target
 
     def _on_rp_iap_timeout_changed(self, seconds: int):
         self.remote_prog_ctrl.iap_window_ms = seconds * 1000

@@ -1,15 +1,15 @@
 """
 status_responder_app.py
 
-Standalone test responder - simulates the QTRM side answering Status Type
+Standalone test responder - simulates the LRU side answering Status Type
 requests (Section 10 of the QTRM Message Format IDD), so the main GUI can
 be tested end-to-end without real hardware. Doesn't do much: listens on a
-UDP port, and for every QTRM slot in an incoming frame, replies based on
+UDP port, and for every LRU slot in an incoming frame, replies based on
 byte4's Status Type (and, for DIAGNOSTIC, Sub Status Type) alone -
-independent of the slot's Command Type. This matches real QTRM behavior:
+independent of the slot's Command Type. This matches real LRU behavior:
 any command (Dwell, Cal, Isolation, Memory Write, ...) can request a
 status reply via that same byte, not just the dedicated Status Command
-(0x21) - a real QTRM doesn't care which command carried the request, only
+(0x21) - a real LRU doesn't care which command carried the request, only
 what Status Type it asked for.
 
 The two exceptions that never reply, regardless of what Status Type bits
@@ -39,8 +39,9 @@ from PySide6.QtWidgets import (
 )
 
 from core.packet import (
-    QTRMSlot, QCCHeaderRx, QCCHeaderTx, QTRM_SLOT_SIZE, NUM_QTRM, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
-    TOTAL_PACKET_SIZE, CMD_RESERVED, CMD_SOFT_RESET, crc8,
+    LRUSlot, QCCHeaderRx, QCCHeaderTx, FIXED_HEADER_SIZE, QCC_HEADER_SIZE,
+    CMD_RESERVED, CMD_SOFT_RESET, channels_per_lru, crc8, lru_slot_size,
+    num_lru, total_packet_size,
     STATUS_TYPE_ACK, STATUS_TYPE_LINK, STATUS_TYPE_HEALTH,
     STATUS_TYPE_ERR_LOG, STATUS_TYPE_MFG, STATUS_TYPE_DIAGNOSTIC,
     DIAGNOSTIC_TYPE_DETAILED_HEALTH, LINK_SENTINEL,
@@ -73,7 +74,7 @@ _STATUS_TYPE_NAMES = {
 
 # ---------------------------------------------------------------------------
 # Mock reply builders - one per Status Type. Values are plausible dummy data
-# (varied a little per QTRM index so the Status tab's per-QTRM field display
+# (varied a little per LRU index so the Status tab's per-LRU field display
 # actually shows something distinguishable) rather than real measurements -
 # this tool only exists to exercise the wire format, not simulate real TRM
 # behavior.
@@ -92,9 +93,9 @@ def _finish_10_byte(body: bytearray) -> bytes:
     return bytes(body)
 
 
-def _mock_link_reply(qtrm_index: int, query_slot: bytes) -> bytes:
-    body = bytearray(QTRM_SLOT_SIZE)
-    body[0] = QTRMSlot.HEADER_BYTE
+def _mock_link_reply(lru_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(lru_slot_size())
+    body[0] = LRUSlot.HEADER_BYTE
     body[1] = 0x00
     body[2] = query_slot[2]
     body[3] = STATUS_TYPE_LINK
@@ -102,9 +103,9 @@ def _mock_link_reply(qtrm_index: int, query_slot: bytes) -> bytes:
     return _finish_10_byte(body)
 
 
-def _mock_ack_reply(qtrm_index: int, query_slot: bytes) -> bytes:
-    body = bytearray(QTRM_SLOT_SIZE)
-    body[0] = QTRMSlot.HEADER_BYTE
+def _mock_ack_reply(lru_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(lru_slot_size())
+    body[0] = LRUSlot.HEADER_BYTE
     body[1] = 0x00
     body[2] = query_slot[2]
     body[3] = query_slot[3]       # echo Sub Status/Status Type
@@ -113,23 +114,23 @@ def _mock_ack_reply(qtrm_index: int, query_slot: bytes) -> bytes:
     return _finish_10_byte(body)
 
 
-def _mock_health_reply(qtrm_index: int, query_slot: bytes) -> bytes:
-    body = bytearray(QTRM_SLOT_SIZE)
-    body[0] = QTRMSlot.HEADER_BYTE
+def _mock_health_reply(lru_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(lru_slot_size())
+    body[0] = LRUSlot.HEADER_BYTE
     body[1] = 0x00
     body[2] = query_slot[2]
     body[3] = STATUS_TYPE_HEALTH
-    body[4] = 200 + (qtrm_index % 20)   # DC Voltage Status
-    body[5] = 50 + (qtrm_index % 10)    # DC Current Status
-    body[6] = 30 + (qtrm_index % 40)    # Temperature Status
-    body[7] = 80 + (qtrm_index % 15)    # Tx Forward RF Status
-    body[8] = 90 + (qtrm_index % 5)     # Rx/Reverse RF Status
+    body[4] = 200 + (lru_index % 20)   # DC Voltage Status
+    body[5] = 50 + (lru_index % 10)    # DC Current Status
+    body[6] = 30 + (lru_index % 40)    # Temperature Status
+    body[7] = 80 + (lru_index % 15)    # Tx Forward RF Status
+    body[8] = 90 + (lru_index % 5)     # Rx/Reverse RF Status
     return _finish_10_byte(body)
 
 
-def _mock_err_log_reply(qtrm_index: int, query_slot: bytes) -> bytes:
-    body = bytearray(QTRM_SLOT_SIZE)
-    body[0] = QTRMSlot.HEADER_BYTE
+def _mock_err_log_reply(lru_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(lru_slot_size())
+    body[0] = LRUSlot.HEADER_BYTE
     body[1] = 0x00
     body[2] = query_slot[2]
     body[3] = STATUS_TYPE_ERR_LOG
@@ -137,51 +138,51 @@ def _mock_err_log_reply(qtrm_index: int, query_slot: bytes) -> bytes:
     body[5] = 0   # Header Error
     body[6] = 0   # Footer/CRC Error
     body[7] = 0   # Timeout Error
-    body[8] = ((qtrm_index % 3) << 4) | (qtrm_index % 4)  # PRT duty/width violation counts
+    body[8] = ((lru_index % 3) << 4) | (lru_index % 4)  # PRT duty/width violation counts
     return _finish_10_byte(body)
 
 
-def _mock_mfg_reply(qtrm_index: int, query_slot: bytes) -> bytes:
-    body = bytearray(QTRM_SLOT_SIZE)
-    body[0] = QTRMSlot.HEADER_BYTE
+def _mock_mfg_reply(lru_index: int, query_slot: bytes) -> bytes:
+    body = bytearray(lru_slot_size())
+    body[0] = LRUSlot.HEADER_BYTE
     body[1] = 0x00
     body[2] = query_slot[2]
     body[3] = STATUS_TYPE_MFG
     body[4] = (0 << 4) | 1  # Mfg Agency ID 0 (LRDE), firmware version 1
-    serial = 1000 + qtrm_index
+    serial = 1000 + lru_index
     body[5] = serial & 0xFF
     body[6] = (serial >> 8) & 0xFF
-    on_time = 100 + qtrm_index
+    on_time = 100 + lru_index
     body[7] = on_time & 0xFF
     body[8] = (on_time >> 8) & 0xFF
     return _finish_10_byte(body)
 
 
-def _mock_diagnostic_reply(qtrm_index: int, query_slot: bytes) -> bytes:
+def _mock_diagnostic_reply(lru_index: int, query_slot: bytes) -> bytes:
     diagnostic_type = (query_slot[3] >> 4) & 0x0F
     msg_len = 30  # Diagnostic responses are always full Dwell-size, regardless of the 10-byte query
-    body = bytearray(QTRM_SLOT_SIZE)
-    body[0] = QTRMSlot.HEADER_BYTE
+    body = bytearray(lru_slot_size())
+    body[0] = LRUSlot.HEADER_BYTE
     body[1] = 0x04
     body[2] = query_slot[2]
     body[3] = (diagnostic_type << 4) | STATUS_TYPE_DIAGNOSTIC
-    body[5] = 200 + (qtrm_index % 10)  # Total PRT Count
-    body[6] = 198 + (qtrm_index % 10)  # Processed PRT Count
+    body[5] = 200 + (lru_index % 10)  # Total PRT Count
+    body[6] = 198 + (lru_index % 10)  # Processed PRT Count
     body[7] = 2                        # Dwell PRT Count
-    body[8] = 5 + (qtrm_index % 3)      # Total SOB Count
+    body[8] = 5 + (lru_index % 3)      # Total SOB Count
 
     if diagnostic_type == DIAGNOSTIC_TYPE_DETAILED_HEALTH:
         body[4] = 1  # Operation Command Type
-        for ch in range(4):
+        for ch in range(channels_per_lru()):
             off = 9 + ch * 5
-            body[off] = 30 + ((qtrm_index + ch) % 40)       # Temp
-            body[off + 1] = 200 + ((qtrm_index + ch) % 20)  # DC Status
-            body[off + 2] = 80 + ((qtrm_index + ch) % 15)   # RF Status
+            body[off] = 30 + ((lru_index + ch) % 40)       # Temp
+            body[off + 1] = 200 + ((lru_index + ch) % 20)  # DC Status
+            body[off + 2] = 80 + ((lru_index + ch) % 15)   # RF Status
             body[off + 3] = ch                               # Tx Control Count
             body[off + 4] = ch                               # Rx Control Count
     else:
         body[4] = 0  # Beam Data Register Address - not implemented, always 0
-        for ch in range(4):
+        for ch in range(channels_per_lru()):
             off = 9 + ch * 5
             body[off] = (1 << 4) | 3       # Op Mode | Control
             body[off + 1] = 10 + ch        # Tx Phase
@@ -219,7 +220,7 @@ _REPLY_BUILDERS = {
 _mock_header = QCCHeaderTx()
 _mock_header.destination_id = 0x01
 _mock_header.source_id = 0x02
-_mock_header.packet_size = TOTAL_PACKET_SIZE
+_mock_header.packet_size = total_packet_size()
 _mock_header.echo_byte = 0
 _mock_header.command_ack = 1
 _mock_header.message_number = 1
@@ -249,7 +250,7 @@ _MOCK_FIXED_HEADER = _mock_header_bytes[:FIXED_HEADER_SIZE]
 _MOCK_QCC_HEADER = _mock_header_bytes[FIXED_HEADER_SIZE:]
 
 
-# Per-QTRM fault modes, injected on top of whatever reply would normally be
+# Per-LRU fault modes, injected on top of whatever reply would normally be
 # built - lets the main GUI's error-handling paths (dropped-reply timeouts,
 # checksum-reject logic, degraded-health display) be exercised without real
 # faulty hardware. Not part of the IDD itself; these are test-harness-only
@@ -266,7 +267,7 @@ _FAULT_MODE_NAMES = {
 }
 
 
-def parse_qtrm_index_spec(text: str) -> set:
+def parse_lru_index_spec(text: str) -> set:
     """
     "3,7-9, 12" -> {3, 7, 8, 9, 12}. Blank/unparseable tokens are ignored
     (this only feeds a best-effort test fixture, not a protocol field), out-
@@ -297,7 +298,7 @@ def _apply_force_error(status_type: int, reply: bytes) -> bytes:
     """
     Overwrite a reply already built for status_type with worst-case values,
     then re-stamp its checksum so it still validates as a (badly-behaved)
-    QTRM rather than a corrupt one. Only HEALTH/ERR_LOG have a documented
+    LRU rather than a corrupt one. Only HEALTH/ERR_LOG have a documented
     "fault" shape to force; other status types have no fault concept in the
     IDD, so they're left as their normal (already-valid) reply.
     """
@@ -331,7 +332,7 @@ def _build_echoed_header_prefix(query_frame: bytes) -> bytes:
     q = query_frame[:ECHOED_PREFIX_SIZE]
     out = bytearray(q)
     out[0], out[1] = q[1], q[0]                      # Destination/Source ID swap
-    out[2:4] = struct.pack("<H", TOTAL_PACKET_SIZE)   # Packet Size - fixed
+    out[2:4] = struct.pack("<H", total_packet_size())   # Packet Size
     out[5] = 1                                        # Command ACK - 0x01 for a response
     # bytes 4 (Echo Byte), 6-9 (Message Number), 10-31 (Date/Month/Year/Time
     # Of Day/Reserved0), 32 (QCC_COMMAND) are already correct via the q copy.
@@ -342,12 +343,12 @@ def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qc
                                fault_indices: set = None, fault_mode: str = FAULT_NONE,
                                auto_echo_header: bool = True):
     """
-    Returns (response_frame, [(qtrm_index, status_type_name), ...] for every
-    QTRM that got a reply). fixed_header/qcc_header default to the fixed
+    Returns (response_frame, [(lru_index, status_type_name), ...] for every
+    LRU that got a reply). fixed_header/qcc_header default to the fixed
     test-pattern bytes below if not given - pass explicit bytes (e.g. from
     the window's editable hex fields) to send a different 90-byte header.
     fault_indices/fault_mode apply one of the FAULT_* corruptions above to
-    just those QTRM indices' replies - every other QTRM behaves normally.
+    just those LRU indices' replies - every other LRU behaves normally.
 
     auto_echo_header (default True, matches real QCC behavior): overwrites
     the response header's first 33 bytes with values derived from the query
@@ -369,9 +370,9 @@ def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qc
         out[:ECHOED_PREFIX_SIZE] = _build_echoed_header_prefix(query_frame)
         out[base - 1] = crc8(bytes(out[: base - 1]))
     replied = []
-    for i in range(NUM_QTRM):
-        slot = query_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE]
-        valid_header = slot[0] == QTRMSlot.HEADER_BYTE
+    for i in range(num_lru()):
+        slot = query_frame[base + i * lru_slot_size(): base + (i + 1) * lru_slot_size()]
+        valid_header = slot[0] == LRUSlot.HEADER_BYTE
         command_type = slot[2] if valid_header else None
         status_type = slot[3] & 0x0F if valid_header else None
         no_reply = command_type is None or command_type in _NO_REPLY_COMMAND_TYPES
@@ -379,7 +380,7 @@ def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qc
 
         faulty = i in fault_indices and fault_mode != FAULT_NONE
         if faulty and fault_mode == FAULT_NO_REPLY:
-            out.extend(bytes(QTRM_SLOT_SIZE))
+            out.extend(bytes(lru_slot_size()))
             continue
 
         if builder is not None:
@@ -394,7 +395,7 @@ def build_mock_response_frame(query_frame: bytes, fixed_header: bytes = None, qc
             out.extend(reply)
             replied.append((i, status_name))
         else:
-            out.extend(bytes(QTRM_SLOT_SIZE))
+            out.extend(bytes(lru_slot_size()))
     return bytes(out), replied
 
 
@@ -439,8 +440,9 @@ class ResponderWorker(QThread):
                     self.error.emit(f"Socket error while receiving: {e}")
                 break
 
-            if len(data) != TOTAL_PACKET_SIZE:
-                self.error.emit(f"Received {len(data)} bytes from {addr}, expected {TOTAL_PACKET_SIZE} - dropped")
+            if len(data) != total_packet_size():
+                self.error.emit(f"Received {len(data)} bytes from {addr}, "
+                                f"expected {total_packet_size()} - dropped")
                 continue
 
             # CHIP_ID_READ (QCC_COMMAND 0x08) is the one command whose
@@ -595,7 +597,7 @@ class StatusResponderWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("QCC Status Responder - Mock QTRM")
+        self.setWindowTitle("QCC Status Responder - Mock LRU")
         # Cap to the actual available screen so Qt never requests a window
         # minimum larger than fits (see main_window.py's identical fix for
         # the "QWindowsWindow::setGeometry: Unable to set geometry" spam).
@@ -638,7 +640,7 @@ class StatusResponderWindow(QMainWindow):
         row = QHBoxLayout()
         outer.addLayout(row)
 
-        row.addWidget(QLabel("QTRM indices:"))
+        row.addWidget(QLabel("LRU indices:"))
         self.fault_indices_edit = QLineEdit()
         self.fault_indices_edit.setPlaceholderText("e.g. 3,7-9,12")
         self.fault_indices_edit.setFixedWidth(160)
@@ -658,7 +660,7 @@ class StatusResponderWindow(QMainWindow):
         return box
 
     def _current_fault_indices(self) -> set:
-        return parse_qtrm_index_spec(self.fault_indices_edit.text())
+        return parse_lru_index_spec(self.fault_indices_edit.text())
 
     def _current_fault_mode(self) -> str:
         return self.fault_mode_combo.currentData()
@@ -860,8 +862,8 @@ class StatusResponderWindow(QMainWindow):
             self.log_view.appendPlainText(f"From {host}:{port} - no reply-eligible slot found in any of the 96 slots")
             return
 
-        summary = ", ".join(f"QTRM-{i}={name}" for i, name in replied)
-        self.log_view.appendPlainText(f"From {host}:{port} - replied to {len(replied)} QTRM(s): {summary}")
+        summary = ", ".join(f"LRU-{i}={name}" for i, name in replied)
+        self.log_view.appendPlainText(f"From {host}:{port} - replied to {len(replied)} LRU(s): {summary}")
 
     def closeEvent(self, event):
         self.stop_listening()

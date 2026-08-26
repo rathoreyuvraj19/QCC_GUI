@@ -5,15 +5,15 @@ tx_forward_matrix.py
 
 Per the FPGA's TX Forward RF status register (r_tx_data(7) <=
 x"0" & r_channel_TX_RF_logic), the lower 4 bits of the decoded
-"tx_forward_rf_status" byte are one flag per TX channel of a QTRM:
+"tx_forward_rf_status" byte are one flag per TX channel of a LRU:
 bit 3 = CH1, bit 2 = CH2, bit 1 = CH3, bit 0 = CH4.
 
-Shown as a per-QTRM response indicator (communication status -
+Shown as a per-LRU response indicator (communication status -
 responded/no response/pending, independent of channel state), same fixed
 box size/font as link_test_tab.py's LedMatrix cells, with 4 small channel
 LEDs directly below it (green = channel active, red = channel inactive,
-grey = unknown because no response was received for that QTRM). Same 6
-Cold-Plate-group layout as LedMatrix too, via the same qtrm_layout.py
+grey = unknown because no response was received for that LRU). Same 6
+Cold-Plate-group layout as LedMatrix too, via the same lru_layout.py
 helpers, so the two visually line up when toggled.
 """
 
@@ -23,7 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 from core.command_style import IDLE_MATRIX_RGB, PENDING_RGB, SUCCESS_RGB, FAILURE_RGB, rgb_css
-from widgets.qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_to_bottom
+from core.packet import num_lru
+from widgets.lru_layout import (
+    group_grid_positions, group_label, group_rows, groups_top_to_bottom,
+    matrix_cols,
+)
 
 # Same borderless CP group box look as LedMatrix's _CP_BOX_STYLE.
 _CP_BOX_STYLE = (
@@ -35,7 +39,7 @@ _TEXT_COLOR = "#1f2328"
 
 # Response-indicator cell - same fixed footprint as link_test_tab.py's
 # _Led / command_style.py's matrix_button_style (46x24, 10px radius) so
-# every per-QTRM box in the app reads as the same size regardless of tab;
+# every per-LRU box in the app reads as the same size regardless of tab;
 # the 4 channel LEDs sit in the extra room below it rather than shrinking
 # this box down to make room, per Yuvraj's ask ("keep the box size fixed,
 # use the space via font size" - not by shrinking the box itself).
@@ -72,25 +76,25 @@ def _ch_led_style(rgb) -> str:
 
 
 class _TxForwardCell(QWidget):
-    """One QTRM's response indicator (LedMatrix-sized) + its 4 CH1-CH4 channel LEDs."""
+    """One LRU's response indicator (LedMatrix-sized) + its 4 CH1-CH4 channel LEDs."""
 
     clicked = Signal(int)
 
-    def __init__(self, qtrm_index: int, parent=None):
+    def __init__(self, lru_index: int, parent=None):
         super().__init__(parent)
-        self.qtrm_index = qtrm_index
+        self.lru_index = lru_index
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(2)
 
-        self.resp_label = QLabel(f"QTRM-{qtrm_index}")
+        self.resp_label = QLabel(f"LRU-{lru_index}")
         self.resp_label.setAlignment(Qt.AlignCenter)
         self.resp_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
         self.resp_label.setMinimumSize(_RESP_MIN_WIDTH, _RESP_MIN_HEIGHT)
         self.resp_label.setCursor(Qt.PointingHandCursor)
-        self.resp_label.setToolTip(f"QTRM-{qtrm_index} - click to query just this QTRM")
+        self.resp_label.setToolTip(f"LRU-{lru_index} - click to query just this LRU")
         outer.addWidget(self.resp_label)
 
         ch_row = QHBoxLayout()
@@ -108,7 +112,7 @@ class _TxForwardCell(QWidget):
 
     def mousePressEvent(self, event):
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.qtrm_index)
+            self.clicked.emit(self.lru_index)
         super().mousePressEvent(event)
 
     def _set_response(self, rgb):
@@ -131,7 +135,7 @@ class _TxForwardCell(QWidget):
         self._set_channels(None)
 
     def set_result(self, decoded):
-        """decoded: the QTRM's decoded HEALTH fields dict, or None if it didn't respond."""
+        """decoded: the LRU's decoded HEALTH fields dict, or None if it didn't respond."""
         if decoded is None:
             self._set_response(_NO_RESPONSE_RGB)
             self._set_channels(None)
@@ -161,22 +165,22 @@ class TxForwardMatrix(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
 
-        self._cells = [None] * NUM_QTRM
+        self._cells = [None] * num_lru()
         for group in groups_top_to_bottom():
-            cp_box = QGroupBox(f"CP{group}")
+            cp_box = QGroupBox(group_label(group))
             cp_box.setStyleSheet(_CP_BOX_STYLE)
             cp_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             grid = QGridLayout(cp_box)
             grid.setSpacing(4)
-            for col in range(MATRIX_COLS):
+            for col in range(matrix_cols()):
                 grid.setColumnStretch(col, 1)
-            for local_row in range(2):
+            for local_row in range(group_rows()):
                 grid.setRowStretch(local_row, 1)
 
-            for qtrm_index, local_row, local_col in group_grid_positions(group):
-                cell = _TxForwardCell(qtrm_index)
+            for lru_index, local_row, local_col in group_grid_positions(group):
+                cell = _TxForwardCell(lru_index)
                 cell.clicked.connect(self.cell_clicked.emit)
-                self._cells[qtrm_index] = cell
+                self._cells[lru_index] = cell
                 grid.addWidget(cell, local_row, local_col)
 
             outer.addWidget(cp_box, 1)
@@ -192,9 +196,9 @@ class TxForwardMatrix(QWidget):
                 cell.set_unqueried()
 
     def set_results(self, results):
-        """results: length-NUM_QTRM list of decoded-dict-or-None, per QTRM."""
+        """results: length-NUM_LRU list of decoded-dict-or-None, per LRU."""
         for cell, decoded in zip(self._cells, results):
             cell.set_result(decoded)
 
-    def set_one_result(self, qtrm_index: int, decoded):
-        self._cells[qtrm_index].set_result(decoded)
+    def set_one_result(self, lru_index: int, decoded):
+        self._cells[lru_index].set_result(decoded)

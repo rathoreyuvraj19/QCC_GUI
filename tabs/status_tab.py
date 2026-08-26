@@ -51,8 +51,8 @@ from core.packet import (
     STATUS_TYPE_THERMAL_CONFIG,
     DIAGNOSTIC_TYPE_DETAILED_HEALTH, DIAGNOSTIC_TYPE_FUTURE_BUFFER, DIAGNOSTIC_TYPE_PRESENT_BUFFER,
     describe_command_type, describe_channel_control, describe_phase, describe_atten,
+    num_lru,
 )
-from widgets.qtrm_layout import NUM_QTRM
 from widgets.spin_field import DoubleSpinField, SpinField
 from widgets.tx_forward_matrix import TxForwardMatrix
 
@@ -817,7 +817,7 @@ class StatusTab(QWidget):
         self._results = results
         valid_flags = [r is not None for r in results]
         valid_count = sum(valid_flags)
-        self.summary_label.setText(f"{valid_count}/{NUM_QTRM} QTRMs responded")
+        self.summary_label.setText(f"{valid_count}/{num_lru()} LRUs responded")
         self.led_matrix.set_results(valid_flags)
         self._apply_filter_to_leds(results)
         self._apply_temp_highlight(results)

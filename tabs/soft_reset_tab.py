@@ -1,22 +1,22 @@
 """
 soft_reset_tab.py
 
-"Soft Reset" - Soft Reset command (Section 9 of the QTRM Message Format IDD).
+"Soft Reset" - Soft Reset command (Section 9 of the LRU Message Format IDD).
 
-Fixed command, no configurable delay (not implemented in the QTRM firmware,
+Fixed command, no configurable delay (not implemented in the LRU firmware,
 per Yuvraj) - the payload byte is a fixed 0x01 (see build_soft_reset_slot
 in packet.py), confirmed against a real-hardware reference frame, not a
 user-adjustable setting.
 No response is expected either, so unlike the other tabs there's no
 response-time tracking here - it's fire-and-forget. "Reset All" sends the
-Soft Reset command to every QTRM. Clicking one button in the matrix resets
-only that QTRM - every other QTRM's slot is left entirely zero-filled (no
+Soft Reset command to every LRU. Clicking one button in the matrix resets
+only that LRU - every other LRU's slot is left entirely zero-filled (no
 header, no command at all), not just re-sent with a no-op command.
 
 Buttons fill their whole grid cell (Expanding size policy, no alignment
 override on addWidget) so they grow/shrink with the window instead of
 staying at a fixed compact size with growing gaps around them. A
-setMinimumSize floor keeps "QTRM-95" from clipping at very small sizes.
+setMinimumSize floor keeps "LRU-95" from clipping at very small sizes.
 """
 
 from PySide6.QtCore import Signal
@@ -26,12 +26,16 @@ from PySide6.QtWidgets import (
 )
 
 from core.command_style import matrix_button_style, send_button_style
-from widgets.qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_to_bottom
+from core.packet import num_lru
+from widgets.lru_layout import (
+    group_grid_positions, group_label, group_rows, groups_top_to_bottom,
+    matrix_cols,
+)
 
 # Matches Link Test's LED / Isolation's matrix button idle color exactly -
-# these 96 buttons are per-QTRM identifiers just like those, so they should
+# these 96 buttons are per-LRU identifiers just like those, so they should
 # look the same. "Reset All" gets the shared purple send-button color
-# instead (see _SEND_BTN_STYLE) - it's an action button, not a per-QTRM
+# instead (see _SEND_BTN_STYLE) - it's an action button, not a per-LRU
 # status indicator. Colors/QSS now come from command_style.py, the single
 # source of truth every command tab shares.
 _BUTTON_STYLE = matrix_button_style()
@@ -51,7 +55,7 @@ _CP_BOX_STYLE = (
 
 class SoftResetTab(QWidget):
     reset_all_requested = Signal()
-    reset_one_requested = Signal(int)     # qtrm_index (0-based)
+    reset_one_requested = Signal(int)     # lru_index (0-based)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -70,22 +74,24 @@ class SoftResetTab(QWidget):
         top_row.addStretch(1)
         root.addLayout(top_row)
 
-        # Six Cold Plate (CP0-CP5) group boxes, stacked CP5 at top to CP0 at
-        # bottom, each holding its 16 QTRMs - matches the real array layout.
-        self._buttons = [None] * NUM_QTRM
+        # One group box per row-band. For the 96-LRU array that's the real
+        # Cold Plate arrangement - CP0-CP5, 16 LRUs each, CP5 at top - and
+        # for any other array shape it's a single sequential grid; see
+        # widgets/lru_layout.py.
+        self._buttons = [None] * num_lru()
         for group in groups_top_to_bottom():
-            cp_box = QGroupBox(f"CP{group}")
+            cp_box = QGroupBox(group_label(group))
             cp_box.setStyleSheet(_CP_BOX_STYLE)
             cp_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             grid = QGridLayout(cp_box)
             grid.setSpacing(4)
-            for col in range(MATRIX_COLS):
+            for col in range(matrix_cols()):
                 grid.setColumnStretch(col, 1)
-            for local_row in range(2):
+            for local_row in range(group_rows()):
                 grid.setRowStretch(local_row, 1)
 
-            for qtrm_index, local_row, local_col in group_grid_positions(group):
-                btn = QPushButton(f"QTRM-{qtrm_index}")
+            for lru_index, local_row, local_col in group_grid_positions(group):
+                btn = QPushButton(f"LRU-{lru_index}")
                 # Expanding so the button fills its whole grid cell instead
                 # of staying at its natural size with empty space around it.
                 # setMinimumSize (not setFixedSize) keeps a floor so the
@@ -94,8 +100,8 @@ class SoftResetTab(QWidget):
                 btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
                 btn.setMinimumSize(_BUTTON_MIN_WIDTH, _BUTTON_MIN_HEIGHT)
                 btn.setStyleSheet(_BUTTON_STYLE)
-                btn.clicked.connect(self._make_reset_one_handler(qtrm_index))
-                self._buttons[qtrm_index] = btn
+                btn.clicked.connect(self._make_reset_one_handler(lru_index))
+                self._buttons[lru_index] = btn
                 grid.addWidget(btn, local_row, local_col)
 
             root.addWidget(cp_box, 1)
@@ -118,7 +124,7 @@ class SoftResetTab(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.addWidget(scroll)
 
-    def _make_reset_one_handler(self, qtrm_index: int):
+    def _make_reset_one_handler(self, lru_index: int):
         def handler():
-            self.reset_one_requested.emit(qtrm_index)
+            self.reset_one_requested.emit(lru_index)
         return handler

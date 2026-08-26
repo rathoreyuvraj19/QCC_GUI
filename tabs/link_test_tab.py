@@ -1,19 +1,19 @@
 """
 link_test_tab.py
 
-"Link Test" - one-click liveness check across all 96 QTRMs, plus a
-Soft-Reset-style individual per-QTRM link check.
+"Link Test" - one-click liveness check across all 96 LRUs, plus a
+Soft-Reset-style individual per-LRU link check.
 
-Per the QTRM Message Format IDD (Status Type = LINK), a live QTRM replies
+Per the LRU Message Format IDD (Status Type = LINK), a live LRU replies
 with a fixed 10-byte message ending in the sentinel bytes A1 A2 A3 A4 A5
 before its checksum (confirmed against STATUS_MODULE.vhd). This tab sends
-that query either to every QTRM in one frame, or (by clicking one LED) to
-just that one QTRM - mirroring Soft Reset's individual-target pattern.
+that query either to every LRU in one frame, or (by clicking one LED) to
+just that one LRU - mirroring Soft Reset's individual-target pattern.
 
 The LED matrix gives an at-a-glance view: every cell turns grey the moment
 Send (or an individual LED) is clicked, then after a short reveal delay
 turns green (linked) or light red (not linked / no reply yet). For an
-individual click, only the clicked QTRM's cell is revealed - the rest of
+individual click, only the clicked LRU's cell is revealed - the rest of
 the array is left at pending grey, since it was never actually queried.
 """
 
@@ -26,7 +26,11 @@ from PySide6.QtWidgets import (
 
 from core.command_style import IDLE_MATRIX_RGB, PENDING_RGB, SUCCESS_RGB, FAILURE_RGB
 from core.command_style import send_button_style
-from widgets.qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_to_bottom
+from core.packet import num_lru
+from widgets.lru_layout import (
+    group_grid_positions, group_label, group_rows, groups_top_to_bottom,
+    matrix_cols,
+)
 from widgets.spin_field import DoubleSpinField
 
 # LedMatrix needs real QColor instances (not QSS strings) - same RGB
@@ -40,7 +44,7 @@ _TEXT_COLOR = "#1f2328"
 _TOOLTIP_BG = "#F3E5AB"  # vanilla - must match theme.py's QToolTip rule
 
 # No drawn box/border/background - just the "CP{n}" title text sits above
-# each group so the QTRM cells themselves can use the full width instead of
+# each group so the LRU cells themselves can use the full width instead of
 # being boxed into a bordered card with padding around them.
 _CP_BOX_STYLE = (
     "QGroupBox { border: none; background: transparent; margin-top: 6px; padding: 4px 0px 0px 0px; }"
@@ -99,18 +103,18 @@ _SEND_BTN_STYLE = send_button_style()
 
 
 class _Led(QLabel):
-    """A single rectangular status cell for one QTRM (0-indexed label) - clickable only if the owning LedMatrix says so."""
+    """A single rectangular status cell for one LRU (0-indexed label) - clickable only if the owning LedMatrix says so."""
 
     clicked = Signal(int)
 
-    def __init__(self, qtrm_index: int, clickable: bool = True, parent=None):
-        super().__init__(f"QTRM-{qtrm_index}", parent)
-        self.qtrm_index = qtrm_index
+    def __init__(self, lru_index: int, clickable: bool = True, parent=None):
+        super().__init__(f"LRU-{lru_index}", parent)
+        self.lru_index = lru_index
         self.clickable = clickable
         # Expanding so the cell fills its whole grid cell (grows/shrinks with
         # the window) rather than staying at its natural size and leaving
         # empty space around it. setMinimumSize (not setFixedSize) keeps a
-        # floor so "QTRM-95" never clips, while still letting Qt shrink below
+        # floor so "LRU-95" never clips, while still letting Qt shrink below
         # that floor without overlap if the window gets extremely small.
         self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         self.setMinimumWidth(_LED_MIN_WIDTH)
@@ -118,17 +122,17 @@ class _Led(QLabel):
         self.setAlignment(Qt.AlignCenter)
         if clickable:
             self.setCursor(Qt.PointingHandCursor)
-            self.setToolTip(f"QTRM-{qtrm_index} - click to link-test just this QTRM")
+            self.setToolTip(f"LRU-{lru_index} - click to link-test just this LRU")
         else:
             # No individual-query action wired up wherever this instance is
             # used (e.g. Dwell's results display) - don't imply one via the
             # pointer cursor/tooltip text.
-            self.setToolTip(f"QTRM-{qtrm_index}")
+            self.setToolTip(f"LRU-{lru_index}")
         self.set_color(_IDLE_COLOR)
 
     def mousePressEvent(self, event):
         if self.clickable and event.button() == Qt.LeftButton:
-            self.clicked.emit(self.qtrm_index)
+            self.clicked.emit(self.lru_index)
         super().mousePressEvent(event)
 
     def event(self, ev):
@@ -144,7 +148,7 @@ class _Led(QLabel):
     def set_color(self, color: QColor):
         self.setStyleSheet(
             # Same 10px roundness as the Soft Reset/Isolation button matrix
-            # (command_style.py's matrix_button_style) so both QTRM display
+            # (command_style.py's matrix_button_style) so both LRU display
             # arrays share the same shape. Two gotchas learned fixing this:
             # (1) border-radius MUST come after border - Qt's "border"
             # shorthand resets border-radius back to 0 if declared before
@@ -163,20 +167,20 @@ class _Led(QLabel):
 
 class LedMatrix(QWidget):
     """
-    Six 'CP' (Cold Plate) group boxes, each holding the 16 QTRMs on that
+    Six 'CP' (Cold Plate) group boxes, each holding the 16 LRUs on that
     connector (2 rows x 8 columns), stacked to match the real array -
     CP5 at the top down to CP0 at the bottom.
 
     clickable=False for a purely read-only results display (e.g. Dwell's
     matrix, which only ever shows the outcome of a single "Send Dwell" to
-    all 96 QTRMs at once - there's no per-QTRM individual query to trigger
+    all 96 LRUs at once - there's no per-LRU individual query to trigger
     from it) - cells then have no pointer cursor/click tooltip, since
     nothing happens on click. Link Test/Status keep the default
     clickable=True, since clicking one of their cells genuinely queries
-    just that QTRM.
+    just that LRU.
     """
 
-    led_clicked = Signal(int)  # qtrm_index
+    led_clicked = Signal(int)  # lru_index
 
     def __init__(self, clickable: bool = True, parent=None):
         super().__init__(parent)
@@ -185,22 +189,22 @@ class LedMatrix(QWidget):
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(6)
 
-        self._leds = [None] * NUM_QTRM
+        self._leds = [None] * num_lru()
         for group in groups_top_to_bottom():
-            cp_box = QGroupBox(f"CP{group}")
+            cp_box = QGroupBox(group_label(group))
             cp_box.setStyleSheet(_CP_BOX_STYLE)
             cp_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             grid = QGridLayout(cp_box)
             grid.setSpacing(4)
-            for col in range(MATRIX_COLS):
+            for col in range(matrix_cols()):
                 grid.setColumnStretch(col, 1)
-            for local_row in range(2):
+            for local_row in range(group_rows()):
                 grid.setRowStretch(local_row, 1)
 
-            for qtrm_index, local_row, local_col in group_grid_positions(group):
-                led = _Led(qtrm_index, clickable=clickable)
+            for lru_index, local_row, local_col in group_grid_positions(group):
+                led = _Led(lru_index, clickable=clickable)
                 led.clicked.connect(self.led_clicked.emit)
-                self._leds[qtrm_index] = led
+                self._leds[lru_index] = led
                 grid.addWidget(led, local_row, local_col)
 
             outer.addWidget(cp_box, 1)
@@ -209,8 +213,8 @@ class LedMatrix(QWidget):
         for led in self._leds:
             led.set_color(color)
 
-    def set_one(self, qtrm_index: int, color: QColor):
-        self._leds[qtrm_index].set_color(color)
+    def set_one(self, lru_index: int, color: QColor):
+        self._leds[lru_index].set_color(color)
 
     def set_results(self, linked_flags):
         for led, linked in zip(self._leds, linked_flags):
@@ -219,7 +223,7 @@ class LedMatrix(QWidget):
 
 class LinkTestTab(QWidget):
     send_requested = Signal(bool)          # is_auto_resend
-    individual_send_requested = Signal(int)  # qtrm_index (0-based)
+    individual_send_requested = Signal(int)  # lru_index (0-based)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -319,7 +323,7 @@ class LinkTestTab(QWidget):
 
     def show_results(self, linked_flags):
         linked_count = sum(1 for v in linked_flags if v)
-        self.summary_label.setText(f"{linked_count}/{NUM_QTRM} QTRMs linked")
+        self.summary_label.setText(f"{linked_count}/{NUM_LRU} LRUs linked")
         self.led_matrix.set_results(linked_flags)
 
     def show_response_time(self, microseconds: float):
@@ -330,23 +334,23 @@ class LinkTestTab(QWidget):
         self.response_time_label.setText("")
         self.led_matrix.set_all(_NOT_LINKED_COLOR)
 
-    # -- individual QTRM test (click one LED) ------------------------------
+    # -- individual LRU test (click one LED) ------------------------------
 
-    def _on_led_clicked(self, qtrm_index: int):
-        self.individual_send_requested.emit(qtrm_index)
+    def _on_led_clicked(self, lru_index: int):
+        self.individual_send_requested.emit(lru_index)
 
-    def mark_individual_pending(self, qtrm_index: int):
-        self.summary_label.setText(f"QTRM-{qtrm_index}: waiting for response...")
+    def mark_individual_pending(self, lru_index: int):
+        self.summary_label.setText(f"LRU-{lru_index}: waiting for response...")
         self.response_time_label.setText("")
         self.led_matrix.set_all(_PENDING_COLOR)
 
-    def show_individual_result(self, qtrm_index: int, linked: bool):
-        self.led_matrix.set_one(qtrm_index, _LINKED_COLOR if linked else _NOT_LINKED_COLOR)
-        self.summary_label.setText(f"QTRM-{qtrm_index}: {'Linked' if linked else 'Not linked'}")
+    def show_individual_result(self, lru_index: int, linked: bool):
+        self.led_matrix.set_one(lru_index, _LINKED_COLOR if linked else _NOT_LINKED_COLOR)
+        self.summary_label.setText(f"LRU-{lru_index}: {'Linked' if linked else 'Not linked'}")
 
     def show_individual_response_time(self, microseconds: float):
         self.response_time_label.setText(f"{microseconds:.0f} µs")
 
-    def show_individual_no_response(self, qtrm_index: int):
-        self.summary_label.setText(f"QTRM-{qtrm_index}: No response")
-        self.led_matrix.set_one(qtrm_index, _NOT_LINKED_COLOR)
+    def show_individual_no_response(self, lru_index: int):
+        self.summary_label.setText(f"LRU-{lru_index}: No response")
+        self.led_matrix.set_one(lru_index, _NOT_LINKED_COLOR)

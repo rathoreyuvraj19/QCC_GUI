@@ -1,21 +1,21 @@
 """
 isolation_tab.py
 
-"Isolation" - Rx/Tx Isolation command (Section 7/8 of the QTRM Message
+"Isolation" - Rx/Tx Isolation command (Section 7/8 of the LRU Message
 Format IDD). Unlike Soft Reset, this command now requests a Link-type
 status response (per Yuvraj's spec: every command except Soft Reset does),
 so the GUI waits up to RESPONSE_TIMEOUT_MS for it and colors the relevant
-button(s) - grey while pending, green if the QTRM replied, red if not.
+button(s) - grey while pending, green if the LRU replied, red if not.
 
-A segmented control picks whether "Send All" or an individual QTRM click
+A segmented control picks whether "Send All" or an individual LRU click
 sends Rx Isolation or Tx Isolation. "Send All" sends the chosen isolation
-command to every QTRM and colors both the button itself (green only if
-every QTRM responded) and each of the 96 matrix buttons individually.
-Clicking one matrix button sends it to only that QTRM - every other QTRM's
+command to every LRU and colors both the button itself (green only if
+every LRU responded) and each of the 96 matrix buttons individually.
+Clicking one matrix button sends it to only that LRU - every other LRU's
 slot is left entirely zero-filled (no header, no command at all, matching
 Soft Reset's individual-target convention). Only the clicked button greys
 out and then reveals green/red - every other button resets to its idle
-color, since only the clicked QTRM is actually being queried by that send
+color, since only the clicked LRU is actually being queried by that send
 (unlike Link Test's individual LEDs, which grey the whole array).
 """
 
@@ -30,7 +30,11 @@ from core.command_style import SUCCESS_COLOR as _LINKED_COLOR
 from core.command_style import FAILURE_COLOR as _NOT_LINKED_COLOR
 from core.command_style import matrix_button_style as _matrix_button_style
 from core.command_style import send_button_style
-from widgets.qtrm_layout import NUM_QTRM, MATRIX_COLS, group_grid_positions, groups_top_to_bottom
+from core.packet import num_lru
+from widgets.lru_layout import (
+    group_grid_positions, group_label, group_rows, groups_top_to_bottom,
+    matrix_cols,
+)
 from widgets.segmented_control import SegmentedControl
 
 _BUTTON_MIN_WIDTH = 46
@@ -46,16 +50,16 @@ _CP_BOX_STYLE = (
 
 # Matrix button colors/QSS from command_style.py (single source of truth
 # every command tab shares) - matches Link Test's LED palette exactly,
-# since each of these 96 buttons is a per-QTRM status indicator, same role
+# since each of these 96 buttons is a per-LRU status indicator, same role
 # as one of Link Test's LEDs. Distinct from "Send All", which stays a
 # fixed purple always (matching every other command tab's send button)
-# since it represents an action, not a single QTRM's status.
+# since it represents an action, not a single LRU's status.
 _SEND_BTN_STYLE = send_button_style()
 
 
 class IsolationTab(QWidget):
     send_all_requested = Signal(bool)       # tx_isolation
-    send_one_requested = Signal(int, bool)  # qtrm_index (0-based), tx_isolation
+    send_one_requested = Signal(int, bool)  # lru_index (0-based), tx_isolation
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -76,7 +80,7 @@ class IsolationTab(QWidget):
         send_row = QHBoxLayout()
         send_row.addStretch(1)
         # Always the app's default teal look - unlike the 96 matrix buttons,
-        # this button doesn't represent any single QTRM's result, so it never
+        # this button doesn't represent any single LRU's result, so it never
         # gets recolored by mark_all_pending/show_all_results/show_all_no_response.
         self.send_all_btn = QPushButton("Send All")
         self.send_all_btn.setStyleSheet(_SEND_BTN_STYLE)
@@ -85,29 +89,31 @@ class IsolationTab(QWidget):
         send_row.addStretch(1)
         root.addLayout(send_row)
 
-        # Six Cold Plate (CP0-CP5) group boxes, stacked CP5 at top to CP0 at
-        # bottom, each holding its 16 QTRMs - matches the real array layout.
-        self._buttons = [None] * NUM_QTRM
+        # One group box per row-band. For the 96-LRU array that's the real
+        # Cold Plate arrangement - CP0-CP5, 16 LRUs each, CP5 at top - and
+        # for any other array shape it's a single sequential grid; see
+        # widgets/lru_layout.py.
+        self._buttons = [None] * num_lru()
         for group in groups_top_to_bottom():
-            cp_box = QGroupBox(f"CP{group}")
+            cp_box = QGroupBox(group_label(group))
             cp_box.setStyleSheet(_CP_BOX_STYLE)
             cp_box.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
             grid = QGridLayout(cp_box)
             grid.setSpacing(4)
-            for col in range(MATRIX_COLS):
+            for col in range(matrix_cols()):
                 grid.setColumnStretch(col, 1)
-            for local_row in range(2):
+            for local_row in range(group_rows()):
                 grid.setRowStretch(local_row, 1)
 
-            for qtrm_index, local_row, local_col in group_grid_positions(group):
-                btn = QPushButton(f"QTRM-{qtrm_index}")
+            for lru_index, local_row, local_col in group_grid_positions(group):
+                btn = QPushButton(f"LRU-{lru_index}")
                 # Expanding + a minimumSize floor: fills its grid cell and
                 # grows/shrinks with the window, but never clips its label.
                 btn.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
                 btn.setMinimumSize(_BUTTON_MIN_WIDTH, _BUTTON_MIN_HEIGHT)
                 btn.setStyleSheet(_matrix_button_style())
-                btn.clicked.connect(self._make_send_one_handler(qtrm_index))
-                self._buttons[qtrm_index] = btn
+                btn.clicked.connect(self._make_send_one_handler(lru_index))
+                self._buttons[lru_index] = btn
                 grid.addWidget(btn, local_row, local_col)
 
             root.addWidget(cp_box, 1)
@@ -131,15 +137,15 @@ class IsolationTab(QWidget):
     def _on_send_all_clicked(self):
         self.send_all_requested.emit(self.mode_switch.isChecked())
 
-    def _make_send_one_handler(self, qtrm_index: int):
+    def _make_send_one_handler(self, lru_index: int):
         def handler():
-            self.send_one_requested.emit(qtrm_index, self.mode_switch.isChecked())
+            self.send_one_requested.emit(lru_index, self.mode_switch.isChecked())
         return handler
 
     # -- coloring, driven by main_window.py's send/response/timeout handlers --
 
-    def _set_matrix_color(self, qtrm_index: int, color: str):
-        self._buttons[qtrm_index].setStyleSheet(_matrix_button_style(color))
+    def _set_matrix_color(self, lru_index: int, color: str):
+        self._buttons[lru_index].setStyleSheet(_matrix_button_style(color))
 
     def _set_all_matrix_color(self, color: str):
         for btn in self._buttons:
@@ -147,7 +153,7 @@ class IsolationTab(QWidget):
 
     def mark_all_pending(self):
         # Send All itself always stays its idle purple - only the 96 matrix
-        # buttons (each representing one QTRM's actual result) change color.
+        # buttons (each representing one LRU's actual result) change color.
         self._set_all_matrix_color(_PENDING_COLOR)
 
     def show_all_results(self, linked_flags):
@@ -157,16 +163,16 @@ class IsolationTab(QWidget):
     def show_all_no_response(self):
         self._set_all_matrix_color(_NOT_LINKED_COLOR)
 
-    def mark_individual_pending(self, qtrm_index: int):
-        # Only the clicked QTRM's button greys out - every other button
-        # resets to its idle color, since only this one QTRM is actually
+    def mark_individual_pending(self, lru_index: int):
+        # Only the clicked LRU's button greys out - every other button
+        # resets to its idle color, since only this one LRU is actually
         # being queried by this send (unlike Link Test's individual mode,
         # which greys the whole array).
         for i, btn in enumerate(self._buttons):
-            btn.setStyleSheet(_matrix_button_style(_PENDING_COLOR if i == qtrm_index else None))
+            btn.setStyleSheet(_matrix_button_style(_PENDING_COLOR if i == lru_index else None))
 
-    def show_individual_result(self, qtrm_index: int, linked: bool):
-        self._set_matrix_color(qtrm_index, _LINKED_COLOR if linked else _NOT_LINKED_COLOR)
+    def show_individual_result(self, lru_index: int, linked: bool):
+        self._set_matrix_color(lru_index, _LINKED_COLOR if linked else _NOT_LINKED_COLOR)
 
-    def show_individual_no_response(self, qtrm_index: int):
-        self._set_matrix_color(qtrm_index, _NOT_LINKED_COLOR)
+    def show_individual_no_response(self, lru_index: int):
+        self._set_matrix_color(lru_index, _NOT_LINKED_COLOR)

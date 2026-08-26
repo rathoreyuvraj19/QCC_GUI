@@ -163,7 +163,7 @@ class HeaderPanel(QWidget):
     sidebar spanning the full window height (beside both the Connection
     bar and the Tabs, not nested inside any one tab's own layout) - shows
     whichever frame was most recently received from ANY tab, not a
-    per-tab memory. Call show_frame(raw_2970_byte_frame) whenever a
+    per-tab memory. Call show_frame(raw_response_frame) whenever a
     response arrives.
     """
 
@@ -235,7 +235,7 @@ class HeaderPanel(QWidget):
         self.reset_btn.setToolTip(
             "Sends QCC_RESET - resets the QCC's own FPGA-side buffers/counters\n"
             "via PIO pin (QCC-level action, distinct from Soft Reset's\n"
-            "QTRM-targeted command). Asks for confirmation before sending."
+            "LRU-targeted command). Asks for confirmation before sending."
         )
         self.reset_btn.clicked.connect(self._on_reset_btn_clicked)
 

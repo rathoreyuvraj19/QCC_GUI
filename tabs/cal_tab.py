@@ -27,7 +27,7 @@ from core.command_style import SUCCESS_COLOR as _LINKED_COLOR
 from core.command_style import FAILURE_COLOR as _NOT_LINKED_COLOR
 from core.command_style import indicator_style as _indicator_style
 from core.command_style import send_button_style
-from core.packet import channels_per_lru, describe_atten, describe_phase, num_lru
+from core.packet import describe_atten, describe_phase, num_lru
 from widgets.segmented_control import SegmentedControl
 from widgets.spin_field import SpinField
 

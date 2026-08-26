@@ -323,7 +323,7 @@ class LinkTestTab(QWidget):
 
     def show_results(self, linked_flags):
         linked_count = sum(1 for v in linked_flags if v)
-        self.summary_label.setText(f"{linked_count}/{NUM_LRU} LRUs linked")
+        self.summary_label.setText(f"{linked_count}/{num_lru()} LRUs linked")
         self.led_matrix.set_results(linked_flags)
 
     def show_response_time(self, microseconds: float):

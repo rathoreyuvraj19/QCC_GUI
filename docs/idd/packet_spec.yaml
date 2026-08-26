@@ -382,6 +382,7 @@ lru_command_types:
 # -----------------------------------------------------------------------------
 
 open_items:
+  - "The array shape (array_shape above) is now configurable on the RC/GUI side, but nothing in this spec says how QCC learns it. QCC's DMA transfer length and slot decode are presumably fixed at build time, so today RC and QCC must simply be built for the same num_lru/channels_per_lru or the frame sizes disagree and every frame is dropped on length. Options, none chosen: (a) keep it a build-time agreement on both sides and document it as such, (b) have QCC derive the slot width from the packet_size_id byte it already receives and the block length from the header's packet_size field, or (c) add an explicit negotiation/readback so RC can query the shape QCC was built for. Needs Yuvraj - this is a firmware/RTL question, not a GUI one."
   - "What format is time_of_day (header bytes 15-18)?"
   - "PRT_BYPASS/PRT_INTERNAL_GEN's prt_width_us and SOB_BYPASS/SOB_INTERNAL_GEN/PPS_INTERNAL_GEN's width field sizes/units are drafted and approved, but not yet cross-checked against the actual sob_gen/prt_gen VHDL register widths (e.g. sob_gen's i_sob_width port is 8-bit in the current RTL, vs 16-bit specified here - needs reconciliation before implementation)."
   - "lru_data_block_state is only confirmed for DATA_DISTRIBUTION (populated) and QCC_STATUS (empty) - QCC_RESET, PRT_BYPASS, SOB_BYPASS, PRT_INTERNAL_GEN, SOB_INTERNAL_GEN, PPS_INTERNAL_GEN, REMOTE_PROGRAMMING are still TBD."

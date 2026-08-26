@@ -66,6 +66,32 @@ disable every malformed-frame check.
 
 ## Open issues (flagged 2026-07-06, not yet started)
 
+0. **OPEN - how does QCC learn the array shape?** (raised 2026-08-26, with
+   the generic-GUI work) - the RC/GUI side is now configurable
+   (`core/lru_config.py`: `num_lru` x `channels_per_lru`, frame =
+   `90 + num_lru * (5*channels + 10)`), and
+   `docs/idd/QCC_Protocol.docx` documents the frame that way. But nothing
+   states how the QCC side finds out. Its DMA transfer length and slot
+   decode are presumably fixed at build time, so **as things stand RC and
+   QCC have to be built for the same shape** - mismatch means every frame
+   fails the peer's length check and is dropped, which looks exactly like a
+   dead link. Three options, none chosen:
+   - Keep it a build-time agreement on both sides, and say so explicitly in
+     the IDD (cheapest; the GUI already refuses to send a frame whose length
+     isn't one it expects).
+   - Have QCC derive the slot width from the `packet_size_id` byte it
+     already receives per slot, and the block length from the header's
+     `PACKET_SIZE` field - both are already on the wire, so no new fields.
+   - Add an explicit readback (a `CHIP_ID_READ`-style query) so RC can ask
+     QCC which shape it was built for and warn on mismatch.
+
+   This is a firmware/RTL question, not a GUI one - needs Yuvraj. Until it's
+   settled, the safe operating assumption is that the default 96 x 4 shape
+   is the only one real hardware accepts, and other shapes are exercised
+   against the mock responders only. See `open_items` in
+   `docs/idd/packet_spec.yaml`.
+
+
 1. **Ping button stuck / no hover-click feedback** - after one ping it stays
    green; re-clicking should flash grey briefly then resolve, but it updates
    too fast to see, and the button has no hover/pressed effect at all.

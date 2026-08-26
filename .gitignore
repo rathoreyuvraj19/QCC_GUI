@@ -15,6 +15,7 @@ dist/
 rc_settings.json
 connection_settings.json
 temp_conversion_settings.json
+lru_config.json
 
 .claude/skills/run-qcc-qtrm-control/shots/
 

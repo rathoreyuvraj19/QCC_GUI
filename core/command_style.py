@@ -18,7 +18,7 @@ Two independent concerns, kept separate on purpose:
     hover/pressed feedback never breaks and the button never gets stuck
     looking like a stale result.
   - The pending/success/failure indicator pill/matrix-button palette -
-    identical grey/green/red everywhere a per-command or per-QTRM result
+    identical grey/green/red everywhere a per-command or per-LRU result
     is shown.
 """
 
@@ -43,7 +43,7 @@ FAILURE_RGB = (240, 149, 149)
 # not "didn't respond".
 WARNING_RGB = (240, 178, 90)
 
-# Per-QTRM matrix button idle look (Isolation/Soft Reset's 96-button grids,
+# Per-LRU matrix button idle look (Isolation/Soft Reset's per-LRU grids,
 # Link Test's LED matrix outline) - a light neutral grey distinct from the
 # darker pending grey above.
 IDLE_MATRIX_RGB = (222, 224, 227)
@@ -107,12 +107,12 @@ def indicator_style(bg_color: str = None, radius: int = 14, border_color: str = 
 def matrix_button_style(bg_color: str = None, padding: str = "2px 4px", font_size_pt: int = 8,
                          radius: int = 10) -> str:
     """
-    Per-QTRM matrix button (Isolation's 96-button grid, Soft Reset's
-    QTRM-id buttons): light grey idle with real hover/pressed feedback
+    Per-LRU matrix button (Isolation's per-LRU grid, Soft Reset's
+    LRU-id buttons): light grey idle with real hover/pressed feedback
     (it's clickable), flat solid color for pending/linked/not-linked
     results (a status snapshot, not meant to invite clicking while shown).
     Default radius matches link_test_tab.py's _Led exactly (10px) - both
-    are the same kind of per-QTRM indicator, just in different tabs, and
+    are the same kind of per-LRU indicator, just in different tabs, and
     should read as the same shape.
 
     Radius is capped below 12px on purpose: these cells have a 24px

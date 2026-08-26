@@ -4,15 +4,19 @@ frame_logger.py
 Streams every query/response pair the main GUI sends/receives into a CSV
 file, one row per query, for long (hours/days) burn tests - the analysis
 goal is "which packets went missing, how did the response delay behave,
-and which QTRMs answered", so a row whose response columns are empty IS a
+and which LRUs answered", so a row whose response columns are empty IS a
 missing packet.
 
 Burn tests run Link Test frames: for those rows the logger additionally
-validates each queried QTRM's 30-byte reply slot and marks it OK/NOT_OK in
-per-QTRM columns (qtrm_00..qtrm_95, plus qtrm_ok_count/qtrm_not_ok_list
-summaries). Other commands still get the timing/result/raw-hex columns,
-just with the qtrm_* columns empty - Link Test is the only command whose
-per-QTRM reply format this logger understands.
+validates each queried LRU's reply slot and marks it OK/NOT_OK in per-LRU
+columns (lru_00..lru_95 for the default 96-LRU array, plus lru_ok_count/
+lru_not_ok_list summaries). Other commands still get the timing/result/
+raw-hex columns, just with the lru_* columns empty - Link Test is the only
+command whose per-LRU reply format this logger understands.
+
+How many lru_* columns a file has, and how wide their index is, depends on
+the configured array shape (core/lru_config.py) - which is why the column
+list is built when a log is opened rather than at import.
 
 Pairing: the header's MESSAGE_NUMBER (bytes 7-10, 1-indexed) increments on
 every RC send and QCC echoes it back verbatim in its response (per
@@ -39,23 +43,14 @@ from datetime import datetime
 from PySide6.QtCore import QObject, QTimer, Signal
 
 from core.packet import (
-    FIXED_HEADER_SIZE, NUM_QTRM, QCC_HEADER_SIZE, QCCHeaderRx, QCCHeaderTx,
-    QTRM_SLOT_SIZE, TOTAL_PACKET_SIZE, build_link_query_slot,
-    parse_link_test_response,
+    HEADER_SIZE, QCCHeaderRx, QCCHeaderTx, build_link_query_slot,
+    lru_slot_size, num_lru, parse_link_test_response, total_packet_size,
 )
 
-_HEADER_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE  # 90
+_HEADER_SIZE = HEADER_SIZE  # 90, fixed regardless of the array's shape
 
-# The canonical 30-byte Link query slot - a TX frame is recognized as a Link
-# Test by byte-exact slot comparison against this, so the "which QTRMs were
-# queried" set falls out for free (all 96 for Send Link Test, one for an
-# individual-LED click). Per-QTRM OK/NOT_OK analysis is only defined for
-# Link Test frames; every other command's rows leave the qtrm_* columns
-# empty (the response hex still captures the frame for offline re-analysis).
-_LINK_QUERY_SLOT = build_link_query_slot()
-
-QTRM_OK = "OK"
-QTRM_NOT_OK = "NOT_OK"
+LRU_OK = "OK"
+LRU_NOT_OK = "NOT_OK"
 
 # How long a sent query may sit unanswered (with no newer query flushing it
 # out first) before its row is written as TIMEOUT. Deliberately longer than
@@ -79,34 +74,67 @@ RESULT_UNSOLICITED = "UNSOLICITED"
 # apparent hang after ~2e5 frames).
 _FLUSH_EVERY_N_ROWS = 50
 
-# qtrm_ok_count/qtrm_not_ok_list summarize the 96 per-QTRM columns for
-# quick filtering (a non-empty qtrm_not_ok_list cell = at least one QTRM
-# failed that Link Test). qtrm_00..qtrm_95 are OK / NOT_OK per queried QTRM
-# (0-indexed, matching the Link Test tab's LED labels), empty where that
-# QTRM wasn't queried, the row isn't a Link Test, or the whole frame timed
-# out (a TIMEOUT row means NO QTRM answered - count those separately rather
-# than as 96 individual failures).
+# lru_ok_count/lru_not_ok_list summarize the per-LRU columns for quick
+# filtering (a non-empty lru_not_ok_list cell = at least one LRU failed
+# that Link Test). lru_00..lru_95 (at the default 96-LRU shape) are OK /
+# NOT_OK per queried LRU (0-indexed, matching the Link Test tab's LED
+# labels), empty where that LRU wasn't queried, the row isn't a Link Test,
+# or the whole frame timed out (a TIMEOUT row means NO LRU answered - count
+# those separately rather than as N individual failures).
 # No tx_raw_hex column: the query frame is not stored at all (burn-test
 # Link Test queries are byte-identical every send, ~6 KB/row of dead
 # weight) - tx_timestamp/msg_number/qcc_command capture the send side.
-CSV_COLUMNS = [
+
+_FIXED_COLUMNS = [
     "msg_number", "tx_timestamp", "rx_timestamp", "delay_us",
-    "qcc_command", "result", "qtrm_ok_count", "qtrm_not_ok_list",
-    *[f"qtrm_{i:02d}" for i in range(NUM_QTRM)],
-    "rx_raw_hex",
+    "qcc_command", "result", "lru_ok_count", "lru_not_ok_list",
 ]
 
-_EMPTY_QTRM_COLS = [""] * (2 + NUM_QTRM)
+
+def lru_index_width() -> int:
+    """
+    Zero-padding width for the lru_NN column names. Two digits for anything
+    up to 100 LRUs, so the default array keeps the familiar lru_00..lru_95;
+    wider only when the indices actually need it.
+    """
+    return max(2, len(str(num_lru() - 1)))
+
+
+def lru_column_names() -> list:
+    width = lru_index_width()
+    return [f"lru_{i:0{width}d}" for i in range(num_lru())]
+
+
+def csv_columns() -> list:
+    """
+    The header row for a new log. Built per call rather than once at import:
+    how many lru_* columns there are depends on the configured array shape.
+    """
+    return [*_FIXED_COLUMNS, *lru_column_names(), "rx_raw_hex"]
+
+
+def _empty_lru_cols() -> list:
+    """Blank cells for lru_ok_count, lru_not_ok_list, and every lru_NN."""
+    return [""] * (2 + num_lru())
 
 
 def _link_queried_indices(raw: bytes) -> tuple:
-    """0-based QTRM indices whose TX slot is the canonical Link query."""
-    if len(raw) != TOTAL_PACKET_SIZE:
+    """0-based LRU indices whose TX slot is the canonical Link query."""
+    if len(raw) != total_packet_size():
         return ()
+    # A TX frame is recognized as a Link Test by byte-exact slot comparison
+    # against the canonical query, so the "which LRUs were queried" set
+    # falls out for free (every LRU for Send Link Test, one for an
+    # individual-LED click). Per-LRU OK/NOT_OK analysis is only defined for
+    # Link Test frames; every other command's rows leave the lru_* columns
+    # empty (the response hex still captures the frame for offline
+    # re-analysis).
+    link_slot = build_link_query_slot()
+    slot_size = lru_slot_size()
     return tuple(
-        i for i in range(NUM_QTRM)
-        if raw[_HEADER_SIZE + i * QTRM_SLOT_SIZE:
-               _HEADER_SIZE + (i + 1) * QTRM_SLOT_SIZE] == _LINK_QUERY_SLOT
+        i for i in range(num_lru())
+        if raw[_HEADER_SIZE + i * slot_size:
+               _HEADER_SIZE + (i + 1) * slot_size] == link_slot
     )
 
 _COMMAND_NAMES = {
@@ -127,9 +155,9 @@ def command_name(value: int) -> str:
 
 
 class FrameLogger(QObject):
-    # (rows_written, ok, missing, errors, qtrm_fails) - "missing" is TIMEOUT
+    # (rows_written, ok, missing, errors, lru_fails) - "missing" is TIMEOUT
     # rows, "errors" is CRC_FAIL + MSG_NUM_MISMATCH + UNSOLICITED,
-    # "qtrm_fails" is the running total of NOT_OK marks across all Link
+    # "lru_fails" is the running total of NOT_OK marks across all Link
     # Test rows that DID get a response (whole-frame timeouts count under
     # "missing", not here).
     stats_changed = Signal(int, int, int, int, int)
@@ -145,7 +173,7 @@ class FrameLogger(QObject):
         self._flush_timer = QTimer(self)
         self._flush_timer.setSingleShot(True)
         self._flush_timer.timeout.connect(self._on_pending_expired)
-        self.rows = self.ok = self.missing = self.errors = self.qtrm_fails = 0
+        self.rows = self.ok = self.missing = self.errors = self.lru_fails = 0
 
     @property
     def active(self) -> bool:
@@ -157,14 +185,14 @@ class FrameLogger(QObject):
         try:
             f = open(path, "w", newline="")
             writer = csv.writer(f)
-            writer.writerow(CSV_COLUMNS)
+            writer.writerow(csv_columns())
             f.flush()
         except OSError as e:
             return str(e)
         self._file, self._writer, self.path = f, writer, path
         self._pending = None
         self._unflushed = 0
-        self.rows = self.ok = self.missing = self.errors = self.qtrm_fails = 0
+        self.rows = self.ok = self.missing = self.errors = self.lru_fails = 0
         return None
 
     def stop(self):
@@ -199,9 +227,9 @@ class FrameLogger(QObject):
             "msg_number": header.message_number,
             "tx_timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f"),
             "qcc_command": command_name(header.qcc_command),
-            # Empty tuple = not a Link Test - the row's qtrm_* columns stay
-            # blank. Non-empty = which QTRMs this query addressed, so the
-            # response can be marked OK/NOT_OK per queried QTRM.
+            # Empty tuple = not a Link Test - the row's lru_* columns stay
+            # blank. Non-empty = which LRUs this query addressed, so the
+            # response can be marked OK/NOT_OK per queried LRU.
             "link_queried": _link_queried_indices(raw),
         }
         self._flush_timer.start(PENDING_FLUSH_MS)
@@ -217,12 +245,12 @@ class FrameLogger(QObject):
             # A response with nothing in flight (e.g. arrived after its
             # query was already flushed as TIMEOUT) - its own row, so the
             # frame is still in the log and can be re-paired by msg_number
-            # during analysis. No qtrm_* marks: without the query we don't
-            # know which QTRMs were addressed.
+            # during analysis. No lru_* marks: without the query we don't
+            # know which LRUs were addressed.
             self._write_row([
                 header.message_number, "", rx_timestamp, delay,
                 command_name(header.qcc_command), RESULT_UNSOLICITED,
-                *_EMPTY_QTRM_COLS, raw.hex(),
+                *_empty_lru_cols(), raw.hex(),
             ])
             self.errors += 1
             self._emit_stats()
@@ -242,33 +270,33 @@ class FrameLogger(QObject):
         self._write_row([
             pending["msg_number"], pending["tx_timestamp"], rx_timestamp,
             delay, pending["qcc_command"], result,
-            *self._qtrm_columns(pending["link_queried"], raw),
+            *self._lru_columns(pending["link_queried"], raw),
             raw.hex(),
         ])
         self._emit_stats()
 
     # -- internals ---------------------------------------------------------
 
-    def _qtrm_columns(self, queried: tuple, rx_raw: bytes) -> list:
+    def _lru_columns(self, queried: tuple, rx_raw: bytes) -> list:
         """
-        [qtrm_ok_count, qtrm_not_ok_list, qtrm_00..qtrm_95] for a paired
+        [lru_ok_count, lru_not_ok_list, one column per LRU] for a paired
         response. All-empty unless the query was a Link Test and the
-        response is a full frame; then each queried QTRM's slot is checked
+        response is a full frame; then each queried LRU's slot is checked
         with the same validity rules the Link Test tab's LEDs use (header
         byte + XOR checksum + link sentinel).
         """
-        if not queried or len(rx_raw) != TOTAL_PACKET_SIZE:
-            return list(_EMPTY_QTRM_COLS)
+        if not queried or len(rx_raw) != total_packet_size():
+            return _empty_lru_cols()
         slot_ok = parse_link_test_response(rx_raw)
-        cols = [""] * NUM_QTRM
+        cols = [""] * num_lru()
         not_ok = []
         for i in queried:
             if slot_ok[i]:
-                cols[i] = QTRM_OK
+                cols[i] = LRU_OK
             else:
-                cols[i] = QTRM_NOT_OK
+                cols[i] = LRU_NOT_OK
                 not_ok.append(i)
-        self.qtrm_fails += len(not_ok)
+        self.lru_fails += len(not_ok)
         return [str(len(queried) - len(not_ok)),
                 ",".join(str(i) for i in not_ok), *cols]
 
@@ -283,7 +311,7 @@ class FrameLogger(QObject):
         self.missing += 1
         self._write_row([
             pending["msg_number"], pending["tx_timestamp"], "", "",
-            pending["qcc_command"], result, *_EMPTY_QTRM_COLS, "",
+            pending["qcc_command"], result, *_empty_lru_cols(), "",
         ])
 
     def _write_row(self, row):
@@ -307,4 +335,4 @@ class FrameLogger(QObject):
 
     def _emit_stats(self):
         self.stats_changed.emit(self.rows, self.ok, self.missing, self.errors,
-                                self.qtrm_fails)
+                                self.lru_fails)

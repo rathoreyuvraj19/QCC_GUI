@@ -11,7 +11,7 @@ turns already-paired rows into CSV rows on disk, batched (one
 writerows()+flush() per call) rather than FrameLogger's per-row flush,
 which would be a syscall-per-frame bottleneck at ~1kHz.
 
-Reuses FrameLogger's exact CSV_COLUMNS (read-only import, never mutated)
+Reuses FrameLogger's exact csv_columns() (called, never mutated)
 so Burn Test CSVs load into the existing apps/plot_qcc_log.py /
 widgets/plot_log_dialog.py analysis tool unmodified.
 
@@ -27,7 +27,7 @@ import csv
 
 from PySide6.QtCore import QObject, Signal
 
-from core.frame_logger import CSV_COLUMNS
+from core.frame_logger import csv_columns
 
 
 class BurnTestLogger(QObject):
@@ -49,7 +49,7 @@ class BurnTestLogger(QObject):
         try:
             f = open(path, "w", newline="")
             writer = csv.writer(f)
-            writer.writerow(CSV_COLUMNS)
+            writer.writerow(csv_columns())
             f.flush()
         except OSError as e:
             return str(e)

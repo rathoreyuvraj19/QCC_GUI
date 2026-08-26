@@ -1553,6 +1553,6 @@ def parse_rx_frame(raw: bytes):
     return qcc_header, lru_slots
 
 
-def default_qtrm_slots():
-    """96 blank LRU slots (command type = Reserved), ready to be edited."""
+def default_lru_slots():
+    """One blank LRU slot per LRU (command type = Reserved), ready to be edited."""
     return [LRUSlot(lru_id=i + 1) for i in range(num_lru())]

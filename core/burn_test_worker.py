@@ -39,7 +39,7 @@ Usage:
                              interval_s=0.001, local_port=local_port, source_port=source_port)
     worker.stats_ready.connect(...)        # dict, ~10 Hz
     worker.rows_ready.connect(...)         # list of CSV rows (core.frame_logger.CSV_COLUMNS order), ~10 Hz
-    worker.link_result_ready.connect(...)  # list of 96 bools, ~10 Hz, Link Test payload only
+    worker.link_result_ready.connect(...)  # list of one bool per LRU, ~10 Hz, Link Test payload only
     worker.frame_received.connect(...)     # bytes, most recent raw reply, ~10 Hz
     worker.error.connect(...)
     worker.start()
@@ -54,16 +54,16 @@ from datetime import datetime
 from PySide6.QtCore import QThread, Signal
 
 from core.frame_logger import (
-    QTRM_NOT_OK, QTRM_OK, RESULT_CRC_FAIL, RESULT_OK, RESULT_TIMEOUT,
+    LRU_NOT_OK, LRU_OK, RESULT_CRC_FAIL, RESULT_OK, RESULT_TIMEOUT,
     RESULT_UNSOLICITED, command_name,
 )
 from core.packet import (
-    FIXED_HEADER_SIZE, NUM_QTRM, QCC_HEADER_SIZE, QCCHeaderTx, TOTAL_PACKET_SIZE,
-    build_header_only_frame, build_link_test_frame, parse_link_test_response,
+    HEADER_SIZE, QCCHeaderTx, build_header_only_frame, build_link_test_frame,
+    num_lru, parse_link_test_response, total_packet_size,
 )
 from core.rc_settings import COMMAND_ID_LINK_TEST, COMMAND_ID_QCC_STATUS, rc_settings
 
-_HEADER_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE  # 90
+_HEADER_SIZE = HEADER_SIZE  # 90, fixed regardless of the array shape
 
 # How long a sent frame may sit unanswered before it's counted as lost and
 # flushed out of the pending table as a TIMEOUT row. Well above any
@@ -92,22 +92,22 @@ def _timestamp() -> str:
 
 def _format_row(msg_number, tx_timestamp, rx_timestamp, delay_us, qcc_command,
                  result, link_flags=None, raw_for_hex=None) -> list:
-    """CSV row in core.frame_logger.CSV_COLUMNS order. rx_raw_hex is left
-    empty unless raw_for_hex is passed - a full 2970-byte frame is ~6KB of
+    """CSV row in core.frame_logger.csv_columns() order. rx_raw_hex is left
+    empty unless raw_for_hex is passed - a full frame is ~6KB of
     hex, and at 1kHz sustained that's tens of GB/hour for a feature meant
     for long runs, so only CRC_FAIL/UNSOLICITED rows (the cases actually
     worth inspecting byte-for-byte) get it populated."""
     if link_flags is not None:
         not_ok = [i for i, ok in enumerate(link_flags) if not ok]
-        qtrm_ok_count = str(NUM_QTRM - len(not_ok))
-        qtrm_not_ok_list = ",".join(str(i) for i in not_ok)
-        qtrm_cols = [QTRM_NOT_OK if i in not_ok else QTRM_OK for i in range(NUM_QTRM)]
+        lru_ok_count = str(num_lru() - len(not_ok))
+        lru_not_ok_list = ",".join(str(i) for i in not_ok)
+        lru_cols = [LRU_NOT_OK if i in not_ok else LRU_OK for i in range(num_lru())]
     else:
-        qtrm_ok_count = qtrm_not_ok_list = ""
-        qtrm_cols = [""] * NUM_QTRM
+        lru_ok_count = lru_not_ok_list = ""
+        lru_cols = [""] * num_lru()
     rx_raw_hex = raw_for_hex.hex() if raw_for_hex is not None else ""
     return [msg_number, tx_timestamp, rx_timestamp, delay_us, qcc_command, result,
-            qtrm_ok_count, qtrm_not_ok_list, *qtrm_cols, rx_raw_hex]
+            lru_ok_count, lru_not_ok_list, *lru_cols, rx_raw_hex]
 
 
 class BurnTestWorker(QThread):
@@ -123,7 +123,7 @@ class BurnTestWorker(QThread):
     # without that registration step.
     stats_ready = Signal(object)          # dict: sent/ok/timeouts/errors/achieved_hz/target_hz
     rows_ready = Signal(object)           # list: batched CSV-ready rows
-    link_result_ready = Signal(object)    # list: 96 bools, most recent Link Test reply
+    link_result_ready = Signal(object)    # list: one bool per LRU, most recent Link Test reply
     frame_received = Signal(bytes)        # most recent raw reply, throttled to the same ~10Hz tick as stats_ready
 
     def __init__(self, qcc_ip: str, qcc_port: int, payload_kind: str,
@@ -322,7 +322,7 @@ class BurnTestWorker(QThread):
     def _handle_response(data: bytes, recv_perf: float, pending: dict, is_link_test: bool):
         """Pair one received frame against `pending` by MESSAGE_NUMBER.
         Returns (csv_row_or_None, link_flags_or_None)."""
-        if len(data) != TOTAL_PACKET_SIZE:
+        if len(data) != total_packet_size():
             return None, None
         header = QCCHeaderTx.from_bytes(data[:_HEADER_SIZE])
         rx_timestamp = _timestamp()

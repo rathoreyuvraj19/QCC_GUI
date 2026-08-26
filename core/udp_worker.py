@@ -30,19 +30,31 @@ from PySide6.QtCore import QThread, Signal
 
 from core.packet import (
     CHIP_ID_RESPONSE_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE, RP_QCC_LEVEL_FRAME_SIZE,
-    TOTAL_PACKET_SIZE,
+    total_packet_size,
 )
 
-# Every TX frame is 2970 bytes except Remote Programming, which has three
-# shapes of its own (see core/packet.py's RP_CMD_FRAME_SIZE comment): 90
-# bytes [header only] for Mode Step 2/Mode Back (QCC's own self-directed
+# Every TX frame is the standard frame (total_packet_size(), 2970 for the
+# default 96 LRU x 4-channel array) except Remote Programming, which has
+# three shapes of its own (see core/packet.py's RP_CMD_FRAME_SIZE comment):
+# 90 bytes [header only] for Mode Step 2/Mode Back (QCC's own self-directed
 # UART switch), 100 bytes [header + 10-byte command, no payload] for every
 # other RP command except bitstream DATA chunks, and 4196 bytes [header +
 # 10-byte command + 4096-byte payload] for those chunks (the real
-# file-upload data). RX is always 2970 except Mode Step 2/Mode Back
-# responses (bare 90-byte frame) and CHIP_ID_READ responses (bare 10-byte
-# frame, see core/packet.py's ChipIdResponse).
-_VALID_TX_SIZES = (TOTAL_PACKET_SIZE, RP_QCC_LEVEL_FRAME_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE)
+# file-upload data). Those three don't carry an LRU data block, so they're
+# the same size at any array shape. RX is the standard frame except Mode
+# Step 2/Mode Back responses (bare 90-byte frame) and CHIP_ID_READ
+# responses (bare 10-byte frame, see core/packet.py's ChipIdResponse).
+#
+# Computed per call, not once at import: the standard frame's size depends
+# on the configured array shape (core/lru_config.py).
+
+
+def valid_tx_sizes() -> tuple:
+    return (total_packet_size(), RP_QCC_LEVEL_FRAME_SIZE, RP_CMD_FRAME_SIZE, RP_FRAME_SIZE)
+
+
+def valid_rx_sizes() -> tuple:
+    return (total_packet_size(), RP_QCC_LEVEL_FRAME_SIZE, CHIP_ID_RESPONSE_SIZE)
 
 
 class UdpWorker(QThread):
@@ -99,15 +111,16 @@ class UdpWorker(QThread):
                     self.error.emit(f"Socket error while receiving: {e}")
                 break
 
-            # RX is always the standard 2970-byte frame, EXCEPT Mode Step 2/
-            # Mode Back responses, which echo back the bare 90-byte
-            # QCC-level frame they were sent as (see core/packet.py's
+            # RX is the standard frame, EXCEPT Mode Step 2/Mode Back
+            # responses, which echo back the bare 90-byte QCC-level frame
+            # they were sent as (see core/packet.py's
             # RP_QCC_LEVEL_FRAME_SIZE comment), and CHIP_ID_READ responses,
             # which are a bare 10-byte frame (see CHIP_ID_RESPONSE_SIZE).
-            if len(data) not in (TOTAL_PACKET_SIZE, RP_QCC_LEVEL_FRAME_SIZE, CHIP_ID_RESPONSE_SIZE):
+            expected = valid_rx_sizes()
+            if len(data) not in expected:
                 self.error.emit(
                     f"Received {len(data)} bytes from {addr}, expected "
-                    f"{TOTAL_PACKET_SIZE}, {RP_QCC_LEVEL_FRAME_SIZE}, or {CHIP_ID_RESPONSE_SIZE} - dropped"
+                    f"{', '.join(str(n) for n in expected)} - dropped"
                 )
                 continue
 
@@ -127,9 +140,10 @@ class UdpWorker(QThread):
         self.status.emit("Stopped")
 
     def send_frame(self, frame: bytes):
-        if len(frame) not in _VALID_TX_SIZES:
+        expected = valid_tx_sizes()
+        if len(frame) not in expected:
             self.error.emit(
-                f"Refusing to send {len(frame)}-byte frame, expected one of {_VALID_TX_SIZES}"
+                f"Refusing to send {len(frame)}-byte frame, expected one of {expected}"
             )
             return
         if self._send_sock is None:

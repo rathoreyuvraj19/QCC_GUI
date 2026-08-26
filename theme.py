@@ -17,7 +17,7 @@ _ACCENT_PRESSED = "#00858c"
 _TEXT = "#eeeeee"         # primary text
 _TEXT_SECONDARY = "rgba(238, 238, 238, 0.6)"
 _BORDER = "#4a515a"
-_TOOLTIP_BG = "#F3E5AB"   # vanilla, per Yuvraj's ask - the QTRM hover popup
+_TOOLTIP_BG = "#F3E5AB"   # vanilla, per Yuvraj's ask - the LRU hover popup
 _TOOLTIP_TEXT = "#1f2328"
 
 _FONT = (

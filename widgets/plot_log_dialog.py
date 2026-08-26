@@ -3,8 +3,8 @@ plot_log_dialog.py
 
 Tools -> Plot Log File (CSV)... in main_window.py. Loads a burn-test CSV
 written by core/frame_logger.py and renders the same figure
-apps/plot_qcc_log.py produces (delay-vs-time, rolling loss %, QTRM
-NOT_OK events, delay histogram, per-QTRM NOT_OK ranking for Link Test
+apps/plot_qcc_log.py produces (delay-vs-time, rolling loss %, LRU
+NOT_OK events, delay histogram, per-LRU NOT_OK ranking for Link Test
 logs), embedded directly in the GUI instead of a separate matplotlib
 window - so a burn test can be reviewed without dropping to a terminal.
 

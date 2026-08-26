@@ -9,12 +9,18 @@ Overall frame layout (little-endian throughout):
                                       commands - both match the unified
                                       90-byte layout in docs/idd/packet_spec.yaml,
                                       the source of truth for this frame)
-    [ 2880 bytes ] QTRM data block - 96 x 30-byte QTRM slots (QTRMSlot)
+    [ variable  ]  LRU data block - num_lru() x lru_slot_size() slots
+                                      (LRUSlot). One slot is 5*channels + 10
+                                      bytes, per the IDD's message-length
+                                      formula; the array's shape is
+                                      configurable, see core/lru_config.py.
+                                      The original 96 x 4-channel array is
+                                      the case that lands on 96 x 30 = 2880.
     -------------------------------
-    Total: 2970 bytes
+    Total: total_packet_size() (2970 for the default array)
 
-QTRM 30-byte slot checksum (XOR of bytes 0-28) is generated/verified on the
-QTRM/GUI side per the QTRM Message Format IDD - QCC does not touch it.
+The LRU slot's checksum (XOR of every byte before it) is generated/verified
+on the LRU/GUI side per the QTRM Message Format IDD - QCC does not touch it.
 QCCHeaderTx's checksum is CRC-8/CCITT (poly 0x07, init 0x00, no reflection,
 xorout 0x00) over the whole 90-byte header's bytes 0-88, stored in byte 89 -
 NOT split into separately-checksummed 32+58 byte pieces (that was the
@@ -24,6 +30,8 @@ internal (de)serialization boundary for QCCHeaderTx anymore.
 """
 
 import struct
+
+from core import lru_config
 
 
 class FrameError(ValueError):
@@ -49,40 +57,97 @@ def _require_size(raw: bytes, expected: int, what: str) -> None:
         raise FrameError(f"expected a {expected}-byte {what}, got {len(raw)} bytes")
 
 
+# The 90-byte QCC header does not vary with the array's shape; the 32/58
+# split describes its internal byte layout, not a (de)serialization
+# boundary (see this module's docstring).
 FIXED_HEADER_SIZE = 32
 QCC_HEADER_SIZE = 58
-QTRM_SLOT_SIZE = 30
-NUM_QTRM = 96
-QTRM_BLOCK_SIZE = QTRM_SLOT_SIZE * NUM_QTRM          # 2880
-TOTAL_PACKET_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + QTRM_BLOCK_SIZE  # 2970
+HEADER_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE  # 90
+
+
+# --- Array-shape accessors ------------------------------------------------
+#
+# These are functions, not module constants, because the array's shape is
+# configurable (see core/lru_config.py). A `from core.packet import
+# NUM_LRU` in some other module would freeze whatever was configured when
+# that module happened to be imported, and quietly disagree with everything
+# imported after the operator changed it. Reading through a call means
+# there is exactly one answer at any moment.
+#
+# At the default 96 LRUs x 4 channels these return the original fixed
+# values: 30-byte slot, 2880-byte block, 2970-byte frame.
+
+
+def num_lru() -> int:
+    """How many LRU slots the data block holds."""
+    return lru_config.config().num_lru
+
+
+def channels_per_lru() -> int:
+    """How many channels each LRU carries (5 bytes each on the wire)."""
+    return lru_config.config().channels_per_lru
+
+
+def lru_packet_size_id() -> int:
+    """
+    The slot's Packet Size Identifier byte - which IS the channel count, per
+    Table 6 (a 4-channel LRU sends 0x04). This is what makes the receiving
+    side's message_length(id) = id*5 + 10 resolve to the right slot size.
+    """
+    return lru_config.config().channels_per_lru
+
+
+def lru_slot_size() -> int:
+    """One LRU's wire slot: 5*channels + 10 (IDD Section 4)."""
+    return lru_config.config().slot_size
+
+
+def lru_block_size() -> int:
+    """The whole LRU data block: num_lru * lru_slot_size."""
+    return lru_config.config().block_size
+
+
+def total_packet_size() -> int:
+    """The standard frame: 90-byte header + LRU data block."""
+    return lru_config.config().total_size
+
+
+# Within one LRU slot: a 9-byte preamble (0xAA header, packet size
+# identifier, command type, status nibbles, message/dwell id, frequency id,
+# 3 reserved), then the channels back to back, then the XOR checksum as the
+# final byte. Those 9 + 1 bytes are the "+10" in the message-length formula
+# and don't move when the channel count changes - only how many CHANNEL_SIZE
+# blocks sit between them does.
+CHANNEL_BASE_OFFSET = 9
+CHANNEL_SIZE = lru_config.CHANNEL_BYTES  # 5
 
 # Remote Programming (Mode 5) TX frames - FOUR shapes depending on phase,
 # per Yuvraj:
-#   1. Mode Step 1 (QTRMs -> Low-Speed): QTRMs are still in normal
-#      per-QTRM-addressed mode (they haven't switched to the QCC's shared
+#   1. Mode Step 1 (LRUs -> Low-Speed): LRUs are still in normal
+#      per-LRU-addressed mode (they haven't switched to the QCC's shared
 #      low-speed broadcast FIFO yet), so this one must use the standard
-#      2970-byte frame shape with the 10-byte bootloader command replicated
-#      into each of the 96 30-byte QTRM slots - see
+#      standard frame shape with the 10-byte bootloader command replicated
+#      into each LRU slot - see
 #      build_broadcast_bootloader_frame() below. Uses QCC_COMMAND =
 #      DATA_DISTRIBUTION (0x00), NOT REMOTE_PROGRAMMING (0xFF): per Yuvraj
-#      2026-07-19, QCC just moves the 2880-byte payload to the fabric via
-#      its existing DMA pipeline, unmodified - it's the QTRM bootloader
+#      2026-07-19, QCC just moves the LRU data block to the fabric via
+#      its existing DMA pipeline, unmodified - it's the LRU bootloader
 #      firmware that interprets its own slot's first 10 bytes as a
 #      mode-change command, not QCC itself. Shapes 2-4 below are the ones
 #      that genuinely use QCC_COMMAND = REMOTE_PROGRAMMING (0xFF).
 #   2. Mode Step 2 (QCC -> Low-Speed) and Mode Back/QCC -> High-Speed are
-#      both QCC's OWN self-directed UART switch, not QTRM-targeted
+#      both QCC's OWN self-directed UART switch, not LRU-targeted
 #      bootloader commands at all - RE-DECIDED 2026-07-19 per Yuvraj, bare
 #      [90-byte header], no inner command, no payload = 90 bytes. The
 #      header's byte 34 (message_body offset 0) is a SubCommand selector
 #      QCC itself reads and acts on - see
 #      QCC_BODY_SWITCH_LOW_SPEED (0x01) / QCC_BODY_SWITCH_HIGH_SPEED (0x02)
 #      in remote_prog_controller.py - see build_qcc_level_frame() below.
-#      Byte 35 (message_body offset 1) is QTRM_SELECT: which QTRM(s) the
-#      low-speed session targets - see RP_QTRM_SELECT_BROADCAST below.
-#   3. Every QTRM-targeted command once QTRMs+QCC are in low-speed mode
+#      Byte 35 (message_body offset 1) is LRU_SELECT: which LRU(s) the
+#      low-speed session targets - see RP_LRU_SELECT_BROADCAST below.
+#   3. Every LRU-targeted command once LRUs+QCC are in low-speed mode
 #      (Link Check, Get LRU Info, Authenticate/Verify/Program, Bitstream
-#      Receive announce, QTRM -> High Speed) carries no payload of its own -
+#      Receive announce, LRU -> High Speed) carries no payload of its own -
 #      just [90-byte header][10-byte inner bootloader command] = 100 bytes.
 #      RE-DECIDED 2026-07-19 (was previously sent as a 4196-byte frame
 #      zero-padded out to the full payload size, which wasted 4086 bytes per
@@ -94,7 +159,7 @@ TOTAL_PACKET_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + QTRM_BLOCK_SIZE  # 297
 #      0x34 - the real file-transfer payload) use the full [90-byte header]
 #      [10-byte inner command][4096-byte payload] = 4196-byte shape - see
 #      build_remote_programming_frame() below. Also SubCommand 0x00 (Broadcast).
-# The RX side stays the standard 2970-byte frame for QTRM-targeted RP
+# The RX side stays the standard frame shape for LRU-targeted RP
 # operations (shapes 1/3/4); Mode Step 2/Mode Back responses (shape 2) are
 # themselves bare 90-byte frames - see remote_prog_controller.py's on_frame().
 # See bootloader_packet.py for the inner command set.
@@ -105,13 +170,14 @@ RP_CMD_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE + RP_INNER_CMD_SIZE  # 1
 RP_QCC_LEVEL_FRAME_SIZE = FIXED_HEADER_SIZE + QCC_HEADER_SIZE  # 90 - Mode Step 2 / Mode Back only
 
 # Header byte 35 (message_body offset 1) in the SubCommand 0x01/0x02
-# QCC-level frames: which QTRM(s) the low-speed session targets. QCC
+# QCC-level frames: which LRU(s) the low-speed session targets. QCC
 # latches it into its remote-programming LRU-select mux at mode-change
-# time - 0-95 routes every subsequent SubCommand 0x00 frame to that one
-# QTRM (QCC zero-fills the other 95 slots in its responses), 0xFF fans
-# out to all 96. See docs/idd/packet_spec.yaml's remote_programming
+# time - a 0-based LRU index routes every subsequent SubCommand 0x00
+# frame to that one LRU (QCC zero-fills the remaining slots in its
+# responses), 0xFF fans out to all of them. See
+# docs/idd/packet_spec.yaml's remote_programming
 # sections.
-RP_QTRM_SELECT_BROADCAST = 0xFF
+RP_LRU_SELECT_BROADCAST = 0xFF
 
 # ---------------------------------------------------------------------------
 # CRC-8 / CCITT  (poly 0x07, init 0x00, no reflect, xorout 0x00)
@@ -149,7 +215,7 @@ def _make_header_bytes(header: bytes = None) -> bytearray:
     return bytearray(header)
 
 # ---------------------------------------------------------------------------
-# QTRM command types (Section 3 of the QTRM Message Format IDD)
+# LRU command types (Section 3 of the QTRM Message Format IDD)
 # ---------------------------------------------------------------------------
 
 CMD_RESERVED = 0x00
@@ -248,8 +314,6 @@ def describe_atten(raw: int) -> str:
     return f"{atten_db(raw):.1f} dB"
 
 
-QTRM_PACKET_SIZE_ID = 0x04  # per Table 6, QTRM = 4 channels
-
 # ---------------------------------------------------------------------------
 # Status Types (Section 10.1 of the QTRM Message Format IDD) - byte 4 low
 # nibble of any command requests what kind of response the TRM sends back.
@@ -272,7 +336,7 @@ DIAGNOSTIC_TYPE_PRESENT_BUFFER = 0x2
 DIAGNOSTIC_TYPE_ADAR_STATUS = 0x3
 
 # Link Status Response sentinel bytes (Section 10.1.2), confirmed against
-# STATUS_MODULE.vhd - a live QTRM echoes these 5 bytes verbatim.
+# STATUS_MODULE.vhd - a live LRU echoes these 5 bytes verbatim.
 LINK_SENTINEL = bytes([0xA1, 0xA2, 0xA3, 0xA4, 0xA5])
 
 
@@ -283,19 +347,19 @@ def message_length(packet_size_id: int) -> int:
 
 def build_link_query_slot(command_type: int = CMD_STATUS) -> bytes:
     """
-    30-byte wire slot requesting a Link status response from one QTRM.
+    One LRU's wire slot requesting a Link status response.
     Packet Size Identifier = 0x00 -> 10-byte message (checksum at byte 10),
-    zero-padded to fill the fixed 30-byte slot on the wire.
+    zero-padded out to the full slot width on the wire.
     """
     return _build_status_family_slot(command_type, STATUS_TYPE_LINK)
 
 
 def is_link_response_ok(raw_slot: bytes) -> bool:
-    """True if a QTRM slot from a response frame is a valid Link-test reply."""
-    if len(raw_slot) != QTRM_SLOT_SIZE or raw_slot[0] != QTRMSlot.HEADER_BYTE:
+    """True if a LRU slot from a response frame is a valid Link-test reply."""
+    if len(raw_slot) != lru_slot_size() or raw_slot[0] != LRUSlot.HEADER_BYTE:
         return False
     msg_len = message_length(raw_slot[1])
-    if not (10 <= msg_len <= QTRM_SLOT_SIZE):
+    if not (10 <= msg_len <= lru_slot_size()):
         return False
     chk = 0
     for b in raw_slot[: msg_len - 1]:
@@ -309,39 +373,39 @@ def is_link_response_ok(raw_slot: bytes) -> bool:
 
 def build_link_test_frame(header: bytes = None) -> bytes:
     """
-    Full 2970-byte frame: identical Link query to all 96 QTRMs.
+    Full frame: identical Link query to every LRU.
     """
     link_slot = build_link_query_slot()
     out = _make_header_bytes(header)
-    for _ in range(NUM_QTRM):
+    for _ in range(num_lru()):
         out.extend(link_slot)
-    assert len(out) == TOTAL_PACKET_SIZE
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
 def parse_link_test_response(raw_frame: bytes):
-    """Return a list of NUM_QTRM bools: True where that QTRM's Link reply is valid."""
-    _require_size(raw_frame, TOTAL_PACKET_SIZE, "response frame")
+    """Return a list of num_lru() bools: True where that LRU's Link reply is valid."""
+    _require_size(raw_frame, total_packet_size(), "response frame")
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     return [
-        is_link_response_ok(raw_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE])
-        for i in range(NUM_QTRM)
+        is_link_response_ok(raw_frame[base + i * lru_slot_size(): base + (i + 1) * lru_slot_size()])
+        for i in range(num_lru())
     ]
 
 
-def build_individual_link_frame(target_qtrm_index: int, header: bytes = None) -> bytes:
+def build_individual_link_frame(target_lru_index: int, header: bytes = None) -> bytes:
     """
-    Full 2970-byte frame: Link query sent to only ONE QTRM (0-based index),
-    mirroring the Soft Reset "individual" pattern - every other QTRM's slot
+    Full frame: Link query sent to only ONE LRU (0-based index),
+    mirroring the Soft Reset "individual" pattern - every other LRU's slot
     is left entirely zero-filled (no header, no command at all).
     """
-    assert 0 <= target_qtrm_index < NUM_QTRM
+    assert 0 <= target_lru_index < num_lru()
     link_slot = build_link_query_slot()
-    empty_slot = bytes(QTRM_SLOT_SIZE)
+    empty_slot = bytes(lru_slot_size())
     out = _make_header_bytes(header)
-    for i in range(NUM_QTRM):
-        out.extend(link_slot if i == target_qtrm_index else empty_slot)
-    assert len(out) == TOTAL_PACKET_SIZE
+    for i in range(num_lru()):
+        out.extend(link_slot if i == target_lru_index else empty_slot)
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
@@ -351,18 +415,18 @@ def _build_status_family_slot(command_type: int, status_type: int, payload: byte
     Shared builder for the 10-byte (Packet Size ID = 0x00) command family:
     byte0=Header, byte1=0x00, byte2=CommandType, byte3=Sub Status Type (high
     nibble) | Status Type (low nibble), byte4=MSG_ID (always 0 - not
-    implemented on the QTRM side), bytes5-8=payload (zero-padded),
+    implemented on the LRU side), bytes5-8=payload (zero-padded),
     byte9=checksum, rest zero. Sub Status Type's meaning depends on
     status_type (e.g. ACK's 4 ack-phase bits, or Diagnostic's status-type
     selector) - default 0 for status types that don't use it.
     """
     msg_len = message_length(0x00)  # 10
-    body = bytearray(QTRM_SLOT_SIZE)
-    body[0] = QTRMSlot.HEADER_BYTE
+    body = bytearray(lru_slot_size())
+    body[0] = LRUSlot.HEADER_BYTE
     body[1] = 0x00
     body[2] = command_type
     body[3] = ((sub_status_type & 0x0F) << 4) | (status_type & 0x0F)
-    body[4] = 0x00  # MSG_ID - not implemented in QTRM firmware, always zero
+    body[4] = 0x00  # MSG_ID - not implemented in LRU firmware, always zero
     body[5:5 + len(payload)] = payload
     chk = 0
     for b in body[: msg_len - 1]:
@@ -384,41 +448,41 @@ def _build_status_family_slot(command_type: int, status_type: int, payload: byte
 def build_status_query_slot(status_type: int, sub_status_type: int = 0,
                             beam_register_address: int = 0) -> bytes:
     """
-    30-byte wire slot requesting a status response from one QTRM. Always a
+    One LRU's wire slot requesting a status response. Always a
     10-byte message (Packet Size Identifier 0x00) regardless of status_type -
-    even DIAGNOSTIC, whose *response* comes back as a full 30-byte message.
+    even DIAGNOSTIC, whose *response* fills a whole LRU slot.
     byte6 (Beam Data Register Address) only matters for DIAGNOSTIC types
     1/2/3 (Future Buffer/Present Buffer/ADAR Status) - harmlessly ignored by
-    the QTRM for every other status type.
+    the LRU for every other status type.
     """
     payload = bytes([beam_register_address & 0xFF])
     return _build_status_family_slot(CMD_STATUS, status_type, payload=payload, sub_status_type=sub_status_type)
 
 
-def build_status_frame(status_type: int, target_qtrm_index: int = None, sub_status_type: int = 0,
+def build_status_frame(status_type: int, target_lru_index: int = None, sub_status_type: int = 0,
                         beam_register_address: int = 0, header: bytes = None) -> bytes:
     """
-    Full 2970-byte frame requesting a status response. If target_qtrm_index
-    is None, every QTRM gets the same query (mirrors build_link_test_frame).
-    Otherwise only that QTRM (0-based index) gets it; every other slot is
+    Full frame requesting a status response. If target_lru_index
+    is None, every LRU gets the same query (mirrors build_link_test_frame).
+    Otherwise only that LRU (0-based index) gets it; every other slot is
     left entirely zero-filled (no header, no command) - same individual-
     target convention as build_individual_link_frame/build_soft_reset_frame.
     """
     status_slot = build_status_query_slot(status_type, sub_status_type, beam_register_address)
-    empty_slot = bytes(QTRM_SLOT_SIZE)
+    empty_slot = bytes(lru_slot_size())
     out = _make_header_bytes(header)
-    for i in range(NUM_QTRM):
-        if target_qtrm_index is None or i == target_qtrm_index:
+    for i in range(num_lru()):
+        if target_lru_index is None or i == target_lru_index:
             out.extend(status_slot)
         else:
             out.extend(empty_slot)
-    assert len(out) == TOTAL_PACKET_SIZE
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
 def _valid_status_header(raw_slot: bytes, expected_status_type: int, expected_message_length: int) -> bool:
     """Header/checksum/status-type/length validity shared by every status response parser below."""
-    if len(raw_slot) != QTRM_SLOT_SIZE or raw_slot[0] != QTRMSlot.HEADER_BYTE:
+    if len(raw_slot) != lru_slot_size() or raw_slot[0] != LRUSlot.HEADER_BYTE:
         return False
     msg_len = message_length(raw_slot[1])
     if msg_len != expected_message_length:
@@ -495,7 +559,7 @@ def parse_thermal_shutdown_config_response(raw_slot: bytes):
     """
     TRM Thermal Shutdown Configuration Status response - 10-byte message,
     confirmed against STATUS_MODULE.vhd (status type 0x7, not yet in the
-    QTRM Message Format IDD's numbered sections). Reads back the QTRM's
+    QTRM Message Format IDD's numbered sections). Reads back the LRU's
     onboard temperature cutoff as stored in flash (i_data_packet_from_flash
     slots 1/2) - the real hardware cutoff that drives i_temp_error/thermal
     shutdown, distinct from the Status tab's own "Temp Cutoff" field (a
@@ -511,15 +575,15 @@ def parse_thermal_shutdown_config_response(raw_slot: bytes):
 
 def parse_diagnostic_response(raw_slot: bytes, diagnostic_type: int):
     """
-    Diagnostic Status response format (Section 10.1.5.2) - a full 30-byte
-    message ("same as Dwell message size"), unlike every other status type's
+    Diagnostic Status response format (Section 10.1.5.2) - fills a whole LRU
+    slot ("same as Dwell message size"), unlike every other status type's
     10-byte reply. Layout depends on diagnostic_type:
       - DETAILED_HEALTH: per-channel Temp/DC/RF status + Tx/Rx control counts.
       - FUTURE_BUFFER/PRESENT_BUFFER/ADAR_STATUS: per-channel OP Mode|Control
         nibble byte + the same Tx/Rx Phase/Attenuation layout as a Dwell
         message (the IDD tables these three identically).
     """
-    if not _valid_status_header(raw_slot, STATUS_TYPE_DIAGNOSTIC, 30):
+    if not _valid_status_header(raw_slot, STATUS_TYPE_DIAGNOSTIC, lru_slot_size()):
         return None
 
     common = {
@@ -532,8 +596,8 @@ def parse_diagnostic_response(raw_slot: bytes, diagnostic_type: int):
     if diagnostic_type == DIAGNOSTIC_TYPE_DETAILED_HEALTH:
         common["operation_command_type"] = raw_slot[4]
         channels = []
-        for ch in range(4):
-            off = 9 + ch * 5
+        for ch in range(channels_per_lru()):
+            off = CHANNEL_BASE_OFFSET + ch * CHANNEL_SIZE
             channels.append({
                 "temperature_status": raw_slot[off],
                 "dc_status": raw_slot[off + 1],
@@ -547,8 +611,8 @@ def parse_diagnostic_response(raw_slot: bytes, diagnostic_type: int):
     # FUTURE_BUFFER / PRESENT_BUFFER / ADAR_STATUS all share this layout.
     common["beam_data_register_address"] = raw_slot[4]
     channels = []
-    for ch in range(4):
-        off = 9 + ch * 5
+    for ch in range(channels_per_lru()):
+        off = CHANNEL_BASE_OFFSET + ch * CHANNEL_SIZE
         op_mode_control = raw_slot[off]
         channels.append({
             "op_mode": (op_mode_control >> 4) & 0x0F,
@@ -574,29 +638,29 @@ _STATUS_PARSERS = {
 
 def parse_status_frame(raw_frame: bytes, status_type: int, diagnostic_type: int = 0):
     """
-    Return a list of NUM_QTRM decoded-dict-or-None: None where that QTRM's
+    Return a list of num_lru() decoded-dict-or-None: None where that LRU's
     reply didn't validate for the requested status_type (no reply, wrong
     status type echoed back, bad checksum, wrong message length, etc.),
     otherwise the parsed fields for that status type.
     """
-    _require_size(raw_frame, TOTAL_PACKET_SIZE, "response frame")
+    _require_size(raw_frame, total_packet_size(), "response frame")
     try:
         parser = _STATUS_PARSERS[status_type]
     except KeyError:
         raise FrameError(f"no parser for status type 0x{status_type:X}") from None
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     return [
-        parser(raw_frame[base + i * QTRM_SLOT_SIZE: base + (i + 1) * QTRM_SLOT_SIZE], diagnostic_type)
-        for i in range(NUM_QTRM)
+        parser(raw_frame[base + i * lru_slot_size(): base + (i + 1) * lru_slot_size()], diagnostic_type)
+        for i in range(num_lru())
     ]
 
 
 def build_cal_slot(tx_cal: bool, channel: int, phase: int, atten: int) -> bytes:
     """
-    30-byte wire slot: RX or TX Calibration command (Section 5/6) selecting
-    one of this QTRM's 1-4 channels for calibration; requests a Link-type
+    One LRU's wire slot: RX or TX Calibration command (Section 5/6)
+    selecting one of this LRU's channels for calibration; requests a Link-type
     status response back (every command except Soft Reset does, per
-    Yuvraj's spec - lets the GUI confirm the targeted QTRM actually replied).
+    Yuvraj's spec - lets the GUI confirm the targeted LRU actually replied).
     """
     command_type = CMD_TX_CAL if tx_cal else CMD_RX_CAL
     payload = bytes([channel & 0xFF, (channel >> 8) & 0xFF, phase & 0xFF, atten & 0xFF])
@@ -604,32 +668,32 @@ def build_cal_slot(tx_cal: bool, channel: int, phase: int, atten: int) -> bytes:
 
 
 def build_isolation_slot(tx_isolation: bool) -> bytes:
-    """30-byte wire slot: Rx or Tx Isolation command (Section 7/8), requests a Link-type status response."""
+    """One LRU's wire slot: Rx or Tx Isolation command (Section 7/8), requests a Link-type status response."""
     command_type = CMD_TX_ISOLATION if tx_isolation else CMD_RX_ISOLATION
     return _build_status_family_slot(command_type, STATUS_TYPE_LINK)
 
 
-def build_cal_frame(tx_cal: bool, target_qtrm_index: int, channel: int, phase: int, atten: int,
+def build_cal_frame(tx_cal: bool, target_lru_index: int, channel: int, phase: int, atten: int,
                      tx_isolation_for_others: bool = False, header: bytes = None) -> bytes:
     """
-    Full 2970-byte frame: one QTRM (0-based index) gets an RX or TX
-    Calibration command (per tx_cal) for the given channel, all other 95
-    QTRMs get an Isolation command (Rx or Tx, per tx_isolation_for_others) so
+    Full frame: one LRU (0-based index) gets an RX or TX Calibration
+    command (per tx_cal) for the given channel, every other LRU gets an
+    Isolation command (Rx or Tx, per tx_isolation_for_others) so
     they don't interfere with the calibration measurement.
     """
-    assert 0 <= target_qtrm_index < NUM_QTRM
+    assert 0 <= target_lru_index < num_lru()
     cal_slot = build_cal_slot(tx_cal, channel, phase, atten)
     iso_slot = build_isolation_slot(tx_isolation_for_others)
     out = _make_header_bytes(header)
-    for i in range(NUM_QTRM):
-        out.extend(cal_slot if i == target_qtrm_index else iso_slot)
-    assert len(out) == TOTAL_PACKET_SIZE
+    for i in range(num_lru()):
+        out.extend(cal_slot if i == target_lru_index else iso_slot)
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
 def build_soft_reset_slot() -> bytes:
     """
-    30-byte wire slot: Soft Reset command (Section 9). No response is
+    One LRU's wire slot: Soft Reset command (Section 9). No response is
     expected. byte5 (payload[0]) is fixed at 0x01 - confirmed against a
     real-hardware reference frame (AA 00 20 00 00 01 00 00 00 8B); this
     used to be sent as 0x00 (assumed "no payload"), which didn't match
@@ -642,79 +706,79 @@ def build_soft_reset_slot() -> bytes:
     return _build_status_family_slot(CMD_SOFT_RESET, STATUS_TYPE_NONE, payload=bytes([0x01]))
 
 
-def build_soft_reset_frame(target_qtrm_index: int = None, header: bytes = None) -> bytes:
+def build_soft_reset_frame(target_lru_index: int = None, header: bytes = None) -> bytes:
     """
-    Full 2970-byte Soft Reset frame. If target_qtrm_index is None, every QTRM
-    gets the Soft Reset command. Otherwise only that QTRM (0-based index) gets
+    Full Soft Reset frame. If target_lru_index is None, every LRU
+    gets the Soft Reset command. Otherwise only that LRU (0-based index) gets
     it; every other slot is left entirely zero-filled (no header, no command).
     """
     reset_slot = build_soft_reset_slot()
-    empty_slot = bytes(QTRM_SLOT_SIZE)
+    empty_slot = bytes(lru_slot_size())
     out = _make_header_bytes(header)
-    for i in range(NUM_QTRM):
-        if target_qtrm_index is None or i == target_qtrm_index:
+    for i in range(num_lru()):
+        if target_lru_index is None or i == target_lru_index:
             out.extend(reset_slot)
         else:
             out.extend(empty_slot)
-    assert len(out) == TOTAL_PACKET_SIZE
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
-def build_isolation_frame(tx_isolation: bool, target_qtrm_index: int = None, header: bytes = None) -> bytes:
+def build_isolation_frame(tx_isolation: bool, target_lru_index: int = None, header: bytes = None) -> bytes:
     """
-    Full 2970-byte frame: Rx or Tx Isolation command (Section 7/8), no
+    Full frame: Rx or Tx Isolation command (Section 7/8), no
     response expected - fire and forget, same as Soft Reset. If
-    target_qtrm_index is None, every QTRM gets the isolation command.
-    Otherwise only that QTRM (0-based index) gets it; every other slot is
+    target_lru_index is None, every LRU gets the isolation command.
+    Otherwise only that LRU (0-based index) gets it; every other slot is
     left entirely zero-filled (no header, no command).
     """
     iso_slot = build_isolation_slot(tx_isolation)
-    empty_slot = bytes(QTRM_SLOT_SIZE)
+    empty_slot = bytes(lru_slot_size())
     out = _make_header_bytes(header)
-    for i in range(NUM_QTRM):
-        if target_qtrm_index is None or i == target_qtrm_index:
+    for i in range(num_lru()):
+        if target_lru_index is None or i == target_lru_index:
             out.extend(iso_slot)
         else:
             out.extend(empty_slot)
-    assert len(out) == TOTAL_PACKET_SIZE
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
 def build_dwell_slot(channels) -> bytes:
     """
-    30-byte Dwell wire slot (Section 4, Table 43): this QTRM's 4 channels'
-    Control/Tx Phase/Tx Atten/Rx Phase/Rx Atten. Requests a Link-type status
+    One LRU's Dwell wire slot (Section 4, Table 43): every one of this LRU's
+    channels' Control/Tx Phase/Tx Atten/Rx Phase/Rx Atten. Requests a Link-type status
     response - per Yuvraj, every command except Status and Soft Reset does -
     by packing STATUS_TYPE_LINK into the low nibble of byte3 the same way
     build_cal_slot/build_isolation_slot do for the 10-byte status-family
-    messages (QTRMSlot's ack_type/ack_on_off nibble split is bit-identical
+    messages (LRUSlot's ack_type/ack_on_off nibble split is bit-identical
     to that byte position, just relabeled in the IDD for this message type).
     """
-    return QTRMSlot(
-        qtrm_id=0, command_type=CMD_DWELL,
+    return LRUSlot(
+        lru_id=0, command_type=CMD_DWELL,
         ack_type=0, ack_on_off=STATUS_TYPE_LINK,
         channels=channels,
     ).to_bytes()
 
 
-def build_dwell_frame(qtrm_channels, header: bytes = None) -> bytes:
+def build_dwell_frame(lru_channels, header: bytes = None) -> bytes:
     """
-    Full 2970-byte Dwell frame. qtrm_channels is a list of NUM_QTRM items,
-    each a list of 4 QTRMChannel objects (that QTRM's channels 1-4). Unlike
-    Cal/Isolation/Soft Reset, Dwell has no single-QTRM-target convention -
-    every QTRM gets its own Dwell command, all in the same send.
+    Full Dwell frame. lru_channels is a list of num_lru() items, each a
+    list of channels_per_lru() LRUChannel objects. Unlike
+    Cal/Isolation/Soft Reset, Dwell has no single-LRU-target convention -
+    every LRU gets its own Dwell command, all in the same send.
     """
-    assert len(qtrm_channels) == NUM_QTRM
+    assert len(lru_channels) == num_lru()
     out = _make_header_bytes(header)
-    for channels in qtrm_channels:
+    for channels in lru_channels:
         out.extend(build_dwell_slot(channels))
-    assert len(out) == TOTAL_PACKET_SIZE
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
 # ---------------------------------------------------------------------------
 # Data Storage / Memory Read-Write (Section 11 of the IDD) - persists data to
-# the QTRM's on-board flash. Data Type IDs and the operation-code nibble
+# the LRU's on-board flash. Data Type IDs and the operation-code nibble
 # below follow flash_spi.vhd (E:\Downloads\a10_soc_devkit_ghrd_pro), NOT the
 # IDD doc's own numbering - the doc says Manufacturing=1/TRM Config=3, but
 # the actual FPGA code (which explicitly flags itself as WIP - "needs to be
@@ -739,7 +803,7 @@ MEM_OP_FLASH_READ = 0x4
 
 def build_memory_write_slot(data_type: int, payload: bytes, mem_op: int = MEM_OP_FLASH_WRITE) -> bytes:
     """
-    30-byte wire slot: Data Storage / Memory Write command (Section 11),
+    One LRU's wire slot: Data Storage / Memory Write command (Section 11),
     requesting a Link-type status response like every command except Status
     and Soft Reset. byte6 (1-indexed) = mem_op (hi nibble) | data_type (lo
     nibble); bytes7-9 = payload (data-type-specific, zero-padded).
@@ -749,26 +813,26 @@ def build_memory_write_slot(data_type: int, payload: bytes, mem_op: int = MEM_OP
     return _build_status_family_slot(CMD_DATA_STORAGE, STATUS_TYPE_LINK, full_payload)
 
 
-def build_memory_write_frame(data_type: int, payload: bytes, target_qtrm_index: int = None,
+def build_memory_write_frame(data_type: int, payload: bytes, target_lru_index: int = None,
                               mem_op: int = MEM_OP_FLASH_WRITE, header: bytes = None) -> bytes:
     """
-    Full 2970-byte frame: Memory Write. If target_qtrm_index is None, every
-    QTRM gets the same write (e.g. a uniform Temp Cutoff setting across the
-    whole array) - same "all 96" convention as Isolation/Status. Otherwise
-    only that QTRM (0-based index) gets it; every other slot is left
+    Full frame: Memory Write. If target_lru_index is None, every
+    LRU gets the same write (e.g. a uniform Temp Cutoff setting across the
+    whole array) - same "every LRU" convention as Isolation/Status. Otherwise
+    only that LRU (0-based index) gets it; every other slot is left
     entirely zero-filled (no header, no command) - same convention as
     Cal/Isolation/Soft Reset individual sends.
     """
-    assert target_qtrm_index is None or 0 <= target_qtrm_index < NUM_QTRM
+    assert target_lru_index is None or 0 <= target_lru_index < num_lru()
     write_slot = build_memory_write_slot(data_type, payload, mem_op)
-    empty_slot = bytes(QTRM_SLOT_SIZE)
+    empty_slot = bytes(lru_slot_size())
     out = _make_header_bytes(header)
-    for i in range(NUM_QTRM):
-        if target_qtrm_index is None or i == target_qtrm_index:
+    for i in range(num_lru()):
+        if target_lru_index is None or i == target_lru_index:
             out.extend(write_slot)
         else:
             out.extend(empty_slot)
-    assert len(out) == TOTAL_PACKET_SIZE
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 # ---------------------------------------------------------------------------
@@ -797,7 +861,7 @@ class QCCHeaderRx:
     Offset  Field                  Size  Type    Notes
     0       DESTINATION_ID         1     byte    RC fills - QCC swaps this into its response's Source ID
     1       SOURCE_ID              1     byte    RC fills - QCC swaps this into its response's Destination ID
-    2-3     PACKET_SIZE            2     uint16  Fixed 2970
+    2-3     PACKET_SIZE            2     uint16  Whole-frame size (2970 for the default 96x4 array)
     4       ECHO_BYTE              1     byte    RC may send any value; QCC no longer interprets this byte
                                                    and echoes it back unchanged in the Response (byte 4)
     5       COMMAND_ACK            1     byte    0x00 for a command (vs 0x01 for a response)
@@ -832,10 +896,16 @@ class QCCHeaderRx:
     def __init__(self, destination_id: int = 0, source_id: int = 0, echo_byte: int = 0,
                  qcc_command: int = 0, message_number: int = 0, date: int = 0, month: int = 0,
                  year: int = 0, time_of_day: int = 0, message_body: bytes = b"", reserved0: bytes = b"",
-                 packet_size: int = TOTAL_PACKET_SIZE):
+                 packet_size: int = None):
         self.destination_id = destination_id & 0xFF
         self.source_id = source_id & 0xFF
-        # 2970 for every standard frame; 4196 (RP_FRAME_SIZE) for Remote
+        # Defaulted here rather than in the signature: a default argument is
+        # evaluated once at import, which would pin PACKET_SIZE to whatever
+        # array shape was configured back then.
+        if packet_size is None:
+            packet_size = total_packet_size()
+        # The standard frame size for every standard frame; 4196
+        # (RP_FRAME_SIZE) for Remote
         # Programming TX frames - ASSUMPTION: the doc doesn't say what
         # PACKET_SIZE should read in the 4196-byte frame, actual size chosen.
         self.packet_size = packet_size & 0xFFFF
@@ -943,9 +1013,9 @@ def build_pps_body(pps_width_us: int) -> bytes:
 
 def build_header_only_frame(header: bytes) -> bytes:
     """
-    Full 2970-byte frame for a command that's entirely described by its
-    90-byte header, with the QTRM data block simply zero-filled since it
-    doesn't touch any individual QTRM - the PRT/SOB/PPS timing commands
+    Full frame for a command that's entirely described by its
+    90-byte header, with the LRU data block simply zero-filled since it
+    doesn't touch any individual LRU - the PRT/SOB/PPS timing commands
     (header's qcc_command selects Bypass vs Internal Gen, message_body
     carries the fields, see build_prt_body/build_sob_body/build_pps_body
     above) and QCC_STATUS ("QCC simply returns its current response
@@ -953,18 +1023,18 @@ def build_header_only_frame(header: bytes) -> bytes:
     """
     assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     out = bytearray(header)
-    out.extend(bytes(QTRM_BLOCK_SIZE))
-    assert len(out) == TOTAL_PACKET_SIZE
+    out.extend(bytes(lru_block_size()))
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
 # ---------------------------------------------------------------------------
 # REMOTE_PROGRAMMING (qcc_command 0xFF) - 4196-byte TX frame and RX slot
 # demux. QCC is a dumb relay for this command: it strips the 90-byte header
-# and broadcasts [payload + inner command] identically to all 96 QTRMs over
+# and broadcasts [payload + inner command] identically to every LRU over
 # the low-speed (115200) link. The inner 10-byte command set lives in
 # bootloader_packet.py. Distinct from the Memory Operation tab, which sends
-# a standard 2970-byte DATA_DISTRIBUTION frame (see rc_settings.py) -
+# a standard DATA_DISTRIBUTION frame (see rc_settings.py) -
 # no longer sharing a qcc_command value with real Remote Programming now
 # that each command has its own dedicated enum value.
 # ---------------------------------------------------------------------------
@@ -982,8 +1052,8 @@ def build_remote_programming_frame(header: bytes, inner_cmd: bytes,
     empty payload; use the other builder.
 
     Order confirmed by Yuvraj 2026-07-18: QCC strips the 90-byte header and
-    forwards bytes 90..4195 to the QTRMs verbatim, so the command header
-    must precede the payload - the QTRM firmware's recieve_bit_stream()
+    forwards bytes 90..4195 to the LRUs verbatim, so the command header
+    must precede the payload - the LRU firmware's recieve_bit_stream()
     reads its 10-byte header first, then the payload.
 
     payload shorter than 4096 is zero-filled to the right; Program chunk
@@ -1004,11 +1074,11 @@ def build_remote_programming_frame(header: bytes, inner_cmd: bytes,
 def build_remote_programming_cmd_frame(header: bytes, inner_cmd: bytes) -> bytes:
     """
     [90-byte header][10-byte inner bootloader command] = 100 bytes, no
-    payload. Added 2026-07-19 per Yuvraj: once QTRMs+QCC are in low-speed
+    payload. Added 2026-07-19 per Yuvraj: once LRUs+QCC are in low-speed
     mode, every RP command EXCEPT the bitstream DATA chunks (which need the
     real 4096-byte payload - see build_remote_programming_frame()) sends
     just its 10-byte command with no payload padding. This is what gets
-    broadcast to all 96 QTRMs by the QCC's low-speed FIFO/UART drain.
+    broadcast to every LRU by the QCC's low-speed FIFO/UART drain.
     """
     assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     assert len(inner_cmd) == RP_INNER_CMD_SIZE
@@ -1020,10 +1090,10 @@ def build_remote_programming_cmd_frame(header: bytes, inner_cmd: bytes) -> bytes
 
 def build_qcc_level_frame(header: bytes) -> bytes:
     """
-    Bare 90-byte header, no inner bootloader command and no QTRM data
+    Bare 90-byte header, no inner bootloader command and no LRU data
     block. Added 2026-07-19 per Yuvraj: Mode Step 2 (QCC -> Low-Speed) and
     Mode Back (QCC -> High-Speed) are both QCC's own self-directed UART
-    switch, not QTRM-targeted bootloader commands, so neither needs
+    switch, not LRU-targeted bootloader commands, so neither needs
     anything past the header itself - the switch direction rides in the
     header's byte 34 SubCommand (see QCC_BODY_SWITCH_LOW_SPEED/
     HIGH_SPEED in remote_prog_controller.py).
@@ -1034,51 +1104,51 @@ def build_qcc_level_frame(header: bytes) -> bytes:
 
 def extract_rp_slots(raw: bytes) -> list:
     """
-    Per-QTRM bootloader responses from a standard 2970-byte RX frame: the
-    FIRST 10 bytes of each 30-byte QTRM slot (the remaining 20 are
-    reserved/unused for Remote Programming). Deliberately does NOT go
-    through QTRMSlot.from_bytes - that validates the normal-mode 30-byte
-    slot format (0xAA header + XOR over all 30), which doesn't apply here;
+    Per-LRU bootloader responses from a standard RX frame: the FIRST 10
+    bytes of each LRU slot (the rest are reserved/unused for Remote
+    Programming). Deliberately does NOT go through LRUSlot.from_bytes -
+    that validates the normal-mode slot format (0xAA header + XOR over the
+    whole slot), which doesn't apply here;
     decode the returned slices with bootloader_packet.parse_slot instead.
     """
-    _require_size(raw, TOTAL_PACKET_SIZE, "response frame")
+    _require_size(raw, total_packet_size(), "response frame")
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     return [
-        raw[base + i * QTRM_SLOT_SIZE: base + i * QTRM_SLOT_SIZE + RP_INNER_CMD_SIZE]
-        for i in range(NUM_QTRM)
+        raw[base + i * lru_slot_size(): base + i * lru_slot_size() + RP_INNER_CMD_SIZE]
+        for i in range(num_lru())
     ]
 
 
 def build_broadcast_bootloader_frame(header: bytes, inner_cmd: bytes,
-                                     target_qtrm: int = RP_QTRM_SELECT_BROADCAST) -> bytes:
+                                     target_lru: int = RP_LRU_SELECT_BROADCAST) -> bytes:
     """
-    Standard 2970-byte frame (90-byte header + 96 x 30-byte QTRM slots) used
-    ONLY for Mode Step 1 (QTRMs -> Low-Speed): per Yuvraj 2026-07-16, QTRMs
-    are still in normal per-QTRM-addressed mode when this command goes out
+    Standard frame (90-byte header + the full LRU data block) used
+    ONLY for Mode Step 1 (LRUs -> Low-Speed): per Yuvraj 2026-07-16, LRUs
+    are still in normal per-LRU-addressed mode when this command goes out
     (they haven't switched to the QCC's shared low-speed broadcast FIFO
     yet), so the 10-byte bootloader mode-change command rides in the first
     10 bytes of the addressed slot(s), with the remaining 20 bytes per slot
     zero-padded - the TX-side mirror of extract_rp_slots()'s RX-side
-    assumption (first 10 bytes of each 30-byte slot carry the bootloader
+    assumption (first 10 bytes of each slot carry the bootloader
     command).
 
-    target_qtrm RP_QTRM_SELECT_BROADCAST (0xFF): the command is replicated
-    into every one of the 96 slots. target_qtrm 0-95: only that QTRM's
-    slot carries the command and the other 95 slots are all-zero, so only
+    target_lru RP_LRU_SELECT_BROADCAST (0xFF): the command is replicated
+    into every slot. A 0-based target_lru: only that LRU's slot carries
+    the command and the rest are all-zero, so only
     the target drops to low-speed while the rest stay in normal operation.
     """
     assert len(header) == FIXED_HEADER_SIZE + QCC_HEADER_SIZE
     assert len(inner_cmd) == RP_INNER_CMD_SIZE
-    assert target_qtrm == RP_QTRM_SELECT_BROADCAST or 0 <= target_qtrm < NUM_QTRM
-    slot = bytes(inner_cmd) + bytes(QTRM_SLOT_SIZE - RP_INNER_CMD_SIZE)
-    empty_slot = bytes(QTRM_SLOT_SIZE)
+    assert target_lru == RP_LRU_SELECT_BROADCAST or 0 <= target_lru < num_lru()
+    slot = bytes(inner_cmd) + bytes(lru_slot_size() - RP_INNER_CMD_SIZE)
+    empty_slot = bytes(lru_slot_size())
     out = bytearray(header)
-    for i in range(NUM_QTRM):
-        if target_qtrm == RP_QTRM_SELECT_BROADCAST or i == target_qtrm:
+    for i in range(num_lru()):
+        if target_lru == RP_LRU_SELECT_BROADCAST or i == target_lru:
             out.extend(slot)
         else:
             out.extend(empty_slot)
-    assert len(out) == TOTAL_PACKET_SIZE
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
@@ -1100,7 +1170,7 @@ class QCCHeaderTx:
     Offset  Field                  Size  Type    Notes
     0       DESTINATION_ID         1     byte    Echo of the command's Source ID
     1       SOURCE_ID              1     byte    Echo of the command's Destination ID
-    2-3     PACKET_SIZE            2     uint16  Fixed 2970 (whole-frame size)
+    2-3     PACKET_SIZE            2     uint16  Whole-frame size (2970 for the default 96x4 array)
     4       ECHO_BYTE              1     byte    Echoed unchanged from the command's byte 4 (no longer interpreted)
     5       COMMAND_ACK            1     byte    0x01 for a response (vs 0x00 for a command)
     6-9     MESSAGE_NUMBER         4     uint32  Echoed command message counter
@@ -1158,7 +1228,7 @@ class QCCHeaderTx:
     def __init__(self):
         self.destination_id = 0
         self.source_id = 0
-        self.packet_size = TOTAL_PACKET_SIZE
+        self.packet_size = total_packet_size()
         self.echo_byte = 0
         self.command_ack = 1
         self.message_number = 0
@@ -1345,11 +1415,11 @@ class ChipIdResponse:
 
 
 # ---------------------------------------------------------------------------
-# QTRM 30-byte slot (per QTRM Message Format IDD, Dwell layout, Table 43)
+# LRU wire slot (per QTRM Message Format IDD, Dwell layout, Table 43)
 # ---------------------------------------------------------------------------
 
 
-class QTRMChannel:
+class LRUChannel:
     __slots__ = ("control", "tx_phase", "tx_atten", "rx_phase", "rx_atten")
 
     def __init__(self, control=0, tx_phase=0, tx_atten=0, rx_phase=0, rx_atten=0):
@@ -1363,19 +1433,20 @@ class QTRMChannel:
         return bytes([self.control, self.tx_phase, self.tx_atten, self.rx_phase, self.rx_atten])
 
     @classmethod
-    def from_bytes(cls, raw: bytes) -> "QTRMChannel":
+    def from_bytes(cls, raw: bytes) -> "LRUChannel":
         control, tx_phase, tx_atten, rx_phase, rx_atten = raw
         return cls(control, tx_phase, tx_atten, rx_phase, rx_atten)
 
 
-class QTRMSlot:
+class LRUSlot:
     """
-    One 30-byte slot, always sent in full even for commands smaller than 30
-    bytes (unused trailing bytes are zero-padded).
+    One LRU's wire slot - lru_slot_size() bytes (5*channels + 10), always
+    sent in full even for commands whose message is shorter (unused trailing
+    bytes are zero-padded).
 
     Offset  Field                       Size
     0       Header (0xAA)               1
-    1       Packet Size Identifier      1   (0x04 for QTRM)
+    1       Packet Size Identifier      1   (0x04 for LRU)
     2       Command Type                1
     3       ACK_TYPE(hi nibble) / ACK_ON_OFF(lo nibble)   1
     4       Dwell/MSG ID                1
@@ -1390,48 +1461,48 @@ class QTRMSlot:
 
     HEADER_BYTE = 0xAA
 
-    def __init__(self, qtrm_id: int, command_type: int = CMD_RESERVED,
+    def __init__(self, lru_id: int, command_type: int = CMD_RESERVED,
                  ack_type: int = 0, ack_on_off: int = 0,
                  dwell_id: int = 0, frequency_id: int = 0,
                  channels=None):
-        self.qtrm_id = qtrm_id  # 1..96, positional only - not encoded in the bytes
+        self.lru_id = lru_id  # 1-based position, not encoded in the bytes
         self.command_type = command_type & 0xFF
         self.ack_type = ack_type & 0x0F
         self.ack_on_off = ack_on_off & 0x0F
         self.dwell_id = dwell_id & 0xFF
         self.frequency_id = frequency_id & 0xFF
-        self.channels = channels or [QTRMChannel() for _ in range(4)]
+        self.channels = channels or [LRUChannel() for _ in range(channels_per_lru())]
 
     def to_bytes(self) -> bytes:
         status_byte = ((self.ack_type & 0x0F) << 4) | (self.ack_on_off & 0x0F)
         body = bytearray()
         body.append(self.HEADER_BYTE)
-        body.append(QTRM_PACKET_SIZE_ID)
+        body.append(lru_packet_size_id())
         body.append(self.command_type)
         body.append(status_byte)
         body.append(self.dwell_id)
         body.append(self.frequency_id)
         body.extend(b"\x00\x00\x00")  # reserved
-        for ch in self.channels[:4]:
+        for ch in self.channels[:channels_per_lru()]:
             body.extend(ch.to_bytes())
-        assert len(body) == QTRM_SLOT_SIZE - 1
+        assert len(body) == lru_slot_size() - 1
         chk = 0
         for b in body:
             chk ^= b
         body.append(chk)
-        assert len(body) == QTRM_SLOT_SIZE
+        assert len(body) == lru_slot_size()
         return bytes(body)
 
     @classmethod
-    def from_bytes(cls, qtrm_id: int, raw: bytes) -> "QTRMSlot":
-        _require_size(raw, QTRM_SLOT_SIZE, "QTRM slot")
+    def from_bytes(cls, lru_id: int, raw: bytes) -> "LRUSlot":
+        _require_size(raw, lru_slot_size(), "LRU slot")
         header, size_id, cmd_type, status_byte, dwell_id, freq_id = raw[0:6]
         channels = []
-        for i in range(4):
-            off = 9 + i * 5
-            channels.append(QTRMChannel.from_bytes(raw[off:off + 5]))
+        for i in range(channels_per_lru()):
+            off = CHANNEL_BASE_OFFSET + i * CHANNEL_SIZE
+            channels.append(LRUChannel.from_bytes(raw[off:off + CHANNEL_SIZE]))
         obj = cls(
-            qtrm_id=qtrm_id,
+            lru_id=lru_id,
             command_type=cmd_type,
             ack_type=(status_byte >> 4) & 0x0F,
             ack_on_off=status_byte & 0x0F,
@@ -1452,36 +1523,36 @@ class QTRMSlot:
 # ---------------------------------------------------------------------------
 
 
-def build_tx_frame(qtrm_slots) -> bytes:
+def build_tx_frame(lru_slots) -> bytes:
     """
-    Build the full 2970-byte frame to send to QCC (GUI -> QCC direction).
+    Build the full frame to send to QCC (GUI -> QCC direction).
     First 90 bytes (fixed header + QCC header) are zero for now - MSG_ID/MODE
-    aren't implemented on the QCC/QTRM side yet.
+    aren't implemented on the QCC/LRU side yet.
     """
-    assert len(qtrm_slots) == NUM_QTRM
+    assert len(lru_slots) == num_lru()
     out = bytearray(FIXED_HEADER_SIZE + QCC_HEADER_SIZE)
-    for slot in qtrm_slots:
+    for slot in lru_slots:
         out.extend(slot.to_bytes())
-    assert len(out) == TOTAL_PACKET_SIZE
+    assert len(out) == total_packet_size()
     return bytes(out)
 
 
 def parse_rx_frame(raw: bytes):
-    """Parse a full 2970-byte frame received from QCC (QCC -> GUI direction)."""
-    _require_size(raw, TOTAL_PACKET_SIZE, "response frame")
+    """Parse a full standard frame received from QCC (QCC -> GUI direction)."""
+    _require_size(raw, total_packet_size(), "response frame")
     header_raw = raw[0:FIXED_HEADER_SIZE + QCC_HEADER_SIZE]
     qcc_header = QCCHeaderTx.from_bytes(header_raw)
 
-    qtrm_slots = []
+    lru_slots = []
     base = FIXED_HEADER_SIZE + QCC_HEADER_SIZE
-    for i in range(NUM_QTRM):
-        off = base + i * QTRM_SLOT_SIZE
-        slot_raw = raw[off:off + QTRM_SLOT_SIZE]
-        qtrm_slots.append(QTRMSlot.from_bytes(i + 1, slot_raw))
+    for i in range(num_lru()):
+        off = base + i * lru_slot_size()
+        slot_raw = raw[off:off + lru_slot_size()]
+        lru_slots.append(LRUSlot.from_bytes(i + 1, slot_raw))
 
-    return qcc_header, qtrm_slots
+    return qcc_header, lru_slots
 
 
 def default_qtrm_slots():
-    """96 blank QTRM slots (command type = Reserved), ready to be edited."""
-    return [QTRMSlot(qtrm_id=i + 1) for i in range(NUM_QTRM)]
+    """96 blank LRU slots (command type = Reserved), ready to be edited."""
+    return [LRUSlot(lru_id=i + 1) for i in range(num_lru())]
